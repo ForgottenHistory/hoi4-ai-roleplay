@@ -29,7 +29,8 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/gamestate.py   live game state (names, parties, factions, wars, states, ideas, focuses)
     hoi4_rp/chronicle.py   one-query world snapshots; their differences become dated events
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; offers
-    hoi4_rp/policy.py      neighbours' policies toward the player (stance, urgency, offers)
+    hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
+    hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
     hoi4_rp/game.py        show an event, wait for the pick, run effects via eval_effect
@@ -71,10 +72,14 @@ news, red bad) and the agreements are remembered in the chronicle.
   `[[offer X]]` (they grant you X) or `[[ask X]]` (they ask you for military access, docking rights or
   a guarantee), e.g. a guarantee in return for access. Neighbours propose what their policy lists;
   other countries anything currently possible.
+- Territory: `[[state N]]` in a reply (they cede a state you asked for), `[[offer state N]]` and
+  `[[ask state N]]` in proposals. Only states bordering the other country, never a capital, only in
+  peace; the AI sees each candidate with cores and claims and is told territory is a grave matter.
 
 ## Policies and offers
 
-Each neighbour keeps a policy toward you (`hoi4_rp/policy.py`): a stance (friendly, cordial,
+Every country that matters to you keeps a policy toward you (`hoi4_rp/policy.py`): neighbours,
+your overlord and subjects, enemies, faction members and the major powers. Each has a stance (friendly, cordial,
 indifferent, wary, hostile), an urgency 0-3, what it would offer you, what it wants from you, what it
 means to end or impose, and a few sentences on what it wants and fears. The LLM writes it from the full
 game state and memory as six plain `KEY: value` lines; it's refreshed every 90 game days or after something happens between you, one
@@ -89,3 +94,25 @@ Proposals stay occasional: only an urgent policy (3) makes one the point of a le
 `proposal_gap_days` between proposals from anyone, and an item you declined is off the table for that
 country for `refusal_days` unless something happens in the world between you (war, territory,
 factions, governments). Answering a proposal doesn't refresh the country's policy; world events do.
+
+## Other settings (Kaiserreich, Kaiserredux, ...)
+
+The mod and bridge don't depend on vanilla content: everything is read from the running game, so modded
+countries, parties, leaders and states come through as the mod defines them. Parties are read from each
+country's own politics block (vanilla's 4 ideology groups or a mod's, e.g. Kaiserreich's 10), with names,
+translations and the ruling party's description from the mod's localisation.
+
+`[world]` in config.ini tells the AI which history to reason from:
+
+    setting = auto      # auto detects Kaiserreich/Kaiserredux from the ideologies in play; or vanilla / kaiserreich
+    lore_file =         # optional text file with your own setting notes, added to every prompt
+
+Enable "AI Roleplay" alongside the other mod in the launcher playset.
+
+## Letter style
+
+`style` in `[letters]` sets how letters are written (`hoi4_rp/style.py`); gameplay is the same in each:
+
+- `serious`: formal, period-appropriate diplomacy from the leader or foreign office
+- `dramatic`: the leader as an over-the-top caricature of their country: stereotypes, bombast, melodrama
+- `players`: casual, as if people were playing those countries in a multiplayer roleplay game

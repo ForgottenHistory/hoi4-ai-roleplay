@@ -1,4 +1,5 @@
-"""Policies: what a neighbouring country currently wants from the player, written by the LLM from the full
+"""Policies: what a country that matters to the player (neighbour, overlord or subject, enemy, faction
+member, major power) currently wants from the player, written by the LLM from the full
 game state and memory, and stored in the campaign (data["policies"][TAG]).
 
 A policy is plain text in six lines (no JSON: it breaks). Parsing is lenient; anything missing falls back
@@ -30,9 +31,9 @@ REFRESH_DAYS = 90
 
 def instructions(them_name: str, me_name: str, rel: "actions.Relation") -> str:
     def words(keys: List[str]) -> str:
-        return ", ".join(actions.word(k) for k in keys) or "(none possible right now)"
-    gives = actions.possible_keys(rel, actions.GIVES)
-    asks = actions.possible_keys(rel, actions.ASKS)
+        return ", ".join(actions.described(k) for k in keys) or "(none possible right now)"
+    gives = actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)
+    asks = actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)
     breaks = actions.possible_keys(rel, actions.UNILATERAL)
     return (
         f"Decide {them_name}'s current foreign policy toward {me_name}, as {them_name}'s government would "
@@ -49,6 +50,8 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation") -> str:
         f"{words(breaks)}; or none (only for real cause)\n"
         f"POLICY: two or three sentences on what {them_name} wants from {me_name}, fears from them, and how "
         f"it means to deal with them"
+        + (f"\n\nStates are listed with their number (state N). {actions.TERRITORY_NOTE}"
+           if rel.them_border or rel.me_border else "")
     )
 
 
@@ -65,6 +68,10 @@ def _keys(value: str, allowed: List[str]) -> List[str]:
     """Map a comma-separated line of policy words to deal keys, keeping only `allowed` ones."""
     out = []
     for part in re.split(r"[,;/]|\band\b", value.lower()):
+        st = re.search(r"state\s*(\d+)", part)
+        if st:                                  # "state 35 (Brabant)"
+            out += [c for c in (f"give:state:{st.group(1)}", f"ask:state:{st.group(1)}") if c in allowed][:1]
+            continue
         w = re.sub(r"[^a-z ]", " ", part).split()
         if not w or w[0] == "none":
             continue
@@ -97,14 +104,22 @@ def parse(text: str, rel: "actions.Relation") -> Dict:
         policy = re.sub(r"\s+", " ", rest)[:600]
     return {
         "stance": stance, "urgency": urgency, "policy": policy,
-        "offers": _keys(line("offers"), actions.possible_keys(rel, actions.GIVES)),
-        "asks": _keys(line("asks"), actions.possible_keys(rel, actions.ASKS)),
+        "offers": _keys(line("offers"), actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)),
+        "asks": _keys(line("asks"), actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)),
         "breaks": _keys(line("breaks"), actions.possible_keys(rel, actions.UNILATERAL)),
     }
 
 
+def _future(camp, p: Dict) -> bool:
+    """Dated after the campaign's current game date: written for another game or a later save."""
+    return p["date"] > (camp.data.get("last_date") or p["date"])
+
+
 def current(camp, tag: str) -> Optional[Dict]:
     p = camp.data.setdefault("policies", {}).get(tag)
+    if p and _future(camp, p):
+        del camp.data["policies"][tag]
+        return None
     if p:   # policies saved before asks/breaks held bare words in "offers"
         p["offers"] = [o if ":" in o else f"give:{o}" for o in p.get("offers", [])]
         p.setdefault("asks", [])
@@ -114,7 +129,7 @@ def current(camp, tag: str) -> Optional[Dict]:
 
 def needs_refresh(camp, tag: str, player: str, today: str) -> bool:
     raw = camp.data.setdefault("policies", {}).get(tag)
-    if not raw or "asks" not in raw:          # none yet, or written before asks/breaks existed
+    if not raw or "asks" not in raw or _future(camp, raw):   # none, old format, or from another game/save
         return True
     p = current(camp, tag)
     if _days(today) - _days(p["date"]) >= REFRESH_DAYS:
@@ -135,7 +150,8 @@ def describe(p: Optional[Dict], them_name: str, me_name: str) -> str:
     if not p:
         return ""
     def words(keys: List[str]) -> str:
-        return ", ".join(actions.word(k) for k in keys) or "none"
+        return ", ".join(actions.described(k) for k in keys) or "none"
     return (f"YOUR CURRENT POLICY TOWARD {me_name.upper()} (set {p.get('when', p['date'])}): stance {p['stance']}. "
-            f"{p['policy']} Willing to offer them: {words(p['offers'])}. Want from them: {words(p['asks'])}. "
+            f"{p['policy']} Would be willing to offer them (not offered yet unless the letters show it): "
+            f"{words(p['offers'])}. Want from them: {words(p['asks'])}. "
             f"Mean to end or impose: {words(p['breaks'])}.")

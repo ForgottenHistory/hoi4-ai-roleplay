@@ -31,7 +31,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import actions, bridge, campaign, chronicle, gamestate, llm, policy
+from . import actions, bridge, campaign, chronicle, gamestate, llm, policy, style, world
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -70,7 +70,9 @@ def clear_letter_box() -> None:
 
 
 def _clean_for_game(text: str) -> str:
-    """Make LLM text safe for HOI4 localisation: no markup characters, only Latin-1 letters."""
+    """Make LLM text safe for HOI4 localisation: no markup characters, only Latin-1 letters. If the model wrote
+    several drafts separated by a rule line (---), only the first is kept."""
+    text = re.split(r"\n\s*(?:-{3,}|\*{3,}|_{3,})\s*\n", text.strip())[0]
     for a, b in {"‘": "'", "’": "'", "“": '"', "”": '"', "—": "-",
                  "–": "-", "…": "..."}.items():
         text = text.replace(a, b)
@@ -107,7 +109,9 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         facts.append(f"{them.name}'s opinion of {me.name}: {them.opinion[me.tag]:+g} (range -100 to +100).")
     if them.tag in me.opinion:
         facts.append(f"{me.name}'s opinion of {them.name}: {me.opinion[them.tag]:+g}.")
-    return " ".join(facts) or "No war, alliance, border or subject relation between them."
+    comparison = gamestate.strength_comparison(them, me)
+    return " ".join(facts or ["No war, alliance, border or subject relation between them."]) + \
+        (f" {comparison}" if comparison else "")
 
 
 def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
@@ -119,9 +123,10 @@ def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate
 
 
 def _reply_task(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
-    return (f"Write {them.name}'s reply to their latest letter, in the voice of {them.leader} or their "
-            f"foreign office, true to {them.name}'s interests, ideology and situation. Be in character: you "
-            f"may be warm, cold, evasive or hostile as fits.")
+    st = style.current()
+    voice = st.voice.format(name=them.name, leader=them.leader, other=me.name)
+    return (f"Write {them.name}'s reply to their latest letter, {voice}, true to {them.name}'s interests, "
+            f"ideology and situation. {st.manner}")
 
 
 def _initiative_task(them: gamestate.CountryState, me: gamestate.CountryState, reason: str) -> str:
@@ -129,9 +134,10 @@ def _initiative_task(them: gamestate.CountryState, me: gamestate.CountryState, r
            if reason else
            f"There is no specific occasion: write about whatever matters most to {them.name} regarding "
            f"{me.name} right now, given the situation and what you remember.")
-    return (f"{them.name} now writes a new letter to {me.name} on its own initiative, in the voice of "
-            f"{them.leader} or their foreign office, true to {them.name}'s interests, ideology and "
-            f"situation. {why} Be in character: warm, cold, evasive or threatening as fits.")
+    st = style.current()
+    voice = st.voice.format(name=them.name, leader=them.leader, other=me.name)
+    return (f"{them.name} now writes a new letter to {me.name} on its own initiative, {voice}, true to "
+            f"{them.name}'s interests, ideology and situation. {why} {st.manner}")
 
 
 def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign) -> str:
@@ -139,8 +145,8 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
     pol = policy.describe(policy.current(camp, them.tag), them.name, me.name)
     return (
         f"You are the government of {them.name} in the grand strategy game Hearts of Iron IV. "
-        f"The date is {them.date.strip()}. The situation below is live from the game, which may have "
-        f"diverged from real history: trust it over your own historical knowledge.\n\n"
+        f"The date is {them.date.strip()}.\n\n"
+        f"{world.text([p.ideology for p in me.parties + them.parties])}\n\n"
         f"YOUR COUNTRY:\n{gamestate.describe(them)}\n\n"
         f"THE COUNTRY YOU CORRESPOND WITH:\n{gamestate.describe(me)}\n\n"
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
@@ -148,6 +154,23 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
         f"{me.name}, or the major powers):\n{_memory(camp, them, me)}"
     )
+
+
+_SILENCE = ("{other}'s government is busy running a country and often doesn't answer letters; that is normal, "
+            "not a slight. Don't comment on silence, unanswered letters or slow replies. Only if something urgent you "
+            "asked for has gone unanswered for a long time may you make at most one brief, reserved remark about it.")
+
+
+def _history_note(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    """What the model may assume about earlier letters: only what's in the correspondence, and the player's
+    silence is normal (they're playing the game and won't answer most letters)."""
+    silence = _SILENCE.format(other=me.name)
+    if not camp.letters_with(them.tag):
+        return (f"You and {me.name} have never exchanged letters before: this is the first correspondence "
+                f"between you. Don't refer to earlier letters, offers or answers.")
+    return (f"Your earlier correspondence with {me.name} follows as the conversation, each letter dated. Stay "
+            f"consistent with what you wrote before, and let what happened since colour your reply. Refer only to "
+            f"letters, offers and answers that actually appear there or in what you remember. {silence}")
 
 
 def _transcript(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
@@ -170,12 +193,9 @@ def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState, cam
     )
     return (
         f"{_context(them, me, camp)}\n\n"
-        f"Your earlier correspondence with {me.name} follows as the conversation, each letter dated. "
-        f"Stay consistent with what you wrote before, and let what happened since colour your reply.\n\n"
+        f"{_history_note(camp, them, me)}\n\n"
         f"{task or _reply_task(them, me)}\n\n"
-        f"Rules: plain text only, no markdown. At most 120 words. You write from {them.name}, so any "
-        f"place line is your own capital, not {me.name}'s. Open with a short salutation and end "
-        f"with a signature.\n\n{consequences}"
+        f"{style.current().rules.format(name=them.name, other=me.name)}\n\n{consequences}"
     )
 
 
@@ -232,7 +252,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     reply = _clean_for_game(letter)
     camp.add_letter(to, to, reply, key)
     outcomes, events = actions.apply(to, player, them.name, me.name, commands,
-                                     allowed=["opinion"] + actions.GIVES + actions.UNILATERAL)
+                                     allowed=["opinion"] + actions.GIVES + actions.UNILATERAL + actions.state_gives(rel))
     for e in events:
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False}])
     # Proposal items are only kept if still possible after what was just applied.
@@ -277,8 +297,8 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
             continue                                       # things changed since: they may ask again
         refused.update(r["keys"])
     pol = policy.current(camp, tag)
-    offers = pol["offers"] if pol else actions.GIVES
-    asks = pol["asks"] if pol else actions.ASKS
+    offers = pol["offers"] if pol else actions.GIVES + actions.state_gives(rel)
+    asks = pol["asks"] if pol else actions.ASKS + actions.state_asks(rel)
     ok = lambda k: k not in refused and actions.possible(rel, k)
     return [k for k in offers if ok(k)], [k for k in asks if ok(k)]
 
@@ -346,6 +366,8 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> None:
     them_name = names.get(tag, {}).get("name", tag)
     me_name = names.get(player, {}).get("name", player)
     key = camp.data.get("last_date") or offer["date"]
+    rel = actions.relation(tag, player)                     # also loads state names for territory items
+    actions.state_gives(rel), actions.state_asks(rel)
     what = actions.package_text(items, them_name)          # "France offers ...; France asks for ..."
     if answer == 1:
         outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in items], allowed=items)
@@ -372,6 +394,25 @@ def _days(key: str) -> int:
         return 0
 
 
+def policy_countries(me: gamestate.CountryState, snap: Dict) -> List[str]:
+    """Countries that keep a policy toward the player, most important first (refreshes go in this order):
+    neighbours, overlord and subjects, enemies, faction members, then the major powers."""
+    majors = [t for t, c in snap["countries"].items() if c["major"]]
+    order = me.neighbors + [me.overlord or ""] + me.subjects + me.enemies + me.faction_members + majors
+    return [t for t in dict.fromkeys(order) if t and t != me.tag and t in snap["countries"]]
+
+
+def relevance(me: gamestate.CountryState, tag: str) -> int:
+    """How much `tag` matters to the player when picking who writes in a quiet spell: neighbours most,
+    then overlord, subjects, enemies and faction members, and a distant major power least.
+    The weight is multiplied by (1 + policy urgency), so a distant power with something urgent still writes."""
+    if tag in me.neighbors:
+        return 6
+    if tag == me.overlord or tag in me.subjects or tag in me.enemies or tag in me.faction_members:
+        return 4
+    return 1
+
+
 class _Session:
     """The current campaign and its chronicle, kept in step with the running game."""
 
@@ -380,7 +421,7 @@ class _Session:
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
         self.pool = ThreadPoolExecutor(max_workers=1)  # policy refreshes: the slow LLM part runs here
-        self.policy_job: Optional[tuple] = None        # (tag, future, date key, actions.Relation)
+        self.policy_job: Optional[tuple] = None        # (tag, future, date key, actions.Relation, campaign id)
 
     def campaign_for(self, player: str, cid: int) -> campaign.Campaign:
         if not cid:
@@ -388,6 +429,8 @@ class _Session:
             print(f"new campaign {cid}")
         if not self.camp or self.camp.id != cid or self.camp.data["player"] != player:
             self.camp = campaign.Campaign(cid, player)
+            self.pending.clear()          # letters queued for the previous game
+            self.policy_job = None        # a refresh still running belongs to the previous game: drop it
             print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
                   f"{sum(len(v) for v in self.camp.data['letters'].values())} letters remembered")
         return self.camp
@@ -421,10 +464,12 @@ class _Session:
     # ---- neighbours' policies toward the player, refreshed one at a time in the background
     def policies(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:
         if self.policy_job:
-            tag, fut, key, rel = self.policy_job
+            tag, fut, key, rel, cid = self.policy_job
             if not fut.done():
                 return
             self.policy_job = None
+            if cid != camp.id or key > (camp.data.get("last_date") or key):
+                return                    # started for another game, or an earlier save was loaded since
             try:
                 text = fut.result()
             except llm.LLMError as e:
@@ -442,8 +487,8 @@ class _Session:
             me = gamestate.country(player)
         except gamestate.StateError:
             return
-        for tag in me.neighbors:
-            if tag not in snap["countries"] or not policy.needs_refresh(camp, tag, player, snap["date"]):
+        for tag in policy_countries(me, snap):
+            if not policy.needs_refresh(camp, tag, player, snap["date"]):
                 continue
             try:
                 them = gamestate.country(tag)
@@ -454,7 +499,7 @@ class _Session:
                          f"{_context(them, me, camp)}\n\nYOUR CORRESPONDENCE WITH {me.name.upper()}:\n"
                          f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, rel)}"},
                         {"role": "user", "content": f"State {them.name}'s policy toward {me.name} now."}]
-            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7), snap["date"], rel)
+            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7), snap["date"], rel, camp.id)
             return
 
     # ---- who writes to the player on their own
@@ -475,7 +520,11 @@ class _Session:
                     self.pending[other] = (self.pending.get(other, "") + " " + e["text"]).strip()
         if self.pending:
             return
-        # A neighbour writes soon, once per policy, when its policy is urgent (3) or it has something to
+        # Letters countries start without an event (policy or quiet spell) keep letter_gap_days apart.
+        started = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("initiated")]
+        if started and today - _days(max(started)) < cfg.letter_gap_days:
+            return
+        # A country writes soon, once per policy, when its policy is urgent (3) or it has something to
         # propose or do and some urgency (2): that letter is where it happens.
         for tag in list(camp.data.get("policies", {})):
             p = policy.current(camp, tag)
@@ -493,12 +542,10 @@ class _Session:
             me = gamestate.country(player)
         except gamestate.StateError:
             return
-        majors = [t for t, c in snap["countries"].items() if c["major"]]
-        candidates = [t for t in dict.fromkeys(me.neighbors + me.faction_members + majors)
-                      if t != player and t in snap["countries"] and not self._cooling(camp, t, today)]
+        candidates = [t for t in policy_countries(me, snap) if not self._cooling(camp, t, today)]
         if candidates:
             pols = camp.data.get("policies", {})
-            weights = [1 + 2 * pols.get(t, {}).get("urgency", 0) for t in candidates]
+            weights = [relevance(me, t) * (1 + pols.get(t, {}).get("urgency", 0)) for t in candidates]
             self.pending[random.choices(candidates, weights)[0]] = ""
 
     def deliver(self, player: str, block: str) -> None:

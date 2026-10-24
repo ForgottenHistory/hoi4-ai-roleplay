@@ -88,10 +88,14 @@ def _num(text: str, key: str) -> Optional[float]:
 
 @dataclass
 class Party:
-    ideology: str
+    ideology: str                # party id = ideology group ("democratic", "totalist", ...)
     name: str
     leader: str
     popularity: float
+    ideology_name: str = ""      # "Democratic", "Totalists"
+    long_name: str = ""          # full name (with translation where the mod gives one)
+    description: str = ""        # the mod's description of the party, if any
+    ruling: bool = False
 
 
 @dataclass
@@ -148,12 +152,28 @@ class CountryState:
     autonomy: Dict[str, str] = field(default_factory=dict)    # subject or overlord tag -> autonomy state
     opinion: Dict[str, float] = field(default_factory=dict)   # this country's opinion of others (cached_sum)
     names: Dict[str, str] = field(default_factory=dict)       # display name of every tag above
+    strength: Dict[str, float] = field(default_factory=dict)  # STRENGTH_FIELDS -> value (industry, army, manpower)
 
     def name_of(self, tag: Optional[str]) -> str:
         return self.names.get(tag, tag) if tag else ""
 
     def names_of(self, tags: List[str]) -> str:
         return ", ".join(self.name_of(t) for t in tags)
+
+
+# Country variables the game exposes to script (documentation/dynamic_variables_documentation.md).
+STRENGTH_FIELDS = {
+    "civ": "num_of_civilian_factories",
+    "mil": "num_of_military_factories",
+    "dock": "num_of_naval_factories",
+    "divisions": "num_divisions",
+    "army_k": "deployed_army_manpower_k",
+    "navy_k": "deployed_navy_manpower_k",
+    "air_k": "deployed_airforce_manpower_k",
+    "planes": "num_deployed_planes",
+    "manpower_k": "manpower_k",           # recruitable pool
+    "population_k": "max_manpower_k",     # total population
+}
 
 
 def _effect(tag: str) -> str:
@@ -169,6 +189,7 @@ def _effect(tag: str) -> str:
         f'log = "{p}ideology|[THIS.GetRulingIdeology]"',
         f'log = "{p}capital|[THIS.Capital.GetName]"',
         f'if = {{ limit = {{ is_major = yes }} log = "{p}major|yes" }}',
+        f'log = "{p}strength|{"|".join(f"[?THIS.{v}]" for v in STRENGTH_FIELDS.values())}"',
     ]
     for ideo, prop in _PARTY_PROPS.items():
         lines.append(f'log = "{p}party|{ideo}|[THIS.Get{prop}Party]|[THIS.Get{prop}Leader]"')
@@ -314,6 +335,12 @@ def country(tag: str) -> CountryState:
             s.names[s.overlord] = oname or s.overlord
         elif key == "major":
             s.is_major = True
+        elif key == "strength":
+            for name, value in zip(STRENGTH_FIELDS, rest.split("|")):
+                try:
+                    s.strength[name] = float(value.strip())
+                except ValueError:
+                    pass
         elif key == "wargoal_against":
             ctag, _, cname = rest.partition("|")
             s.names[ctag] = cname or ctag
@@ -329,21 +356,49 @@ def country(tag: str) -> CountryState:
     politics = _sub_block(block, "politics", 2) or ""
     m = re.search(r"\n\t\t\tpolitical_power=(-?[\d.]+)", politics)
     s.political_power = float(m.group(1)) if m else None
-    party_block = _sub_block(politics, "parties", 3) or ""
-    for ideo in list(parties) + [i for i in IDEOLOGIES if i not in parties]:
-        pb = _sub_block(party_block, ideo, 4)
-        if pb is None:
-            continue
-        pm = re.search(r"\bpopularity=([\d.]+)", pb)
-        party = parties.setdefault(ideo, Party(ideo, ideo, "", 0.0))
-        party.popularity = float(pm.group(1)) if pm else 0.0
-    s.parties = sorted(parties.values(), key=lambda p: -p.popularity)
+    s.parties = _parties(tag, politics, parties, s.leader)
     s.ideas = _named((_sub_block(politics, "ideas", 3) or "").split(), hide_missing=True)
     focus_block = _sub_block(block, "focus", 2) or ""
     s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
     _diplomacy(s, block)
     s.names.update(names_for([w.other for w in s.wargoals if w.other not in s.names]))
     return s
+
+
+def _parties(tag: str, politics: str, queried: Dict[str, Party], ruling_leader: str) -> List[Party]:
+    """Every party the country has (vanilla's 4 ideology groups or a mod's, e.g. Kaiserreich's 10), read from
+    its politics block, with names from the localisation: a name override in the block, else the standard
+    {TAG}_{ideology}_party / _party_long keys. `queried` holds what script could tell (vanilla's per-group
+    party name and leader), used where the localisation has nothing."""
+    party_block = _sub_block(politics, "parties", 3) or ""
+    rm = re.search(r"\n\t\t\truling_party=\"?(\w+)", politics)
+    ruling = rm.group(1) if rm else ""
+    ids = re.findall(r"\n\t\t\t\t([a-z_]+)=\{", party_block)
+    raw = {}
+    for ideo in ids:
+        pb = _sub_block(party_block, ideo, 4) or ""
+        pm = re.search(r"\bpopularity=([\d.]+)", pb)
+        nm, lm = re.search(r'\bname="([^"]+)"', pb), re.search(r'\blong_name="([^"]+)"', pb)
+        raw[ideo] = (float(pm.group(1)) if pm else 0.0,
+                     nm.group(1) if nm else f"{tag}_{ideo}_party", lm.group(1) if lm else f"{tag}_{ideo}_party_long")
+    keys = [k for ideo in ids for k in (raw[ideo][1], raw[ideo][2], ideo)]
+    vals = loc(*keys) if keys else []
+    found = lambda i: vals[i] if i < len(vals) and vals[i] and vals[i] != keys[i] else ""
+    out = []
+    for n, ideo in enumerate(ids):
+        pop = raw[ideo][0]
+        q = queried.get(ideo)
+        short, long_raw, ideo_name = found(3 * n), found(3 * n + 1), found(3 * n + 2) or ideo.replace("_", " ")
+        # A mod's long name can hold the full name, its translation and a description, one per line.
+        lines = [clean_loc(l) for l in long_raw.split("\n")]
+        lines = [l for l in lines if l]
+        names = [l for l in lines if len(l) <= 160]
+        desc = " ".join(l for l in lines if len(l) > 160)
+        out.append(Party(ideology=ideo, name=clean_loc(short) or (q.name if q else "") or ideo_name,
+                         leader=(q.leader if q else "") or (ruling_leader if ideo == ruling else ""),
+                         popularity=pop, ideology_name=clean_loc(ideo_name), long_name=" / ".join(names),
+                         description=desc, ruling=ideo == ruling))
+    return sorted(out, key=lambda p: -p.popularity)
 
 
 _MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -365,11 +420,53 @@ def player_tag() -> str:
 def clean_loc(text: str) -> str:
     """Strip HOI4 formatting from raw localisation: colour codes, icons, and references that need a
     scope to resolve ([Root.GetName], $KEY$)."""
-    text = re.sub(r"§.", "", text)            # colour codes like §Y ... §!
+    text = re.sub(r"[§\x11].", "", text)  # colour codes §Y ... §! (the game holds § as 0x11 in memory)
     text = re.sub(r"£\w+(\|\w+)?", "", text)    # £icon
     text = re.sub(r"\[[^\]]*\]|\$[^$\s]*\$", "", text)
     text = re.sub(r"\s*\n\s*", " ", text)
     return re.sub(r" {2,}", " ", text).strip()
+
+
+def _ruling_name(s: CountryState) -> str:
+    """The ruling party's clean full name (a mod's long-name text can hold a whole description)."""
+    p = next((p for p in s.parties if p.ruling), None)
+    if p:
+        return p.long_name or p.name
+    return clean_loc((s.ruling_party_long or s.ruling_party).split("\n")[0])
+
+
+def _men(thousands: float) -> str:
+    """12.5 -> '12,500', 1332.6 -> '1.33 million'."""
+    n = thousands * 1000
+    return f"{n / 1e6:.2f} million" if n >= 1e6 else f"{n:,.0f}"
+
+
+def strength_text(s: CountryState) -> str:
+    """Industry, armed forces and manpower in one paragraph (empty if unknown)."""
+    v = s.strength
+    if not v:
+        return "Strength: unknown."
+    g = lambda k: v.get(k, 0)
+    return (f"Industry: {g('civ'):.0f} civilian factories, {g('mil'):.0f} military factories, {g('dock'):.0f} "
+            f"dockyards. Armed forces: {g('divisions'):.0f} divisions ({_men(g('army_k'))} soldiers deployed), "
+            f"navy {_men(g('navy_k'))} sailors, air force {g('planes'):.0f} planes ({_men(g('air_k'))} airmen). "
+            f"Manpower available to recruit: {_men(g('manpower_k'))}; population {_men(g('population_k'))}.")
+
+
+def strength_comparison(a: CountryState, b: CountryState) -> str:
+    """One line comparing two countries' factories, divisions and deployed soldiers."""
+    if not a.strength or not b.strength:
+        return ""
+    def ratio(k: str) -> str:
+        x, y = a.strength.get(k, 0), b.strength.get(k, 0)
+        if y == 0:
+            return "no comparison" if x == 0 else "unmatched"
+        return f"{x / y:.1f}x"
+    fac = lambda s: s.strength.get("civ", 0) + s.strength.get("mil", 0) + s.strength.get("dock", 0)
+    return (f"Strength: {a.name} has {fac(a):.0f} factories ({a.strength.get('mil', 0):.0f} military) to "
+            f"{b.name}'s {fac(b):.0f} ({b.strength.get('mil', 0):.0f} military), {a.strength.get('divisions', 0):.0f} "
+            f"divisions to {b.strength.get('divisions', 0):.0f}, {_men(a.strength.get('army_k', 0))} soldiers to "
+            f"{_men(b.strength.get('army_k', 0))} (military factories {ratio('mil')}, soldiers {ratio('army_k')}).")
 
 
 def describe(s: CountryState, max_states: Optional[int] = None, details: bool = True) -> str:
@@ -378,13 +475,19 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
     pct = lambda v: "?" if v is None else f"{round(v * 100)}%"
     lines = [
         f"{s.name} ({s.tag}){', a major power' if s.is_major else ''}. Adjective: {s.adjective}. Capital: {s.capital}.",
-        f"Led by {s.leader} of the {s.ruling_party_long or s.ruling_party} ({s.ideology}).",
+        f"Led by {s.leader} of the {_ruling_name(s)} ({s.ideology}).",
         f"Stability {pct(s.stability)}, war support {pct(s.war_support)}"
         + (f", political power {s.political_power:.0f}." if s.political_power is not None else "."),
+        strength_text(s),
         "Parties: " + "; ".join(
-            f"{p.name or p.ideology} ({p.ideology}, {p.popularity:g}% support"
-            + (f", led by {p.leader}" if p.leader else "") + ")" for p in s.parties) + ".",
+            f"{p.name}" + (f" [{p.long_name}]" if p.long_name and p.long_name != p.name else "")
+            + f" ({p.ideology_name or p.ideology}, {round(p.popularity, 1):g}% support"
+            + (f", led by {p.leader}" if p.leader else "") + (", in power" if p.ruling else "") + ")"
+            for p in s.parties) + ".",
     ]
+    ruling = next((p for p in s.parties if p.ruling and p.description), None)
+    if ruling and details:
+        lines.append(f"About the ruling party, {ruling.name}: {ruling.description}")
     if s.faction:
         lines.append(f"Member of the faction {s.faction} (leader {s.name_of(s.faction_leader)}; "
                      f"members {s.names_of(s.faction_members)}).")

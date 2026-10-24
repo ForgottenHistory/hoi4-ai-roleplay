@@ -84,15 +84,56 @@ _CHECKS: Dict[str, Callable[[str, str], bool]] = {
 
 
 @dataclass
+class BorderState:
+    id: str
+    name: str
+    core: bool          # the other country holds a core on it
+    claim: bool         # the other country claims it
+
+    def note(self, other_name: str) -> str:
+        bits = ([f"{other_name} holds a core there"] if self.core else []) + \
+               ([f"{other_name} claims it"] if self.claim else [])
+        return f"{self.name}" + (f" ({'; '.join(bits)})" if bits else "")
+
+
+@dataclass
 class Relation:
     """What letters can change between two countries, read live."""
     at_war: bool
     exists: Dict[str, bool]            # relation name -> exists now
+    them_border: Dict[str, BorderState] = None   # them's non-capital states bordering me (flags: my cores/claims)
+    me_border: Dict[str, BorderState] = None     # my non-capital states bordering them (flags: their cores/claims)
+
+
+_STATE_NAMES: Dict[str, str] = {}      # state id -> name, filled as border states are read
+
+
+def border_states(owner: str, other: str) -> Dict[str, BorderState]:
+    """`owner`'s states, other than its capital, that border `other`, with `other`'s cores and claims."""
+    from .gamestate import query
+    eff = (f'{owner} = {{ every_owned_state = {{ limit = {{ is_capital = no any_neighbor_state = {{ is_owned_by = {other} }} }} '
+           f'log = "AIRPB|[THIS.GetID]|[THIS.GetName]" '
+           f'if = {{ limit = {{ is_core_of = {other} }} log = "AIRPC|[THIS.GetID]" }} '
+           f'if = {{ limit = {{ is_claimed_by = {other} }} log = "AIRPK|[THIS.GetID]" }} }} }}')
+    out: Dict[str, BorderState] = {}
+    for line in query(eff):
+        kind, _, rest = line.partition("|")
+        sid, _, name = rest.partition("|")
+        sid = sid.strip()
+        if kind == "AIRPB":
+            out[sid] = BorderState(sid, name.strip(), False, False)
+            _STATE_NAMES[sid] = name.strip()
+        elif kind == "AIRPC" and sid in out:
+            out[sid].core = True
+        elif kind == "AIRPK" and sid in out:
+            out[sid].claim = True
+    return out
 
 
 def relation(them: str, me: str) -> Relation:
     return Relation(at_war=_trigger(f"{me} = {{ has_war_with = {them} }}"),
-                    exists={name: check(them, me) for name, check in _CHECKS.items()})
+                    exists={name: check(them, me) for name, check in _CHECKS.items()},
+                    them_border=border_states(them, me), me_border=border_states(me, them))
 
 
 # ---------------------------------------------------------------- deals
@@ -170,7 +211,56 @@ ASKS = [d.key for d in DEALS if d.key.startswith("ask:")]
 UNILATERAL = [d.key for d in DEALS if d.key.startswith("end:") or d.key == "embargo"]
 
 
+# ---------------------------------------------------------------- territory
+# "give:state:35": them cedes state 35 to me; "ask:state:34": them asks me to cede state 34. Only states that
+# border the other country and aren't a capital (Relation.them_border / me_border), and only in peace.
+#     A = { transfer_state = ID }      A becomes owner and controller of state ID (checked in game)
+
+_BORDER_INFO: Dict[str, BorderState] = {}       # territory key -> state info, from the latest relation()
+
+TERRITORY_NOTE = ("Territory is a grave matter. A government cedes its own land only under real pressure, for "
+                  "something substantial in return, or where the other side holds a core; it demands land only "
+                  "where it has a core, a claim or real leverage.")
+
+
+def is_state(key: str) -> bool:
+    return key.startswith(("give:state:", "ask:state:"))
+
+
+def state_gives(rel: Relation) -> List[str]:
+    keys = [f"give:state:{sid}" for sid in (rel.them_border or {})]
+    _BORDER_INFO.update({k: rel.them_border[k.rsplit(":", 1)[1]] for k in keys})
+    return keys
+
+
+def state_asks(rel: Relation) -> List[str]:
+    keys = [f"ask:state:{sid}" for sid in (rel.me_border or {})]
+    _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
+    return keys
+
+
+def get_deal(key: str) -> Optional[Deal]:
+    if not is_state(key):
+        return BY_KEY.get(key)
+    sid = key.rsplit(":", 1)[1]
+    info = _BORDER_INFO.get(key)
+    name = info.name if info else _STATE_NAMES.get(sid, f"state {sid}")
+    if key.startswith("give:"):
+        note = info.note("{me_name}") if info else name
+        return Deal(key, "state", False, True, f"cede {note} to {{me_name}}", name,
+                    f"{{me}} = {{{{ transfer_state = {sid} }}}}",
+                    f"{{them_name}} ceded {name} to us.", f"{{them_name}} ceded {name} to {{me_name}}.")
+    note = info.note("{them_name}") if info else name
+    return Deal(key, "state", False, True, f"ask {{me_name}} to cede {note} to you", name,
+                f"{{them}} = {{{{ transfer_state = {sid} }}}}",
+                f"We ceded {name} to {{them_name}}.", f"{{me_name}} ceded {name} to {{them_name}}.", True)
+
+
 def possible(rel: Relation, key: str) -> bool:
+    if is_state(key):
+        sid = key.rsplit(":", 1)[1]
+        border = rel.them_border if key.startswith("give:") else rel.me_border
+        return not rel.at_war and sid in (border or {})
     d = BY_KEY[key]
     if d.peace and rel.at_war:
         return False
@@ -182,9 +272,16 @@ def possible_keys(rel: Relation, keys: List[str]) -> List[str]:
 
 
 def word(key: str) -> str:
-    """'give:pact' -> 'pact', 'end:embargo' -> 'end embargo', 'embargo' -> 'embargo' (policy vocabulary)."""
+    """'give:pact' -> 'pact', 'end:embargo' -> 'end embargo', 'give:state:35' -> 'state 35' (policy vocabulary)."""
     verb, _, what = key.partition(":")
-    return what if verb in ("give", "ask") else key.replace(":", " ")
+    return what.replace(":", " ") if verb in ("give", "ask") else key.replace(":", " ")
+
+
+def described(key: str) -> str:
+    """Policy vocabulary with the state name where there is one: 'state 35 (Brabant)'."""
+    if is_state(key):
+        return f"{word(key)} ({get_deal(key).label})"
+    return word(key)
 
 
 # ---------------------------------------------------------------- prompts
@@ -200,7 +297,7 @@ def _unilateral_lines(them_name: str, me_name: str, keys: List[str], when: str) 
     lines = [f"Steps {them_name} can take on its own ({when}):"]
     for k in keys:
         cmd = k.replace(":", " ")
-        lines.append(f"- [[{cmd}]]: {BY_KEY[k].prompt.format(**f)}")
+        lines.append(f"- [[{cmd}]]: {get_deal(k).prompt.format(**f)}")
     return lines
 
 
@@ -213,11 +310,13 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
         f"- [[opinion N]]: how this letter changed {them_name}'s opinion of {me_name}, N from -20 to +20. "
         "Use it when the letter was notably friendly or offensive; leave it out for ordinary letters.",
     ]
-    gives = possible_keys(rel, GIVES)
+    gives = possible_keys(rel, GIVES) + state_gives(rel)
     if gives:
         lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
                      f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
-        lines += [f"- [[{word(k)}]]: {BY_KEY[k].prompt.format(**f)}" for k in gives]
+        lines += [f"- [[{word(k)}]]: {get_deal(k).prompt.format(**f)}" for k in gives]
+        if any(is_state(k) for k in gives):
+            lines.append(TERRITORY_NOTE)
     lines += _unilateral_lines(them_name, me_name, possible_keys(rel, UNILATERAL),
                                "only when your policy calls for it or their letter gives serious cause")
     lines.append("Decide as your government would, considering your interests, ideology, alliances and your "
@@ -242,8 +341,10 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
              f"{me_name} accepts or declines the whole package with one Accept/Decline. {when} Write the proposal "
              f"into the letter, then add one command per item after the letter. Every item the letter proposes "
              f"MUST have its command, or it has no effect; propose nothing in the text that isn't listed here."]
-    lines += [f"- [[offer {word(k)}]]: offer to {BY_KEY[k].prompt.format(**f)}" for k in offers]
-    lines += [f"- [[ask {word(k)}]]: {BY_KEY[k].prompt.format(**f)}" for k in asks]
+    lines += [f"- [[offer {word(k)}]]: offer to {get_deal(k).prompt.format(**f)}" for k in offers]
+    lines += [f"- [[ask {word(k)}]]: {get_deal(k).prompt.format(**f)}" for k in asks]
+    if any(is_state(k) for k in offers + asks):
+        lines.append(TERRITORY_NOTE)
     return "\n".join(lines)
 
 
@@ -267,6 +368,7 @@ def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     proposals: List[str] = []
     for m in _COMMAND.finditer(text):
         verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
+        what = f"state:{num}" if what == "state" else what
         if verb == "offer":
             proposals.append(f"give:{what}")
         elif verb == "ask":
@@ -315,15 +417,19 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             if v and _effect(f"{them} = {{ add_opinion_modifier = {{ target = {me} modifier = {opinion_modifier(v)} }} }}"):
                 shown.append((f"{them_name}'s opinion of us {'improved' if v > 0 else 'worsened'} ({v:+d}).", v < 0))
             continue
-        deal = BY_KEY.get(key)
-        if not deal:
+        deal = get_deal(key)
+        if not deal or (key not in BY_KEY and not is_state(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
-            print(f"  {key} not possible now (at war: {rel.at_war}, {deal.relation} exists: {rel.exists[deal.relation]})")
+            why = "not a border state" if is_state(key) else f"{deal.relation} exists: {rel.exists[deal.relation]}"
+            print(f"  {key} not possible now (at war: {rel.at_war}, {why})")
             continue
         if _effect(deal.effect.format(**fmt)):
-            rel.exists[deal.relation] = not deal.ends
+            if is_state(key):
+                (rel.them_border if key.startswith("give:") else rel.me_border).pop(key.rsplit(":", 1)[1], None)
+            else:
+                rel.exists[deal.relation] = not deal.ends
             shown.append((deal.shown.format(**fmt), deal.hostile))
             events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
     return shown, events
@@ -348,7 +454,11 @@ def package_text(keys: List[str], who: str = "they") -> str:
     plural = who == "they"
     parts = []
     for k in keys:
-        if k.startswith("ask:"):
+        if is_state(k):
+            name = get_deal(k).label
+            parts.append(f"{who} {'ask' if plural else 'asks'} for {name}" if k.startswith("ask:") else
+                         f"{who} {'cede' if plural else 'cedes'} {name}")
+        elif k.startswith("ask:"):
             label = BY_KEY[k].label if plural else BY_KEY[f"give:{word(k)}"].label
             parts.append(f"{who} {'ask' if plural else 'asks'} for {label}")
         else:

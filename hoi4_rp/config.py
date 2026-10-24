@@ -35,6 +35,12 @@ DEFAULTS = {
         "cooldown_days": "30",
         "refusal_days": "180",
         "proposal_gap_days": "30",
+        "letter_gap_days": "20",
+        "style": "serious",
+    },
+    "world": {
+        "setting": "auto",
+        "lore_file": "",
     },
 }
 
@@ -57,12 +63,21 @@ class LetterSettings:
     cooldown_days: int    # game days before the same country starts another letter on its own
     refusal_days: int     # game days a declined proposal item can't be proposed again by that country
     proposal_gap_days: int  # game days between formal proposals from anyone
+    letter_gap_days: int  # game days between letters countries start without an event (policy or quiet)
+    style: str            # how letters are written: serious | dramatic | players (style.py)
+
+
+@dataclass(frozen=True)
+class WorldSettings:
+    setting: str          # auto | vanilla | kaiserreich
+    lore_file: str        # optional text file with extra setting notes
 
 
 @dataclass(frozen=True)
 class Settings:
     llm: LLMSettings
     letters: LetterSettings
+    world: WorldSettings
 
 
 @lru_cache(maxsize=None)
@@ -73,7 +88,7 @@ def settings() -> Settings:
     cp = configparser.ConfigParser()
     cp.read_dict(DEFAULTS)
     cp.read(CONFIG_PATH, encoding="utf-8")   # silently skipped if the file is missing
-    s, lt = cp["llm"], cp["letters"]
+    s, lt, w = cp["llm"], cp["letters"], cp["world"]
     return Settings(
         llm=LLMSettings(
             base_url=s.get("base_url").rstrip("/"),
@@ -90,5 +105,11 @@ def settings() -> Settings:
             cooldown_days=lt.getint("cooldown_days"),
             refusal_days=lt.getint("refusal_days"),
             proposal_gap_days=lt.getint("proposal_gap_days"),
+            letter_gap_days=lt.getint("letter_gap_days"),
+            style=(lt.get("style") or "serious").strip().lower(),
+        ),
+        world=WorldSettings(
+            setting=(w.get("setting") or "auto").strip().lower(),
+            lore_file=(w.get("lore_file") or "").strip(),
         ),
     )

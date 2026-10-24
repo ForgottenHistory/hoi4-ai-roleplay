@@ -22,6 +22,7 @@ import re
 from typing import Dict, List, Optional
 
 from . import actions
+from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
 REFRESH_DAYS = 90
@@ -118,8 +119,10 @@ def needs_refresh(camp, tag: str, player: str, today: str) -> bool:
     p = current(camp, tag)
     if _days(today) - _days(p["date"]) >= REFRESH_DAYS:
         return True
-    # something happened between the two since the policy was set
-    return any(e["date"] > p["date"] and tag in e["tags"] and player in e["tags"] for e in camp.data["events"])
+    # something happened in the world between the two since the policy was set (not just letter outcomes,
+    # or every answered proposal would refresh the policy and start the next one)
+    return any(e["date"] > p["date"] and tag in e["tags"] and player in e["tags"] and e.get("type") in WORLD_TYPES
+               for e in camp.data["events"])
 
 
 def wants_to_write(p: Dict) -> bool:

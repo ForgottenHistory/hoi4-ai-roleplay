@@ -54,6 +54,24 @@ class Campaign:
             with open(self.path, encoding="utf-8") as f:
                 self.data.update(json.load(f))
         self.data["player"] = player
+        if "refusals" not in self.data:
+            self.data["refusals"] = self._past_refusals()
+
+    def _past_refusals(self) -> List[Dict]:
+        """Campaigns from before refusals were stored: rebuild them from 'declined' answers and the
+        proposal on that country's latest letter before each one."""
+        out = []
+        for e in self.data["events"]:
+            if e.get("type") != "offer_answer" or " declined " not in e["text"] or not e["tags"]:
+                continue
+            tag = e["tags"][0]
+            letters = [x for x in self.data["letters"].get(tag, []) if x.get("proposal") or x.get("offer")]
+            letters = [x for x in letters if x["date"] <= e["date"]]
+            if not letters:
+                continue
+            p = letters[-1].get("proposal") or f"give:{letters[-1]['offer']}"
+            out.append({"from": tag, "keys": p if isinstance(p, list) else [p], "date": e["date"]})
+        return out
 
     # ------------------------------------------------------------ persistence
     def save(self) -> None:
@@ -74,6 +92,7 @@ class Campaign:
             for tag, letters in self.data["letters"].items():
                 self.data["letters"][tag] = [x for x in letters if x["date"] <= key]
             self.data["policies"] = {t: p for t, p in self.data.get("policies", {}).items() if p["date"] <= key}
+            self.data["refusals"] = [r for r in self.data.get("refusals", []) if r["date"] <= key]
             offer = self.data.get("pending_offer")
             if offer and offer["date"] > key:
                 self.data["pending_offer"] = None

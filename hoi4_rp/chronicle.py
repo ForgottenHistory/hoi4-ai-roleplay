@@ -27,6 +27,12 @@ _EFFECT = (
 )
 
 
+# Event types diff() produces: things that happened in the world, as opposed to letter outcomes
+# (agreements granted, proposals answered). Only these refresh policies or lift a refusal.
+WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_left", "faction_founded",
+               "faction_joined", "independence", "subject", "capitulation", "war", "peace", "territory"}
+
+
 def snapshot(player: str) -> Dict:
     """{campaign, date, date_text, countries: {tag: {...}}, wars: [A|B], states: {id: [name, owner]}}"""
     snap: Dict = {"campaign": 0, "date": "", "date_text": "", "countries": {}, "wars": [], "states": {}}

@@ -217,7 +217,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.add_letter(to, player, text, key)
     camp.save()
     rel = actions.relation(to, player)
-    offers, asks = _proposals(camp, to, rel)
+    offers, asks = _proposals(camp, to, rel, key)
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
                  + actions.proposal_help(them.name, me.name, offers, asks, expected=False))
     try:
@@ -257,13 +257,30 @@ def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: s
     return items
 
 
-def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation"):
+def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: str):
     """What `tag` may propose now: its policy's offers and asks, or, for a country without a policy (not a
-    neighbour), anything currently possible, left to the LLM's judgement."""
+    neighbour), anything currently possible, left to the LLM's judgement. Nothing if anyone proposed
+    within proposal_gap_days; never an item the player refused within refusal_days, unless something
+    happened in the world between the two since."""
+    cfg = settings().letters
+    today = _days(key)
+    proposed = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("proposal")]
+    if proposed and today - _days(max(proposed)) < cfg.proposal_gap_days:
+        return [], []
+    player = camp.data["player"]
+    refused = set()
+    for r in camp.data.get("refusals", []):
+        if r["from"] != tag or today - _days(r["date"]) >= cfg.refusal_days:
+            continue
+        if any(e["date"] > r["date"] and tag in e["tags"] and player in e["tags"]
+               and e.get("type") in chronicle.WORLD_TYPES for e in camp.data["events"]):
+            continue                                       # things changed since: they may ask again
+        refused.update(r["keys"])
     pol = policy.current(camp, tag)
     offers = pol["offers"] if pol else actions.GIVES
     asks = pol["asks"] if pol else actions.ASKS
-    return [k for k in offers if actions.possible(rel, k)], [k for k in asks if actions.possible(rel, k)]
+    ok = lambda k: k not in refused and actions.possible(rel, k)
+    return [k for k in offers if ok(k)], [k for k in asks if ok(k)]
 
 
 def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) -> None:
@@ -276,12 +293,14 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     key = campaign.date_key(them.date)
     pol = policy.current(camp, sender)
     rel = actions.relation(sender, player)
-    offers, asks = _proposals(camp, sender, rel)
+    offers, asks = _proposals(camp, sender, rel, key)
     steps = [k for k in (pol["breaks"] if pol else []) if actions.possible(rel, k)]
     if actions.possible(rel, "end:embargo") and "end:embargo" not in steps:
         steps.append("end:embargo")                       # lifting an embargo is always allowed
-    # Writing because of its policy (no event): a proposal or step is the point of the letter.
-    expected = bool(pol) and not reason and bool(offers or asks or [s for s in steps if s != "end:embargo"])
+    # Only an urgent policy (3) makes a proposal or step the point of the letter; otherwise the country
+    # mostly just writes, and proposes only if it fits.
+    expected = (bool(pol) and pol["urgency"] >= 3 and not reason
+                and bool(offers or asks or [s for s in steps if s != "end:embargo"]))
     task = (_initiative_task(them, me, reason) + "\n\n"
             + actions.letter_help(them.name, me.name, offers, asks, steps, expected))
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
@@ -337,6 +356,7 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> None:
         print(f"accepted {tag}'s proposal: {[o for o, _ in outcomes] or 'nothing applied'}")
     else:
         text = f"{me_name} declined the proposal ({what})."
+        camp.data.setdefault("refusals", []).append({"from": tag, "keys": items, "date": key})
         print(f"declined {tag}'s proposal: {items}")
     camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "offer_answer",
                       "tags": [tag, player], "text": text, "major": False}])

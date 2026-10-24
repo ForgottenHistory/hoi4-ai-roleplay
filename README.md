@@ -84,3 +84,8 @@ Policies shape every letter that country writes. A neighbour writes soon (once p
 urgent (3), or has something to propose or do with some urgency (2); quiet-period writers are picked by
 urgency. A proposal arrives with Accept/Decline instead of Close; accepting applies the whole package, and
 either answer is remembered.
+
+Proposals stay occasional: only an urgent policy (3) makes one the point of a letter, there's at least
+`proposal_gap_days` between proposals from anyone, and an item you declined is off the table for that
+country for `refusal_days` unless something happens in the world between you (war, territory,
+factions, governments). Answering a proposal doesn't refresh the country's policy; world events do.

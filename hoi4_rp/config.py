@@ -33,6 +33,8 @@ DEFAULTS = {
         "incoming": "yes",
         "quiet_days": "60",
         "cooldown_days": "30",
+        "refusal_days": "180",
+        "proposal_gap_days": "30",
     },
 }
 
@@ -53,6 +55,8 @@ class LetterSettings:
     incoming: bool        # countries write to the player on their own
     quiet_days: int       # game days without any incoming letter before someone writes unprompted
     cooldown_days: int    # game days before the same country starts another letter on its own
+    refusal_days: int     # game days a declined proposal item can't be proposed again by that country
+    proposal_gap_days: int  # game days between formal proposals from anyone
 
 
 @dataclass(frozen=True)
@@ -84,5 +88,7 @@ def settings() -> Settings:
             incoming=lt.getboolean("incoming"),
             quiet_days=lt.getint("quiet_days"),
             cooldown_days=lt.getint("cooldown_days"),
+            refusal_days=lt.getint("refusal_days"),
+            proposal_gap_days=lt.getint("proposal_gap_days"),
         ),
     )

@@ -33,5 +33,6 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
 ## Letters
 
 Open another country in the diplomacy view and pick **Write Letter** from its diplomatic actions.
-Type on your keyboard (letters, digits, space, `. , ' - ? ! " ( )`; Backspace deletes) and press
-Send. With `python -m hoi4_rp letters` running, the country writes back in a reply window.
+Click the page, write your letter and press Send. With `python -m hoi4_rp letters` running, the
+country writes back in a reply window. The letter is a real text box; Python reads it through the
+bridge's `bridge.editbox` command, so the bridge DLL must be up to date.

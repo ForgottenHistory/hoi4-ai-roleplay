@@ -216,7 +216,10 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.at(key)
     camp.add_letter(to, player, text, key)
     camp.save()
-    help_text = actions.prompt_help(them.name, me.name, actions.relation(to, player))
+    rel = actions.relation(to, player)
+    offers, asks = _proposals(camp, to, rel)
+    help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
+                 + actions.proposal_help(them.name, me.name, offers, asks, expected=False))
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
                   + _conversation(camp, them, me))
@@ -225,18 +228,42 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         print("  LLM error:", e)
         _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
         return
-    letter, commands = actions.parse(raw)
+    letter, commands, proposals = actions.parse(raw)
     reply = _clean_for_game(letter)
     camp.add_letter(to, to, reply, key)
-    outcomes, events = actions.apply(to, player, them.name, me.name, commands)
+    outcomes, events = actions.apply(to, player, them.name, me.name, commands,
+                                     allowed=["opinion"] + actions.GIVES + actions.UNILATERAL)
     for e in events:
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False}])
+    # Proposal items are only kept if still possible after what was just applied.
+    after = actions.relation(to, player) if events else rel
+    items = _attach_proposal(camp, to, actions.package([p for p in proposals if actions.possible(after, p)],
+                                                       offers + asks), key)
     camp.save()
-    print(f"{to} replies:\n{reply}")
+    print(f"{to} replies{' (proposes ' + ', '.join(items) + ')' if items else ''}:\n{reply}")
     if commands:
-        print(f"  commands: {commands} -> {outcomes or 'nothing applied'}")
-    shown = reply + ("\n\n\u00a7G" + "\n".join(outcomes) + "\u00a7!" if outcomes else "")
-    _show_reply(player, to, shown)
+        print(f"  commands: {commands} -> {[o for o, _ in outcomes] or 'nothing applied'}")
+    shown = reply + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
+    if items:
+        shown += "\n\n" + actions.proposal_line(items, them.name)
+    _show_reply(player, to, shown, offer=bool(items))
+
+
+def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: str) -> List[str]:
+    """Remember the proposal package on the letter just added and as the pending Accept/Decline."""
+    if items:
+        camp.letters_with(tag)[-1]["proposal"] = items
+        camp.data["pending_offer"] = {"from": tag, "keys": items, "date": key}
+    return items
+
+
+def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation"):
+    """What `tag` may propose now: its policy's offers and asks, or, for a country without a policy (not a
+    neighbour), anything currently possible, left to the LLM's judgement."""
+    pol = policy.current(camp, tag)
+    offers = pol["offers"] if pol else actions.GIVES
+    asks = pol["asks"] if pol else actions.ASKS
+    return [k for k in offers if actions.possible(rel, k)], [k for k in asks if actions.possible(rel, k)]
 
 
 def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) -> None:
@@ -248,11 +275,15 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
         return
     key = campaign.date_key(them.date)
     pol = policy.current(camp, sender)
-    allowed = [o for o in (pol["offers"] if pol else [])
-               if o in actions.offerable(actions.relation(sender, player))]
-    # Writing because of its policy (no event): if it has offers ready, making one is the point of the letter.
+    rel = actions.relation(sender, player)
+    offers, asks = _proposals(camp, sender, rel)
+    steps = [k for k in (pol["breaks"] if pol else []) if actions.possible(rel, k)]
+    if actions.possible(rel, "end:embargo") and "end:embargo" not in steps:
+        steps.append("end:embargo")                       # lifting an embargo is always allowed
+    # Writing because of its policy (no event): a proposal or step is the point of the letter.
+    expected = bool(pol) and not reason and bool(offers or asks or [s for s in steps if s != "end:embargo"])
     task = (_initiative_task(them, me, reason) + "\n\n"
-            + actions.offer_help(them.name, me.name, allowed, expected=bool(allowed) and not reason))
+            + actions.letter_help(them.name, me.name, offers, asks, steps, expected))
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
               + _conversation(camp, them, me)
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
@@ -262,45 +293,51 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     except llm.LLMError as e:
         print(f"  {sender} could not write (LLM error): {e}")
         return
-    raw, offer = actions.parse_offer(raw, allowed)
-    text = _clean_for_game(actions.parse(raw)[0])     # other commands aren't allowed here
+    letter, commands, proposals = actions.parse(raw)
+    text = _clean_for_game(letter)
     camp.add_letter(sender, sender, text, key)
     camp.letters_with(sender)[-1]["initiated"] = True
-    if offer:
-        camp.letters_with(sender)[-1]["offer"] = offer
-        camp.data["pending_offer"] = {"from": sender, "command": offer, "date": key}
+    outcomes, events = actions.apply(sender, player, them.name, me.name, commands, allowed=steps)
+    camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
+    after = actions.relation(sender, player) if events else rel
+    items = _attach_proposal(camp, sender, actions.package([p for p in proposals if actions.possible(after, p)],
+                                                           offers + asks), key)
     camp.save()
     print(f"\n{sender} writes to {player}{' about: ' + reason if reason else ''}"
-          f"{' (offers ' + offer + ')' if offer else ''}\n{text}")
-    shown = text
-    if offer:
-        shown += (f"\n\n\u00a7YOffer from {them.name}: {actions.OFFER_LABELS[offer]}. "
-                  f"Accept or decline below.\u00a7!")
-    _show_reply(player, sender, shown, offer=bool(offer))
+          f"{' (proposes ' + ', '.join(items) + ')' if items else ''}\n{text}")
+    if outcomes:
+        print(f"  steps: {[o for o, _ in outcomes]}")
+    shown = text + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
+    if items:
+        shown += "\n\n" + actions.proposal_line(items, them.name)
+    _show_reply(player, sender, shown, offer=bool(items))
 
 
 def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> None:
-    """The player clicked Accept (1) or Decline (2) on an offer."""
+    """The player clicked Accept (1) or Decline (2) on a proposal package (offers and requests)."""
     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_offer_answer clear_variable = airp_offer }}")
     offer = camp.data.get("pending_offer")
     camp.data["pending_offer"] = None
     if not offer:
         return
-    tag, cmd = offer["from"], offer["command"]
+    tag = offer["from"]
+    items = (offer.get("keys") or ([offer["key"]] if offer.get("key") else None)   # older saves: one item,
+             or [f"give:{offer['command']}"])                                     # or only the word
     names = (camp.snapshot or {}).get("countries", {})
     them_name = names.get(tag, {}).get("name", tag)
     me_name = names.get(player, {}).get("name", player)
     key = camp.data.get("last_date") or offer["date"]
-    label = actions.OFFER_LABELS.get(cmd, cmd)
+    what = actions.package_text(items, them_name)          # "France offers ...; France asks for ..."
     if answer == 1:
-        outcomes, events = actions.apply(tag, player, them_name, me_name, [(cmd, 0)])
+        outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in items], allowed=items)
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
-        text = (f"{me_name} accepted {them_name}'s offer of {label}." if events else
-                f"{me_name} accepted {them_name}'s offer of {label}, but it could no longer be put in place.")
-        print(f"accepted {tag}'s offer: {outcomes or 'nothing applied'}")
+        missed = len(items) - len(events)
+        text = (f"{me_name} accepted the proposal ({what})."
+                + (f" {missed} part(s) could no longer be put in place." if missed else ""))
+        print(f"accepted {tag}'s proposal: {[o for o, _ in outcomes] or 'nothing applied'}")
     else:
-        text = f"{me_name} declined {them_name}'s offer of {label}."
-        print(f"declined {tag}'s offer of {cmd}")
+        text = f"{me_name} declined the proposal ({what})."
+        print(f"declined {tag}'s proposal: {items}")
     camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "offer_answer",
                       "tags": [tag, player], "text": text, "major": False}])
     camp.save()
@@ -323,7 +360,7 @@ class _Session:
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
         self.pool = ThreadPoolExecutor(max_workers=1)  # policy refreshes: the slow LLM part runs here
-        self.policy_job: Optional[tuple] = None        # (tag, future, date key, offerable)
+        self.policy_job: Optional[tuple] = None        # (tag, future, date key, actions.Relation)
 
     def campaign_for(self, player: str, cid: int) -> campaign.Campaign:
         if not cid:
@@ -364,7 +401,7 @@ class _Session:
     # ---- neighbours' policies toward the player, refreshed one at a time in the background
     def policies(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:
         if self.policy_job:
-            tag, fut, key, offerable = self.policy_job
+            tag, fut, key, rel = self.policy_job
             if not fut.done():
                 return
             self.policy_job = None
@@ -373,12 +410,13 @@ class _Session:
             except llm.LLMError as e:
                 print(f"  policy for {tag} failed: {e}")
                 return
-            p = policy.parse(text, offerable)
+            p = policy.parse(text, rel)
             p.update(date=key, when=campaign.date_words(key))
             camp.data.setdefault("policies", {})[tag] = p
             camp.save()
-            print(f"  policy {tag} -> {player}: {p['stance']}, urgency {p['urgency']}, "
-                  f"offers {', '.join(p['offers']) or 'none'}: {p['policy']}")
+            words = lambda keys: ", ".join(actions.word(k) for k in keys) or "none"
+            print(f"  policy {tag} -> {player}: {p['stance']}, urgency {p['urgency']}, offers {words(p['offers'])}, "
+                  f"asks {words(p['asks'])}, breaks {words(p['breaks'])}: {p['policy']}")
             return
         try:
             me = gamestate.country(player)
@@ -391,12 +429,12 @@ class _Session:
                 them = gamestate.country(tag)
             except gamestate.StateError:
                 continue
-            offerable = actions.offerable(actions.relation(tag, player))
+            rel = actions.relation(tag, player)
             messages = [{"role": "system", "content":
                          f"{_context(them, me, camp)}\n\nYOUR CORRESPONDENCE WITH {me.name.upper()}:\n"
-                         f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, offerable)}"},
+                         f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, rel)}"},
                         {"role": "user", "content": f"State {them.name}'s policy toward {me.name} now."}]
-            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7), snap["date"], offerable)
+            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7), snap["date"], rel)
             return
 
     # ---- who writes to the player on their own
@@ -418,11 +456,11 @@ class _Session:
         if self.pending:
             return
         # A neighbour writes soon, once per policy, when its policy is urgent (3) or it has something to
-        # offer and some urgency (2): that letter is where its offer gets made.
-        for tag, p in camp.data.get("policies", {}).items():
+        # propose or do and some urgency (2): that letter is where it happens.
+        for tag in list(camp.data.get("policies", {})):
+            p = policy.current(camp, tag)
             own = [x for x in camp.letters_with(tag) if x.get("initiated")]
-            wants = p["urgency"] >= 3 or (p["urgency"] >= 2 and p["offers"])
-            if (wants and tag in snap["countries"] and not self._cooling(camp, tag, today)
+            if (policy.wants_to_write(p) and tag in snap["countries"] and not self._cooling(camp, tag, today)
                     and (not own or own[-1]["date"] < p["date"])):
                 self.pending[tag] = ""
                 return

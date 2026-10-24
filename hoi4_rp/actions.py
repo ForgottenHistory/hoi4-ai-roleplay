@@ -1,26 +1,31 @@
-"""Gameplay from letters: the LLM appends simple commands to its reply, Python validates them in the game
-and applies what's allowed.
+"""Gameplay from letters: the LLM appends simple commands to its letter, Python validates them in the game
+and applies what's allowed. `them` is the AI country writing, `me` the player.
 
-Commands (double brackets, anywhere in the reply; removed from the letter text). `them` is the country
-replying, `me` the player who wrote:
-    [[opinion +10]]   how the letter changed them's opinion of me (-20..+20)
-    [[pact]]          non-aggression pact between them and me
-    [[access]]        them gives me military access
-    [[docking]]       them gives me docking rights in its ports
-    [[guarantee]]     them guarantees my independence
-    [[market]]        them and me open market access to each other
-Everything except opinion is only allowed if the player asked for it (the prompt says so) and if the game
-says it's possible: not at war with each other, and not already in place.
+Commands (double brackets, anywhere in the letter; removed before it's shown):
+    [[opinion +10]]           them's opinion of me changes (-20..+20; replies only)
+    [[pact]] [[access]] [[docking]] [[guarantee]] [[market]]
+                              them grants it to me now (replies, only when I asked)
+    [[end pact]] [[end access]] [[end docking]] [[end guarantee]]
+                              them ends an agreement with me
+    [[embargo]] [[end embargo]]
+                              them embargoes me / lifts its embargo
+    [[offer X]]               a proposal: them offers to grant X        (letters them starts; Accept/Decline)
+    [[ask X]]                 a proposal: them asks me to grant X to them (access, docking, guarantee)
 
-Opinion values snap to OPINION_TIERS; each tier is an opinion modifier defined by the mod that fades by
-OPINION_DECAY per month. Effect directions were checked in game:
+Each deal checks the game first: it must be possible right now (agreements need peace and must not exist
+yet; ending one needs it to exist). Effect directions were checked in game:
     A = { add_opinion_modifier = { target = B ... } }                          A's opinion of B changes
     A = { diplomatic_relation = { country = B relation = military_access } }   B gives A access
     A = { diplomatic_relation = { country = B relation = docking_rights } }    B gives A docking rights
-                                                                  (stored as docking_rights={ first=A second=B } in A's block)
-    A = { diplomatic_relation = { country = B relation = non_aggression_pact } }  mutual
-    A = { give_guarantee = B }                                                 A guarantees B
-    A = { give_market_access = B }                                             mutual
+                              (stored as docking_rights={ first=A second=B } in A's block; no trigger exists)
+    A = { diplomatic_relation = { country = B relation = non_aggression_pact } }   mutual
+    A = { give_guarantee = B }          A guarantees B; ended by A = { diplomatic_relation = { country = B
+                                        relation = guarantee active = no } }
+    A = { give_market_access = B }      mutual
+    A = { send_embargo = B }            A embargoes B; lifted by A = { diplomatic_relation = { country = B
+                                        relation = embargo active = no } } (break_embargo acts from ROOT,
+                                        which in a console eval_effect is the UI's selected country)
+    active = no on the same diplomatic_relation ends a pact, access or docking rights.
 """
 
 from __future__ import annotations
@@ -33,8 +38,6 @@ from . import bridge, gamestate
 
 OPINION_TIERS = [-20, -10, -5, 5, 10, 20]
 OPINION_DECAY = 1          # opinion lost per month
-
-_COMMAND = re.compile(r"\[\[\s*([a-z_]+)\s*([+-]?\d+)?\s*\]\]", re.I)
 
 
 def opinion_modifier(value: int) -> str:
@@ -54,141 +57,228 @@ def opinion_loc() -> List[str]:
     return [f' {opinion_modifier(v)}:0 "Diplomatic letter ({v:+d})"' for v in OPINION_TIERS]
 
 
-# ---------------------------------------------------------------- the actions a reply can take
-
-@dataclass(frozen=True)
-class Action:
-    command: str
-    offer: str                              # for the prompt: what the command does
-    already: Callable[[str, str], bool]     # (them, me) -> already in place?
-    effect: str                             # script, {them} / {me} filled in
-    shown: str                              # line under the letter, {them_name} / {me_name}
-    remembered: str                         # chronicle text
-
+# ---------------------------------------------------------------- the relations between them and me
 
 def _trigger(script: str) -> bool:
     return bridge.send(f"eval_trigger {script}")[0].rstrip().endswith("yes")
 
 
-def _docking_given(them: str, me: str) -> bool:
-    rel = gamestate._relations(bridge.country_block(me)).get(them, "")
-    return bool(re.search(r'docking_rights=\{[^}]*first="' + me + r'"[^}]*second="' + them + '"', rel))
+def _docking_given(giver: str, receiver: str) -> bool:
+    """`giver` gives `receiver` docking rights (read from the receiver's save-format block)."""
+    rel = gamestate._relations(bridge.country_block(receiver)).get(giver, "")
+    return bool(re.search(r'docking_rights=\{[^}]*first="' + receiver + r'"[^}]*second="' + giver + '"', rel))
 
 
-ACTIONS: List[Action] = [
-    Action("pact", "sign a non-aggression pact with {me_name}",
-           lambda t, m: _trigger(f"{m} = {{ has_non_aggression_pact_with = {t} }}"),
-           "{me} = {{ diplomatic_relation = {{ country = {them} relation = non_aggression_pact active = yes }} }}",
-           "Non-aggression pact signed with {them_name}.",
-           "{them_name} and {me_name} signed a non-aggression pact by letter."),
-    Action("access", "grant {me_name} military access through your territory",
-           lambda t, m: _trigger(f"{t} = {{ gives_military_access_to = {m} }}"),
-           "{me} = {{ diplomatic_relation = {{ country = {them} relation = military_access active = yes }} }}",
-           "{them_name} granted us military access.",
-           "{them_name} granted {me_name} military access by letter."),
-    Action("docking", "grant {me_name} docking rights in your ports",
-           _docking_given,
-           "{me} = {{ diplomatic_relation = {{ country = {them} relation = docking_rights active = yes }} }}",
-           "{them_name} granted us docking rights.",
-           "{them_name} granted {me_name} docking rights by letter."),
-    Action("guarantee", "guarantee {me_name}'s independence (you would defend them if attacked)",
-           lambda t, m: _trigger(f"{t} = {{ has_guaranteed = {m} }}"),
-           "{them} = {{ give_guarantee = {me} }}",
-           "{them_name} guaranteed our independence.",
-           "{them_name} guaranteed the independence of {me_name} by letter."),
-    Action("market", "open market access between you and {me_name} (trade on the international market)",
-           lambda t, m: _trigger(f"{m} = {{ has_market_access_with = {t} }}"),
-           "{them} = {{ give_market_access = {me} }}",
-           "Market access opened with {them_name}.",
-           "{them_name} and {me_name} opened market access to each other by letter."),
-]
-_BY_COMMAND = {a.command: a for a in ACTIONS}
+# relation name -> (them, me) -> does it exist right now?
+_CHECKS: Dict[str, Callable[[str, str], bool]] = {
+    "pact": lambda t, m: _trigger(f"{m} = {{ has_non_aggression_pact_with = {t} }}"),
+    "they_access": lambda t, m: _trigger(f"{t} = {{ gives_military_access_to = {m} }}"),
+    "my_access": lambda t, m: _trigger(f"{m} = {{ gives_military_access_to = {t} }}"),
+    "they_docking": lambda t, m: _docking_given(t, m),
+    "my_docking": lambda t, m: _docking_given(m, t),
+    "they_guarantee": lambda t, m: _trigger(f"{t} = {{ has_guaranteed = {m} }}"),
+    "my_guarantee": lambda t, m: _trigger(f"{m} = {{ has_guaranteed = {t} }}"),
+    "market": lambda t, m: _trigger(f"{m} = {{ has_market_access_with = {t} }}"),
+    "embargo": lambda t, m: _trigger(f"{t} = {{ is_embargoing = {m} }}"),
+}
 
 
 @dataclass
 class Relation:
     """What letters can change between two countries, read live."""
     at_war: bool
-    in_place: Dict[str, bool]          # command -> already in place
+    exists: Dict[str, bool]            # relation name -> exists now
 
 
 def relation(them: str, me: str) -> Relation:
     return Relation(at_war=_trigger(f"{me} = {{ has_war_with = {them} }}"),
-                    in_place={a.command: a.already(them, me) for a in ACTIONS})
+                    exists={name: check(them, me) for name, check in _CHECKS.items()})
 
 
-def prompt_help(them_name: str, me_name: str, rel: Relation) -> str:
-    """The command rules for the LLM, with the current state so it doesn't grant what already exists."""
-    fmt = {"me_name": me_name, "them_name": them_name}
+# ---------------------------------------------------------------- deals
+
+@dataclass(frozen=True)
+class Deal:
+    key: str              # "give:pact", "ask:access", "end:pact", "embargo", "end:embargo"
+    relation: str         # the relation in _CHECKS it creates or ends
+    ends: bool            # True: needs the relation to exist and removes it; False: needs it absent
+    peace: bool           # only possible when not at war
+    prompt: str           # for the LLM (them's point of view)
+    label: str            # neutral name of the thing (window, chronicle)
+    effect: str           # script with {them} {me}
+    shown: str            # line under the letter
+    remembered: str       # chronicle text
+    hostile: bool = False
+
+
+def _rel(on: str, other: str, rel: str, active: str) -> str:
+    return f"{{{on}}} = {{{{ diplomatic_relation = {{{{ country = {{{other}}} relation = {rel} active = {active} }}}} }}}}"
+
+
+DEALS: List[Deal] = [
+    # them grants me (replies when I asked; offers in letters them starts)
+    Deal("give:pact", "pact", False, True, "sign a non-aggression pact with {me_name}", "a non-aggression pact",
+         _rel("me", "them", "non_aggression_pact", "yes"),
+         "Non-aggression pact signed with {them_name}.", "{them_name} and {me_name} signed a non-aggression pact."),
+    Deal("give:access", "they_access", False, True, "grant {me_name} military access through your territory",
+         "military access", _rel("me", "them", "military_access", "yes"),
+         "{them_name} granted us military access.", "{them_name} granted {me_name} military access."),
+    Deal("give:docking", "they_docking", False, True, "grant {me_name} docking rights in your ports",
+         "docking rights", _rel("me", "them", "docking_rights", "yes"),
+         "{them_name} granted us docking rights.", "{them_name} granted {me_name} docking rights."),
+    Deal("give:guarantee", "they_guarantee", False, True,
+         "guarantee {me_name}'s independence (you would defend them if attacked)", "a guarantee of independence",
+         "{them} = {{ give_guarantee = {me} }}",
+         "{them_name} guaranteed our independence.", "{them_name} guaranteed the independence of {me_name}."),
+    Deal("give:market", "market", False, True, "open market access between you and {me_name}", "market access",
+         "{them} = {{ give_market_access = {me} }}",
+         "Market access opened with {them_name}.", "{them_name} and {me_name} opened market access to each other."),
+    # them asks me to grant (proposals in letters them starts)
+    Deal("ask:access", "my_access", False, True, "ask {me_name} for military access through their territory",
+         "military access through our territory", _rel("them", "me", "military_access", "yes"),
+         "We granted {them_name} military access.", "{me_name} granted {them_name} military access."),
+    Deal("ask:docking", "my_docking", False, True, "ask {me_name} for docking rights in their ports",
+         "docking rights in our ports", _rel("them", "me", "docking_rights", "yes"),
+         "We granted {them_name} docking rights.", "{me_name} granted {them_name} docking rights."),
+    Deal("ask:guarantee", "my_guarantee", False, True, "ask {me_name} to guarantee your independence",
+         "our guarantee of their independence", "{me} = {{ give_guarantee = {them} }}",
+         "We guaranteed the independence of {them_name}.", "{me_name} guaranteed the independence of {them_name}."),
+    # them acts alone
+    Deal("end:pact", "pact", True, False, "end your non-aggression pact with {me_name}", "the non-aggression pact",
+         _rel("me", "them", "non_aggression_pact", "no"),
+         "{them_name} ended our non-aggression pact.", "{them_name} ended its non-aggression pact with {me_name}.", True),
+    Deal("end:access", "they_access", True, False, "withdraw the military access you give {me_name}",
+         "military access", _rel("me", "them", "military_access", "no"),
+         "{them_name} withdrew our military access.", "{them_name} withdrew {me_name}'s military access.", True),
+    Deal("end:docking", "they_docking", True, False, "withdraw the docking rights you give {me_name}",
+         "docking rights", _rel("me", "them", "docking_rights", "no"),
+         "{them_name} withdrew our docking rights.", "{them_name} withdrew {me_name}'s docking rights.", True),
+    Deal("end:guarantee", "they_guarantee", True, False, "withdraw your guarantee of {me_name}'s independence",
+         "the guarantee of independence", _rel("them", "me", "guarantee", "no"),
+         "{them_name} withdrew its guarantee of our independence.",
+         "{them_name} withdrew its guarantee of {me_name}'s independence.", True),
+    Deal("embargo", "embargo", False, False, "impose a trade embargo on {me_name}", "a trade embargo",
+         "{them} = {{ send_embargo = {me} }}",
+         "{them_name} imposed a trade embargo on us.", "{them_name} imposed a trade embargo on {me_name}.", True),
+    Deal("end:embargo", "embargo", True, False, "lift your trade embargo on {me_name}", "the trade embargo",
+         _rel("them", "me", "embargo", "no"),
+         "{them_name} lifted its trade embargo on us.", "{them_name} lifted its trade embargo on {me_name}."),
+]
+BY_KEY = {d.key: d for d in DEALS}
+GIVES = [d.key for d in DEALS if d.key.startswith("give:")]
+ASKS = [d.key for d in DEALS if d.key.startswith("ask:")]
+UNILATERAL = [d.key for d in DEALS if d.key.startswith("end:") or d.key == "embargo"]
+
+
+def possible(rel: Relation, key: str) -> bool:
+    d = BY_KEY[key]
+    if d.peace and rel.at_war:
+        return False
+    return rel.exists[d.relation] == d.ends
+
+
+def possible_keys(rel: Relation, keys: List[str]) -> List[str]:
+    return [k for k in keys if possible(rel, k)]
+
+
+def word(key: str) -> str:
+    """'give:pact' -> 'pact', 'end:embargo' -> 'end embargo', 'embargo' -> 'embargo' (policy vocabulary)."""
+    verb, _, what = key.partition(":")
+    return what if verb in ("give", "ask") else key.replace(":", " ")
+
+
+# ---------------------------------------------------------------- prompts
+
+def _fmt(them_name: str, me_name: str) -> Dict[str, str]:
+    return {"me_name": me_name, "them_name": them_name}
+
+
+def _unilateral_lines(them_name: str, me_name: str, keys: List[str], when: str) -> List[str]:
+    if not keys:
+        return []
+    f = _fmt(them_name, me_name)
+    lines = [f"Steps {them_name} can take on its own ({when}):"]
+    for k in keys:
+        cmd = k.replace(":", " ")
+        lines.append(f"- [[{cmd}]]: {BY_KEY[k].prompt.format(**f)}")
+    return lines
+
+
+def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
+    """Rules for a reply to the player's letter."""
+    f = _fmt(them_name, me_name)
     lines = [
         "ACTIONS. Your reply can have real consequences in the game. After the letter, you may add these "
         "commands in double square brackets (they are removed before the letter is shown):",
         f"- [[opinion N]]: how this letter changed {them_name}'s opinion of {me_name}, N from -20 to +20. "
         "Use it when the letter was notably friendly or offensive; leave it out for ordinary letters.",
     ]
-    for a in ACTIONS:
-        if rel.at_war:
-            break
-        state = " (already in place)" if rel.in_place[a.command] else ""
-        lines.append(f"- [[{a.command}]]: {a.offer.format(**fmt)}{state}.")
-    lines.append(
-        f"Use those only if {me_name} asked for that in their letter and you agree; never for something "
-        "already in place. Decide as your government would, considering your interests, ideology, alliances "
-        "and your opinion of them; refusing is fine. If you agree to something, also say so in the letter.")
+    gives = possible_keys(rel, GIVES)
+    if gives:
+        lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
+                     f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
+        lines += [f"- [[{word(k)}]]: {BY_KEY[k].prompt.format(**f)}" for k in gives]
+    lines += _unilateral_lines(them_name, me_name, possible_keys(rel, UNILATERAL),
+                               "only when your policy calls for it or their letter gives serious cause")
+    lines.append("Decide as your government would, considering your interests, ideology, alliances and your "
+                 "opinion of them; refusing is fine. Whatever you do, also say so in the letter.")
     if rel.at_war:
         lines.append(f"You are at war with {me_name}, so no agreements are possible.")
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------- offers (letters a country starts itself)
-# A country writing first may attach one offer, [[offer pact]]; the player gets Accept/Decline buttons.
-# Accepting applies the same action as above (them = the country that offered, me = the player).
-
-OFFER_LABELS = {          # neutral names, for the window and the chronicle
-    "pact": "a non-aggression pact",
-    "access": "military access",
-    "docking": "docking rights",
-    "guarantee": "a guarantee of independence",
-    "market": "market access",
-}
-_OFFER = re.compile(r"\[\[\s*offer\s+([a-z_]+)\s*\]\]", re.I)
-
-
-def offerable(rel: Relation) -> List[str]:
-    """Agreements that could be offered right now: not at war, not already in place."""
-    return [] if rel.at_war else [a.command for a in ACTIONS if not rel.in_place[a.command]]
-
-
-def offer_help(them_name: str, me_name: str, allowed: List[str], expected: bool = False) -> str:
-    """expected: the letter is written because of the country's policy, so making an offer is its point."""
-    if not allowed:
-        return "Make no formal offer in this letter."
-    fmt = {"me_name": me_name, "them_name": them_name}
-    when = ("Your policy is to propose one of these now: make that offer the purpose of this letter, unless "
-            "the situation has changed so much that it no longer suits you."
+def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[str], expected: bool) -> str:
+    """One proposal (offer or request) the player answers with Accept/Decline.
+    expected: the letter is written because of the policy, so a proposal is its point."""
+    f = _fmt(them_name, me_name)
+    if not (offers or asks):
+        return "Make no formal proposal in this letter."
+    when = ("Your policy is to make such a proposal now: make it the purpose of this letter, unless the "
+            "situation has changed so much that it no longer suits you."
             if expected else
-            "Only offer something your policy is willing to give, and only if it suits this letter.")
-    lines = [f"OFFER. You may attach ONE formal offer to {me_name}; they will get Accept and Decline buttons. "
-             f"Write the offer into the letter too, then add the command after the letter. {when} "
-             "Possible offers:"]
-    for cmd in allowed:
-        lines.append(f"- [[offer {cmd}]]: {_BY_COMMAND[cmd].offer.format(**fmt)}")
+            "Propose only what your government actually wants, and only if it suits this letter.")
+    lines = [f"PROPOSAL. You may attach ONE formal proposal to {me_name}: a package of up to {MAX_PACKAGE} items, "
+             f"offers and requests mixed (for example something you give in return for something you ask). "
+             f"{me_name} accepts or declines the whole package with one Accept/Decline. {when} Write the proposal "
+             f"into the letter, then add one command per item after the letter. Every item the letter proposes "
+             f"MUST have its command, or it has no effect; propose nothing in the text that isn't listed here."]
+    lines += [f"- [[offer {word(k)}]]: offer to {BY_KEY[k].prompt.format(**f)}" for k in offers]
+    lines += [f"- [[ask {word(k)}]]: {BY_KEY[k].prompt.format(**f)}" for k in asks]
     return "\n".join(lines)
 
 
-def parse_offer(text: str, allowed: List[str]) -> Tuple[str, Optional[str]]:
-    """Strip offer commands; returns (clean text, the first allowed offer or None)."""
-    found = [m.group(1).lower() for m in _OFFER.finditer(text)]
-    clean = re.sub(r"[ \t]+\n", "\n", _OFFER.sub("", text)).strip()
-    return clean, next((c for c in found if c in allowed), None)
+def letter_help(them_name: str, me_name: str, offers: List[str], asks: List[str], steps: List[str],
+                expected: bool) -> str:
+    """Rules for a letter `them` starts: one proposal (offer or request), plus steps its policy calls for."""
+    lines = [proposal_help(them_name, me_name, offers, asks, expected)]
+    lines += _unilateral_lines(them_name, me_name, steps, "your policy calls for these; take them only if you "
+                               "still mean to, and say so in the letter")
+    return "\n".join(lines)
 
 
-def parse(text: str) -> Tuple[str, List[Tuple[str, int]]]:
-    """Strip commands from the letter. Returns (clean text, [(command, number)])."""
-    commands = [(m.group(1).lower(), int(m.group(2) or 0)) for m in _COMMAND.finditer(text)]
-    clean = _COMMAND.sub("", text)
-    clean = re.sub(r"[ \t]+\n", "\n", clean).strip()
-    return clean, commands
+# ---------------------------------------------------------------- parsing and applying
+
+_COMMAND = re.compile(r"\[\[\s*(?:(offer|ask|end)\s+)?([a-z_]+)\s*([+-]?\d+)?\s*\]\]", re.I)
+
+
+def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
+    """Strip all commands. Returns (clean text, immediate [(key or 'opinion', number)], proposals [key])."""
+    immediate: List[Tuple[str, int]] = []
+    proposals: List[str] = []
+    for m in _COMMAND.finditer(text):
+        verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
+        if verb == "offer":
+            proposals.append(f"give:{what}")
+        elif verb == "ask":
+            proposals.append(f"ask:{what}")
+        elif verb == "end":
+            immediate.append((f"end:{what}", 0))
+        elif what in ("opinion", "embargo"):
+            immediate.append((what, num))
+        else:
+            immediate.append((f"give:{what}", 0))
+    clean = re.sub(r"[ \t]+\n", "\n", _COMMAND.sub("", text)).strip()
+    return clean, immediate, proposals
 
 
 def _snap(value: int) -> int:
@@ -205,31 +295,66 @@ def _effect(script: str) -> bool:
     return True
 
 
-def apply(them: str, me: str, them_name: str, me_name: str,
-          commands: List[Tuple[str, int]]) -> Tuple[List[str], List[Dict]]:
-    """Validate and apply. Returns (lines to show the player, chronicle events)."""
-    shown: List[str] = []
+def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple[str, int]],
+          allowed: Optional[List[str]] = None) -> Tuple[List[Tuple[str, bool]], List[Dict]]:
+    """Validate and apply. `allowed` limits which deal keys may be used ('opinion' included).
+    Returns ([(line to show the player, hostile)], chronicle events)."""
+    shown: List[Tuple[str, bool]] = []
     events: List[Dict] = []
     fmt = {"them": them, "me": me, "them_name": them_name, "me_name": me_name}
     rel = relation(them, me)
     done = set()
-    for name, value in commands:
-        if name in done:
+    for key, value in commands:
+        if key in done or (allowed is not None and key not in allowed):
+            if key not in done:
+                print(f"  [[{key}]] not allowed here, ignored")
             continue
-        done.add(name)
-        if name == "opinion":
+        done.add(key)
+        if key == "opinion":
             v = _snap(max(-20, min(20, value)))
             if v and _effect(f"{them} = {{ add_opinion_modifier = {{ target = {me} modifier = {opinion_modifier(v)} }} }}"):
-                shown.append(f"{them_name}'s opinion of us {'improved' if v > 0 else 'worsened'} ({v:+d}).")
+                shown.append((f"{them_name}'s opinion of us {'improved' if v > 0 else 'worsened'} ({v:+d}).", v < 0))
             continue
-        action = _BY_COMMAND.get(name)
-        if not action:
-            print(f"  unknown command [[{name}]] ignored")
+        deal = BY_KEY.get(key)
+        if not deal:
+            print(f"  unknown command {key} ignored")
             continue
-        if rel.at_war or rel.in_place[name]:
-            print(f"  [[{name}]] skipped (at war: {rel.at_war}, already in place: {rel.in_place[name]})")
+        if not possible(rel, key):
+            print(f"  {key} not possible now (at war: {rel.at_war}, {deal.relation} exists: {rel.exists[deal.relation]})")
             continue
-        if _effect(action.effect.format(**fmt)):
-            shown.append(action.shown.format(**fmt))
-            events.append({"type": name, "tags": [them, me], "text": action.remembered.format(**fmt)})
+        if _effect(deal.effect.format(**fmt)):
+            rel.exists[deal.relation] = not deal.ends
+            shown.append((deal.shown.format(**fmt), deal.hostile))
+            events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
     return shown, events
+
+
+def outcome_text(shown: List[Tuple[str, bool]]) -> str:
+    """Lines for under the letter: green for good news, red for bad."""
+    return "\n".join(f"§{'R' if hostile else 'G'}{line}§!" for line, hostile in shown)
+
+
+MAX_PACKAGE = 3
+
+
+def package(proposals: List[str], allowed: List[str]) -> List[str]:
+    """The proposal items to keep: allowed ones, each once, at most MAX_PACKAGE."""
+    return list(dict.fromkeys(p for p in proposals if p in allowed))[:MAX_PACKAGE]
+
+
+def package_text(keys: List[str], who: str = "they") -> str:
+    """'they offer a guarantee of independence; they ask for military access through our territory'
+    With a country name as `who`: 'France offers ...; France asks for military access' (asks keep a neutral label)."""
+    plural = who == "they"
+    parts = []
+    for k in keys:
+        if k.startswith("ask:"):
+            label = BY_KEY[k].label if plural else BY_KEY[f"give:{word(k)}"].label
+            parts.append(f"{who} {'ask' if plural else 'asks'} for {label}")
+        else:
+            parts.append(f"{who} {'offer' if plural else 'offers'} {BY_KEY[k].label}")
+    return "; ".join(parts)
+
+
+def proposal_line(keys: List[str], them_name: str) -> str:
+    return f"§YProposal from {them_name}: {package_text(keys)}. Accept or decline below.§!"

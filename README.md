@@ -57,29 +57,30 @@ those involving you or the major powers. Loading an earlier save drops memories 
 
 ## Consequences
 
-Replies can change the game (`hoi4_rp/actions.py`). The LLM appends simple commands to its letter,
-Python removes them, checks them in the game and applies what's allowed:
+Letters can change the game (`hoi4_rp/actions.py`). The LLM appends simple commands to its letter;
+Python removes them, checks each in the game (agreements need peace and mustn't exist yet; ending one
+needs it to exist) and applies what's allowed. What happened is listed under the letter (green good
+news, red bad) and the agreements are remembered in the chronicle.
 
-- `[[opinion N]]`: the replying country's opinion of you, -20..+20 (snapped to mod-defined opinion
-  modifiers that fade by 1 per month)
-- `[[pact]]`: a non-aggression pact, only when you asked for one
-- `[[access]]`: military access through their territory, only when you asked for it
-- `[[docking]]`: docking rights in their ports, only when you asked for it
-- `[[guarantee]]`: they guarantee your independence, only when you asked for it
-- `[[market]]`: market access with each other, only when you asked for it
-
-What was applied is shown under the letter and remembered in the campaign chronicle. Letters a
-country starts on its own carry no commands.
+- In a reply: `[[opinion N]]` (-20..+20, mod-defined modifiers fading 1 per month), and the agreements
+  you asked for: `[[pact]]`, `[[access]]`, `[[docking]]`, `[[guarantee]]`, `[[market]]`
+- Anytime, on their own: `[[end pact]]`, `[[end access]]`, `[[end docking]]`, `[[end guarantee]]`,
+  `[[embargo]]`, `[[end embargo]]` (replies: only for serious cause; letters they start: when their
+  policy calls for it)
+- In any letter, one proposal answered with a single Accept/Decline: a package of up to 3 items, each
+  `[[offer X]]` (they grant you X) or `[[ask X]]` (they ask you for military access, docking rights or
+  a guarantee), e.g. a guarantee in return for access. Neighbours propose what their policy lists;
+  other countries anything currently possible.
 
 ## Policies and offers
 
 Each neighbour keeps a policy toward you (`hoi4_rp/policy.py`): a stance (friendly, cordial,
-indifferent, wary, hostile), an urgency 0-3, the agreements it would offer you, and a few sentences on
-what it wants and fears. The LLM writes it from the full game state and memory as four plain
-`KEY: value` lines; it's refreshed every 90 game days or after something happens between you, one
+indifferent, wary, hostile), an urgency 0-3, what it would offer you, what it wants from you, what it
+means to end or impose, and a few sentences on what it wants and fears. The LLM writes it from the full
+game state and memory as six plain `KEY: value` lines; it's refreshed every 90 game days or after something happens between you, one
 at a time in a background thread so letters never wait for it.
 
-Policies shape every letter that country writes. An urgency-3 neighbour writes soon even if it hasn't
-been quiet, and quiet-period writers are picked by urgency. A letter a country starts can carry one
-offer from its policy (`[[offer pact]]`); it arrives with Accept/Decline instead of Close, accepting
-applies the agreement, and either answer is remembered.
+Policies shape every letter that country writes. A neighbour writes soon (once per policy) when it's
+urgent (3), or has something to propose or do with some urgency (2); quiet-period writers are picked by
+urgency. A proposal arrives with Accept/Decline instead of Close; accepting applies the whole package, and
+either answer is remembered.

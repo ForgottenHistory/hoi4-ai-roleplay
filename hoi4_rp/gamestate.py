@@ -362,15 +362,28 @@ def player_tag() -> str:
     return bridge.player_tag()
 
 
-def describe(s: CountryState, max_states: int = 12) -> str:
-    """Readable summary, e.g. for an LLM prompt."""
+def clean_loc(text: str) -> str:
+    """Strip HOI4 formatting from raw localisation: colour codes, icons, and references that need a
+    scope to resolve ([Root.GetName], $KEY$)."""
+    text = re.sub(r"§.", "", text)            # colour codes like §Y ... §!
+    text = re.sub(r"£\w+(\|\w+)?", "", text)    # £icon
+    text = re.sub(r"\[[^\]]*\]|\$[^$\s]*\$", "", text)
+    text = re.sub(r"\s*\n\s*", " ", text)
+    return re.sub(r" {2,}", " ", text).strip()
+
+
+def describe(s: CountryState, max_states: Optional[int] = None, details: bool = True) -> str:
+    """Readable summary, e.g. for an LLM prompt. Complete by default: every state, and the
+    descriptions of national spirits and completed focuses. max_states/details=False shorten it."""
     pct = lambda v: "?" if v is None else f"{round(v * 100)}%"
     lines = [
-        f"{s.name} ({s.tag}){', a major power' if s.is_major else ''}. Capital: {s.capital}.",
+        f"{s.name} ({s.tag}){', a major power' if s.is_major else ''}. Adjective: {s.adjective}. Capital: {s.capital}.",
         f"Led by {s.leader} of the {s.ruling_party_long or s.ruling_party} ({s.ideology}).",
-        f"Stability {pct(s.stability)}, war support {pct(s.war_support)}.",
-        "Party support: " + ", ".join(f"{p.name or p.ideology} ({p.ideology}) {p.popularity:g}%"
-                                      for p in s.parties if p.popularity > 0) + ".",
+        f"Stability {pct(s.stability)}, war support {pct(s.war_support)}"
+        + (f", political power {s.political_power:.0f}." if s.political_power is not None else "."),
+        "Parties: " + "; ".join(
+            f"{p.name or p.ideology} ({p.ideology}, {p.popularity:g}% support"
+            + (f", led by {p.leader}" if p.leader else "") + ")" for p in s.parties) + ".",
     ]
     if s.faction:
         lines.append(f"Member of the faction {s.faction} (leader {s.name_of(s.faction_leader)}; "
@@ -385,9 +398,11 @@ def describe(s: CountryState, max_states: int = 12) -> str:
     if s.wars:
         wars = []
         for w in s.wars:
-            how = "which we attacked" if w.we_attacked else "which attacked us"
+            how = "which it attacked" if w.we_attacked else "which attacked it"
             since = f", since {save_date(w.start_date)}" if w.start_date else ""
-            wars.append(f"{s.name_of(w.enemy)} ({how}{since})")
+            cas = (f"; casualties {w.our_casualties:,} suffered, {w.their_casualties:,} inflicted"
+                   if w.our_casualties or w.their_casualties else "")
+            wars.append(f"{s.name_of(w.enemy)} ({how}{since}{cas})")
         lines.append("At war with: " + "; ".join(wars) + ".")
     else:
         lines.append("At peace.")
@@ -399,10 +414,21 @@ def describe(s: CountryState, max_states: int = 12) -> str:
     if s.neighbors:
         lines.append(f"Neighbours: {s.names_of(s.neighbors)}.")
     if s.states:
-        more = f" and {len(s.states) - max_states} more" if len(s.states) > max_states else ""
-        lines.append(f"Owns {len(s.states)} states: {', '.join(x.name for x in s.states[:max_states])}{more}.")
-    if s.ideas:
-        lines.append("National spirits and laws: " + ", ".join(i.name for i in s.ideas) + ".")
-    if s.focuses:
-        lines.append("Completed focuses: " + ", ".join(f.name for f in s.focuses) + ".")
+        shown = s.states if max_states is None else s.states[:max_states]
+        more = f" and {len(s.states) - len(shown)} more" if len(shown) < len(s.states) else ""
+        lines.append(f"Owns {len(s.states)} states: {', '.join(x.name for x in shown)}{more}.")
+
+    def items(title: str, entries: List[Named]) -> None:
+        if not entries:
+            return
+        if not details:
+            lines.append(f"{title}: " + ", ".join(e.name for e in entries) + ".")
+            return
+        lines.append(f"{title}:")
+        for e in entries:
+            desc = clean_loc(e.description)
+            lines.append(f"- {e.name}" + (f": {desc}" if desc else ""))
+
+    items("National spirits and laws", s.ideas)
+    items("Completed national focuses", s.focuses)
     return "\n".join(lines)

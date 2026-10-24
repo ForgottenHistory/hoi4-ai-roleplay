@@ -29,6 +29,11 @@ DEFAULTS = {
         "timeout": "120",
         "retries": "2",
     },
+    "letters": {
+        "incoming": "yes",
+        "quiet_days": "60",
+        "cooldown_days": "30",
+    },
 }
 
 
@@ -44,8 +49,16 @@ class LLMSettings:
 
 
 @dataclass(frozen=True)
+class LetterSettings:
+    incoming: bool        # countries write to the player on their own
+    quiet_days: int       # game days without any incoming letter before someone writes unprompted
+    cooldown_days: int    # game days before the same country starts another letter on its own
+
+
+@dataclass(frozen=True)
 class Settings:
     llm: LLMSettings
+    letters: LetterSettings
 
 
 @lru_cache(maxsize=None)
@@ -56,13 +69,20 @@ def settings() -> Settings:
     cp = configparser.ConfigParser()
     cp.read_dict(DEFAULTS)
     cp.read(CONFIG_PATH, encoding="utf-8")   # silently skipped if the file is missing
-    s = cp["llm"]
-    return Settings(llm=LLMSettings(
-        base_url=s.get("base_url").rstrip("/"),
-        api_key_env=s.get("api_key_env"),
-        model=s.get("model"),
-        temperature=s.getfloat("temperature"),
-        max_tokens=s.getint("max_tokens"),
-        timeout=s.getfloat("timeout"),
-        retries=s.getint("retries"),
-    ))
+    s, lt = cp["llm"], cp["letters"]
+    return Settings(
+        llm=LLMSettings(
+            base_url=s.get("base_url").rstrip("/"),
+            api_key_env=s.get("api_key_env"),
+            model=s.get("model"),
+            temperature=s.getfloat("temperature"),
+            max_tokens=s.getint("max_tokens"),
+            timeout=s.getfloat("timeout"),
+            retries=s.getint("retries"),
+        ),
+        letters=LetterSettings(
+            incoming=lt.getboolean("incoming"),
+            quiet_days=lt.getint("quiet_days"),
+            cooldown_days=lt.getint("cooldown_days"),
+        ),
+    )

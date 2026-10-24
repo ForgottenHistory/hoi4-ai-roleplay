@@ -1,28 +1,36 @@
 """Diplomatic letters: the player writes to a country in game, the LLM writes that country's reply.
 
-    python -m hoi4_rp letters      # keep running while you play
+    python -m hoi4_rp run          # keep running while you play (also: letters)
 
-Loop: poll the player's country for airp_outbox_to (set by the Send button, see letter_mod.py),
-read the letter from the writing area's text box through the bridge (`bridge.editbox`), clear both,
-ask the LLM for a reply in character, then put the reply text in the airp_reply_body key and open
-the reply window.
-Conversation history per country is kept while this runs.
+Loop, every half second: poll the player's country for airp_outbox_to (set by the Send button, see
+letter_mod.py), read the letter from the writing area's text box through the bridge
+(`bridge.editbox`), clear both, ask the LLM for a reply in character, then put the reply text in the
+airp_reply_body key and open the reply window.
+Every few seconds of play it also snapshots the world and records what changed (chronicle.py).
+
+Countries also write first (config [letters]): when a recorded event involves the player, the other
+country involved writes about it; when no country has written for quiet_days, a neighbour, faction
+member or major power writes unprompted. A country waits cooldown_days before writing on its own
+again, and a letter only appears when no reply window is open and no reply is awaited.
+
+Memory is per campaign and survives restarts (campaign.py): each country remembers every letter
+exchanged with the player and the events it took part in, plus world events involving major powers.
 """
 
 from __future__ import annotations
 
+import random
 import re
 import time
 import unicodedata
 from typing import Dict, List, Optional
 
-from . import bridge, gamestate, llm
-from .letter_mod import EDITBOX_NAME
+from . import bridge, campaign, chronicle, gamestate, llm
+from .config import settings
+from .letter_mod import EDITBOX_NAME, PAGE_NAME
 
 POLL_SECONDS = 0.5
-MAX_HISTORY = 12   # messages kept per country (letters + replies)
-
-_history: Dict[str, List[Dict[str, str]]] = {}
+CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded when the date moved)
 
 
 def decode_country(value: float) -> Optional[str]:
@@ -96,17 +104,44 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
     return " ".join(facts) or "No war, alliance, border or subject relation between them."
 
 
-def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    events = [e for e in camp.data["events"]
+              if them.tag in e["tags"] or me.tag in e["tags"] or e.get("major")]
+    if not events:
+        return "Nothing notable recorded yet."
+    return "\n".join(f"- {e['when']}: {e['text']}" for e in events)
+
+
+def _reply_task(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    return (f"Write {them.name}'s reply to their latest letter, in the voice of {them.leader} or their "
+            f"foreign office, true to {them.name}'s interests, ideology and situation. Be in character: you "
+            f"may be warm, cold, evasive or hostile as fits.")
+
+
+def _initiative_task(them: gamestate.CountryState, me: gamestate.CountryState, reason: str) -> str:
+    why = (f"Something just happened that concerns you both: {reason} Write about it."
+           if reason else
+           f"There is no specific occasion: write about whatever matters most to {them.name} regarding "
+           f"{me.name} right now, given the situation and what you remember.")
+    return (f"{them.name} now writes a new letter to {me.name} on its own initiative, in the voice of "
+            f"{them.leader} or their foreign office, true to {them.name}'s interests, ideology and "
+            f"situation. {why} Be in character: warm, cold, evasive or threatening as fits.")
+
+
+def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign,
+                   task: str = "") -> str:
     return (
         f"You are roleplaying the government of {them.name} in the grand strategy game Hearts of Iron IV. "
         f"The date is {them.date.strip()}. The situation below is live from the game, which may have "
         f"diverged from real history: trust it over your own historical knowledge.\n\n"
         f"YOUR COUNTRY:\n{gamestate.describe(them)}\n\n"
-        f"THE COUNTRY WRITING TO YOU:\n{gamestate.describe(me)}\n\n"
+        f"THE COUNTRY YOU CORRESPOND WITH:\n{gamestate.describe(me)}\n\n"
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
-        f"Write {them.name}'s reply to their latest letter, in the voice of {them.leader} or their "
-        f"foreign office, true to {them.name}'s interests, ideology and situation. Be in character: you "
-        f"may be warm, cold, evasive or hostile as fits.\n\n"
+        f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
+        f"{me.name}, or the major powers):\n{_memory(camp, them, me)}\n\n"
+        f"Your earlier correspondence with {me.name} follows as the conversation, each letter dated. "
+        f"Stay consistent with what you wrote before, and let what happened since colour your reply.\n\n"
+        f"{task or _reply_task(them, me)}\n\n"
         f"Rules: plain text only, no markdown. At most 120 words. You write from {them.name}, so any "
         f"place line is your own capital, not {me.name}'s. Open with a short salutation and end "
         "with a signature. These letters are flavour only: do not claim that anything in the game "
@@ -126,7 +161,18 @@ def _show_reply(player: str, sender: str, text: str) -> None:
         print("  could not show the reply:", " | ".join(bad))
 
 
-def handle_letter(player: str, to: str, text: str) -> None:
+def _conversation(camp: campaign.Campaign, them: gamestate.CountryState,
+                  me: gamestate.CountryState) -> List[Dict[str, str]]:
+    msgs = []
+    for x in camp.letters_with(them.tag):
+        if x["from"] == them.tag:
+            msgs.append({"role": "assistant", "content": x["text"]})
+        else:
+            msgs.append({"role": "user", "content": f"Letter from {me.name}, {x['when']}:\n\n{x['text']}"})
+    return msgs
+
+
+def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> None:
     print(f"\n{player} -> {to}: {text}")
     try:
         me, them = gamestate.country(player), gamestate.country(to)
@@ -134,28 +180,153 @@ def handle_letter(player: str, to: str, text: str) -> None:
         print("  could not read the game state:", e)
         _show_reply(player, to, "(The courier could not find his way: the game state is unavailable.)")
         return
-    history = _history.setdefault(to, [])
-    history.append({"role": "user", "content": f"Letter from {me.name}:\n\n{text}"})
-    del history[:-MAX_HISTORY]
+    key = campaign.date_key(them.date)
+    camp.at(key)
+    camp.add_letter(to, player, text, key)
+    camp.save()
     try:
-        reply = _clean_for_game(llm.chat([{"role": "system", "content": _system_prompt(them, me)}] + history))
+        prompt = [{"role": "system", "content": _system_prompt(them, me, camp)}] + _conversation(camp, them, me)
+        reply = _clean_for_game(llm.chat(prompt))
     except llm.LLMError as e:
         print("  LLM error:", e)
-        history.pop()
-        reply = f"(The courier returned without an answer: {e})"[:300]
-        _show_reply(player, to, _clean_for_game(reply))
+        _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
         return
-    history.append({"role": "assistant", "content": reply})
+    camp.add_letter(to, to, reply, key)
+    camp.save()
     print(f"{to} replies:\n{reply}")
     _show_reply(player, to, reply)
 
 
+def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) -> None:
+    """`sender` writes to the player on its own initiative (reason: an event text, or "" if unprompted)."""
+    try:
+        me, them = gamestate.country(player), gamestate.country(sender)
+    except gamestate.StateError as e:
+        print(f"  {sender} could not write: {e}")
+        return
+    key = campaign.date_key(them.date)
+    task = _initiative_task(them, me, reason)
+    prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
+              + _conversation(camp, them, me)
+              + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
+                                             f"Write your letter to them now.)"}])
+    try:
+        text = _clean_for_game(llm.chat(prompt))
+    except llm.LLMError as e:
+        print(f"  {sender} could not write (LLM error): {e}")
+        return
+    camp.add_letter(sender, sender, text, key)
+    camp.letters_with(sender)[-1]["initiated"] = True
+    camp.save()
+    print(f"\n{sender} writes to {player}{' about: ' + reason if reason else ''}\n{text}")
+    _show_reply(player, sender, text)
+
+
+def _days(key: str) -> int:
+    import datetime
+    try:
+        y, m, d = (int(x) for x in key.split(".")[:3])
+        return datetime.date(y, m, d).toordinal()
+    except ValueError:
+        return 0
+
+
+class _Session:
+    """The current campaign and its chronicle, kept in step with the running game."""
+
+    def __init__(self) -> None:
+        self.camp: Optional[campaign.Campaign] = None
+        self.last_snapshot = 0.0
+        self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
+
+    def campaign_for(self, player: str, cid: int) -> campaign.Campaign:
+        if not cid:
+            cid = campaign.new_id(player)
+            print(f"new campaign {cid}")
+        if not self.camp or self.camp.id != cid or self.camp.data["player"] != player:
+            self.camp = campaign.Campaign(cid, player)
+            print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
+                  f"{sum(len(v) for v in self.camp.data['letters'].values())} letters remembered")
+        return self.camp
+
+    def chronicle(self, player: str, force: bool = False) -> campaign.Campaign:
+        now = time.monotonic()
+        if self.camp and not force and now - self.last_snapshot < CHRONICLE_SECONDS:
+            return self.camp
+        self.last_snapshot = now
+        # The .gui can't do either: Enter makes a new line, and the page shows the whole letter.
+        # Cheap, and repeating it covers a restarted game.
+        bridge.send(f"bridge.editbox.multiline {EDITBOX_NAME}", f"bridge.editbox.mirror {EDITBOX_NAME} {PAGE_NAME}")
+        snap = chronicle.snapshot(player)
+        camp = self.campaign_for(player, snap["campaign"])
+        if camp.at(snap["date"]):
+            print(f"{campaign.date_words(snap['date'])}: an earlier save was loaded; later memories dropped")
+        old = camp.snapshot
+        if old is None or snap["date"] > old["date"]:
+            if old is not None:
+                events = chronicle.diff(old, snap)
+                for e in events:
+                    print(f"  [{e['when']}] {e['text']}")
+                camp.add_events(events)
+            camp.snapshot = snap
+            camp.save()
+            if old is not None:
+                self.plan_letters(camp, player, snap, events)
+        return camp
+
+    # ---- who writes to the player on their own
+    def _cooling(self, camp: campaign.Campaign, tag: str, today: int) -> bool:
+        own = [x for x in camp.letters_with(tag) if x.get("initiated")]
+        return bool(own) and today - _days(own[-1]["date"]) < settings().letters.cooldown_days
+
+    def plan_letters(self, camp: campaign.Campaign, player: str, snap: Dict, events: List[Dict]) -> None:
+        cfg = settings().letters
+        if not cfg.incoming:
+            return
+        today = _days(snap["date"])
+        for e in events:
+            if player not in e["tags"]:
+                continue
+            for other in e["tags"]:
+                if other != player and other in snap["countries"] and not self._cooling(camp, other, today):
+                    self.pending[other] = (self.pending.get(other, "") + " " + e["text"]).strip()
+        if self.pending:
+            return
+        letters = [x for ls in camp.data["letters"].values() for x in ls]
+        camp.data.setdefault("started", snap["date"])
+        last = max([x["date"] for x in letters if x["from"] != player] or [camp.data["started"]])
+        if today - _days(last) < cfg.quiet_days:
+            return
+        try:
+            me = gamestate.country(player)
+        except gamestate.StateError:
+            return
+        majors = [t for t, c in snap["countries"].items() if c["major"]]
+        candidates = [t for t in dict.fromkeys(me.neighbors + me.faction_members + majors)
+                      if t != player and t in snap["countries"] and not self._cooling(camp, t, today)]
+        if candidates:
+            self.pending[random.choice(candidates)] = ""
+
+    def deliver(self, player: str, block: str) -> None:
+        """Let one waiting country write, if the player isn't reading or awaiting a letter."""
+        if not self.pending or not self.camp:
+            return
+        if re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
+            return
+        tag = next(iter(self.pending))
+        reason = self.pending.pop(tag)
+        write_first(self.camp, player, tag, reason)
+
+
 def run() -> int:
-    print(f"letters: watching for letters (model {llm.model()}). Ctrl+C to stop.")
+    print(f"watching for letters and world events (model {llm.model()}). Ctrl+C to stop.")
+    session = _Session()
     while True:
         try:
             player = bridge.player_tag()
-            to = read_outbox(bridge.country_block(player))
+            session.chronicle(player)
+            block = bridge.country_block(player)
+            to = read_outbox(block)
             if to:
                 # Clear first so the same letter is never handled twice.
                 bridge.send(f"eval_effect {player} = {{ clear_variable = airp_outbox_to }}")
@@ -169,10 +340,12 @@ def run() -> int:
                     print("letter recipient decoded as the player's own country; check on_sent_effect scopes")
                     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from }}")
                 elif to and text.strip():
-                    handle_letter(player, to, text)
+                    handle_letter(session.chronicle(player, force=True), player, to, text)
                 else:
                     print("empty letter; nothing to answer")
                     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from }}")
+            else:
+                session.deliver(player, block)
         except bridge.BridgeUnavailable:
             print("waiting for HOI4 / the bridge...")
             time.sleep(5)

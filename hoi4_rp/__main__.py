@@ -1,7 +1,8 @@
 """python -m hoi4_rp write-mod   (re)generate the mod files
    python -m hoi4_rp test        fire a hand-written event in the running game and apply the pick
    python -m hoi4_rp state [TAG] print the live game state of a country (default: the player's)
-   python -m hoi4_rp letters     answer diplomatic letters written in game (keep running while playing)
+   python -m hoi4_rp run         answer letters and keep the world chronicle (keep running while playing;
+                                 `letters` is the same)
    python -m hoi4_rp llm "text"  send one message to the LLM (NanoGPT) and print the reply
 """
 
@@ -48,9 +49,9 @@ if __name__ == "__main__":
         tag = sys.argv[2] if len(sys.argv) > 2 else gamestate.player_tag()
         s = gamestate.country(tag)
         print(f"[{s.date}]")
-        print(gamestate.describe(s, max_states=1000))
+        print(gamestate.describe(s))
         sys.exit(0)
-    if cmd == "letters":
+    if cmd in ("run", "letters"):
         from . import letters
         try:
             sys.exit(letters.run())

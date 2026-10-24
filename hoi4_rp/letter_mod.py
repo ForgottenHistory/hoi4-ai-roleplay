@@ -4,8 +4,11 @@
 "Write Letter" is a scripted diplomatic action, so it sits in the vanilla action list. Its send popup
 shows our writing area (send_scripted_gui); the game's own Send/Cancel buttons send or close it.
 
-The writing area is a normal multi-line text box (EDITBOX_NAME). Script can't read text boxes, so
-Python reads it through the bridge (`bridge.editbox NAME`), which hooks the game's text box code.
+The writing area is a one-line text box (EDITBOX_NAME) under a "page" (PAGE_NAME). The engine's text
+box only ever draws the line with the cursor, so the bridge copies its whole text onto the page, a
+normal wrapping text field, as you type (`bridge.editbox.mirror`); `bridge.editbox.multiline` makes
+Enter start a new line. Script can't read text boxes, so Python reads the letter through the bridge
+(`bridge.editbox NAME`). letters.py registers both bridge settings while it runs.
 
 Variables on the player's country (the save format lowercases names, so keep them lowercase):
   airp_outbox_to       set on Send; Python reads the text box, then clears this and the box
@@ -20,6 +23,7 @@ import os
 from typing import Dict, Tuple
 
 EDITBOX_NAME = "airp_letter_editbox"
+PAGE_NAME = "airp_letter_page"     # instant text box showing the whole letter (bridge.editbox.mirror)
 
 # ---------------------------------------------------------------- interface/airp_letters.gui
 
@@ -31,20 +35,39 @@ _GUI = """guiTypes = {
 		orientation = center
 		clipping = no
 
-		background = {
-			name = "background"
-			spriteType = "GFX_tiled_window_transparent"
+		# The page: the whole letter, wrapped. The bridge copies the input line's text here as you type
+		# (bridge.editbox.mirror); until then it shows the hint.
+		instantTextBoxType = {
+			name = "@PAGE@"
+			position = { x = 25 y = 10 }
+			font = "hoi_18mbs"
+			format = left
+			text = "AIRP_LETTER_PAGE_HINT"
+			maxWidth = 470
+			maxHeight = 285
 		}
 
-		editBoxType = {
-			name = "@EDITBOX@"
-			position = { x = 15 y = 10 }
-			size = { x = 490 y = 330 }
-			font = "hoi_18mbs"
-			borderSize = { x = 8 y = 8 }
-			text = ""
-			multiline = yes
-			orientation = "UPPER_LEFT"
+		# The input line: a text box draws only the line with the cursor, so it's one line tall.
+		# The box sits inside its background window: a sibling window would cover it and take the clicks.
+		containerWindowType = {
+			name = "airp_letter_input"
+			position = { x = 97 y = 305 }
+			size = { width = 325 height = 27 }
+			iconType = {
+				name = "airp_letter_input_bg"
+				spriteType = "GFX_generic_text_bg_325"
+				position = { x = 0 y = 0 }
+				alwaystransparent = yes
+			}
+			editBoxType = {
+				name = "@EDITBOX@"
+				position = { x = 0 y = 0 }
+				size = { x = 325 y = 27 }
+				font = "hoi_18mbs"
+				borderSize = { x = 8 y = 4 }
+				text = ""
+				orientation = "UPPER_LEFT"
+			}
 		}
 
 		instantTextBoxType = {
@@ -132,7 +155,7 @@ _GUI = """guiTypes = {
 
 
 def _gui() -> str:
-    return _GUI.replace("@EDITBOX@", EDITBOX_NAME)
+    return _GUI.replace("@EDITBOX@", EDITBOX_NAME).replace("@PAGE@", PAGE_NAME)
 
 
 # ---------------------------------------------------------------- common/scripted_diplomatic_actions
@@ -242,7 +265,8 @@ def _loc() -> str:
         ' AIRP_SEND_LETTER_TITLE:0 "Write Letter"',
         ' AIRP_SEND_LETTER_ACTION_DESC:0 "Write a personal letter to the government of this country."',
         ' AIRP_SEND_LETTER_SEND_DESC:0 "Letter to §Y[FROM.GetNameWithFlag]§!"',
-        ' AIRP_COMPOSE_HINT:0 "§gClick the page and write your letter, then press Send.§!"',
+        ' AIRP_COMPOSE_HINT:0 "§gEnter starts a new line.§!"',
+        ' AIRP_LETTER_PAGE_HINT:0 "§gClick the field below and start writing. Your letter appears here.§!"',
         ' AIRP_AWAITING:0 "Awaiting a reply from [?airp_awaiting_from.GetNameWithFlag]..."',
         ' AIRP_REPLY_TITLE:0 "Letter from [?airp_reply_from.GetNameWithFlag]"',
         ' AIRP_REPLY_BODY:0 "[This.GetAirpReplyBody]"',

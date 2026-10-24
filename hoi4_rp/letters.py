@@ -85,6 +85,14 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         facts.append(f"{them.name} is a subject of {me.name}.")
     if me.overlord == them.tag:
         facts.append(f"{me.name} is a subject of {them.name}.")
+    if any(w.other == me.tag for w in them.wargoals):
+        facts.append(f"{them.name} holds a war goal against {me.name}.")
+    if any(w.other == them.tag for w in me.wargoals):
+        facts.append(f"{me.name} holds a war goal against {them.name}.")
+    if me.tag in them.opinion:
+        facts.append(f"{them.name}'s opinion of {me.name}: {them.opinion[me.tag]:+g} (range -100 to +100).")
+    if them.tag in me.opinion:
+        facts.append(f"{me.name}'s opinion of {them.name}: {me.opinion[them.tag]:+g}.")
     return " ".join(facts) or "No war, alliance, border or subject relation between them."
 
 

@@ -98,6 +98,22 @@ class Party:
 class Named:
     id: str
     name: str
+    description: str = ""
+
+
+@dataclass
+class War:
+    enemy: str                  # tag
+    we_attacked: bool           # True if this country started the war
+    start_date: str             # save format, e.g. "1939.9.1.12"
+    our_casualties: int = 0
+    their_casualties: int = 0
+
+
+@dataclass
+class Wargoal:
+    other: str                  # tag: the target (ours) or the holder (against us)
+    type: str = ""              # e.g. annex_everything; empty when held against us
 
 
 @dataclass
@@ -126,6 +142,11 @@ class CountryState:
     enemies: List[str] = field(default_factory=list)          # currently at war with
     neighbors: List[str] = field(default_factory=list)
     states: List[Named] = field(default_factory=list)         # owned states (id, name)
+    wars: List[War] = field(default_factory=list)             # one per enemy, with direction and start
+    wargoals: List[Wargoal] = field(default_factory=list)     # justified against others
+    wargoals_against: List[Wargoal] = field(default_factory=list)  # others' wargoals against us
+    autonomy: Dict[str, str] = field(default_factory=dict)    # subject or overlord tag -> autonomy state
+    opinion: Dict[str, float] = field(default_factory=dict)   # this country's opinion of others (cached_sum)
     names: Dict[str, str] = field(default_factory=dict)       # display name of every tag above
 
     def name_of(self, tag: Optional[str]) -> str:
@@ -161,8 +182,88 @@ def _effect(tag: str) -> str:
         f'every_enemy_country = {{ log = "{p}enemy|{tn}" }}',
         f'every_neighbor_country = {{ log = "{p}neighbor|{tn}" }}',
         f'every_owned_state = {{ log = "{p}state|[THIS.GetID]|[THIS.GetName]" }}',
+        # PREV inside the loop is the country being described.
+        f'every_other_country = {{ limit = {{ has_wargoal_against = PREV }} log = "{p}wargoal_against|{tn}" }}',
     ]
     return f"{tag} = {{ {' '.join(lines)} }}"
+
+
+def names_for(tags: List[str]) -> Dict[str, str]:
+    """Display names for several tags in one query."""
+    tags = [t for t in dict.fromkeys(tags) if t]
+    if not tags:
+        return {}
+    eff = " ".join(f'{t} = {{ log = "AIRPN|[THIS.GetTag]|[THIS.GetName]" }}' for t in tags)
+    out = {}
+    for line in query(eff):
+        if line.startswith("AIRPN|"):
+            t, _, n = line[6:].partition("|")
+            out[t.strip()] = n.strip()
+    return out
+
+
+# ---------------------------------------------------------------- diplomacy from save-format blocks
+
+def _relations(block: str) -> Dict[str, str]:
+    """diplomacy.active_relations: other tag -> its relation block."""
+    dipl = _sub_block(block, "diplomacy", 2) or ""
+    rel = _sub_block(dipl, "active_relations", 3) or ""
+    out = {}
+    for m in re.finditer(r"\n\t\t\t\t([A-Z0-9]{3})=\{", rel):
+        out[m.group(1)] = rel[m.end():_walk(rel, m.end()) - 1]
+    return out
+
+
+def _field(text: str, key: str) -> Optional[str]:
+    m = re.search(r"\b" + re.escape(key) + r'="?([^"\s]+)"?', text)
+    return m.group(1) if m else None
+
+
+def _war(relation: str, us: str) -> Optional[War]:
+    """A war_relation block (stored in the attacker's relation to the defender), seen from `us`."""
+    wr_start = re.search(r"\bwar_relation=\{", relation)
+    if not wr_start:
+        return None
+    wr = relation[wr_start.end():_walk(relation, wr_start.end()) - 1]
+    # Not filtered on hostility_reason_*: real wars can say "not_applicable" there. Callers keep only
+    # enemies the game itself lists (every_enemy_country).
+    first, second = _field(wr, "first"), _field(wr, "second")
+    if us not in (first, second):
+        return None
+    cas = lambda k: int(float(_field(wr, k) or 0))
+    we_first = us == first
+    return War(enemy=second if we_first else first, we_attacked=we_first,
+               start_date=_field(wr, "start_date") or "",
+               our_casualties=cas("first_casualties" if we_first else "second_casualties"),
+               their_casualties=cas("second_casualties" if we_first else "first_casualties"))
+
+
+def _diplomacy(s: CountryState, block: str) -> None:
+    for other, rel in _relations(block).items():
+        cs = re.search(r"\bcached_sum=(-?[\d.]+)", rel)
+        if cs:
+            s.opinion[other] = float(cs.group(1))
+        war = _war(rel, s.tag)
+        if war and war.enemy in s.enemies:
+            s.wars.append(war)
+        pm = re.search(r"\bpuppet=\{", rel)
+        if pm:
+            pup = rel[pm.end():_walk(rel, pm.end()) - 1]
+            first, second = _field(pup, "first"), _field(pup, "second")
+            state = (_field(pup, "autonomy_state") or "").replace("autonomy_", "")
+            if s.tag in (first, second):
+                s.autonomy[second if first == s.tag else first] = state
+    dipl = _sub_block(block, "diplomacy", 2) or ""
+    for wg in re.finditer(r'wargoaldata_actor="([A-Z0-9]{3})"\s*wargoaldata_recipient="([A-Z0-9]{3})"\s*type=(\w+)',
+                          _sub_block(dipl, "wargoals", 3) or ""):
+        if wg.group(1) == s.tag:
+            s.wargoals.append(Wargoal(wg.group(2), wg.group(3)))
+    # A war we're defending in is stored in the attacker's block.
+    for enemy in s.enemies:
+        if any(w.enemy == enemy for w in s.wars):
+            continue
+        war = _war(_relations(bridge.country_block(enemy)).get(s.tag, ""), s.tag)
+        s.wars.append(war or War(enemy=enemy, we_attacked=False, start_date=""))
 
 
 def _named(ids: List[str], hide_missing: bool) -> List[Named]:
@@ -170,16 +271,18 @@ def _named(ids: List[str], hide_missing: bool) -> List[Named]:
     (or whose id ends in _hidden) is treated as hidden; a level suffix (_2) falls back to the base key."""
     if not ids:
         return []
+    n = len(ids)
     bases = [re.sub(r"_\d+$", "", i) for i in ids]
-    names = loc(*ids, *bases)
+    keys = ids + bases + [f"{i}_desc" for i in ids] + [f"{b}_desc" for b in bases]
+    vals = loc(*keys)
+    found = lambda k: vals[k] if vals[k] and vals[k] != keys[k] else ""   # a missing key comes back unchanged
     out = []
-    for i, (fid, base) in enumerate(zip(ids, bases)):
-        name = names[i] if names[i] and names[i] != fid else ""
-        if not name and base != fid and names[len(ids) + i] != base:
-            name = names[len(ids) + i]
+    for i, fid in enumerate(ids):
+        name = found(i) or (found(n + i) if bases[i] != fid else "")
+        desc = found(2 * n + i) or (found(3 * n + i) if bases[i] != fid else "")
         if hide_missing and (not name or fid.endswith("_hidden")):
             continue
-        out.append(Named(fid, name or fid))
+        out.append(Named(fid, name or fid, desc))
     return out
 
 
@@ -211,6 +314,10 @@ def country(tag: str) -> CountryState:
             s.names[s.overlord] = oname or s.overlord
         elif key == "major":
             s.is_major = True
+        elif key == "wargoal_against":
+            ctag, _, cname = rest.partition("|")
+            s.names[ctag] = cname or ctag
+            s.wargoals_against.append(Wargoal(ctag))
         elif hasattr(s, key):
             setattr(s, key, rest)
     if not s.name:
@@ -234,7 +341,21 @@ def country(tag: str) -> CountryState:
     s.ideas = _named((_sub_block(politics, "ideas", 3) or "").split(), hide_missing=True)
     focus_block = _sub_block(block, "focus", 2) or ""
     s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
+    _diplomacy(s, block)
+    s.names.update(names_for([w.other for w in s.wargoals if w.other not in s.names]))
     return s
+
+
+_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def save_date(raw: str) -> str:
+    """'1939.9.1.12' -> '1 Sep 1939'."""
+    parts = raw.split(".")
+    try:
+        return f"{int(parts[2])} {_MONTHS[int(parts[1]) - 1]} {int(parts[0])}"
+    except (IndexError, ValueError):
+        return raw
 
 
 def player_tag() -> str:
@@ -256,11 +377,25 @@ def describe(s: CountryState, max_states: int = 12) -> str:
                      f"members {s.names_of(s.faction_members)}).")
     else:
         lines.append("Not in any faction.")
+    auto = lambda t: f" ({s.autonomy[t].replace('_', ' ')})" if s.autonomy.get(t) else ""
     if s.overlord:
-        lines.append(f"A subject of {s.name_of(s.overlord)}.")
+        lines.append(f"A subject of {s.name_of(s.overlord)}{auto(s.overlord)}.")
     if s.subjects:
-        lines.append(f"Subjects: {s.names_of(s.subjects)}.")
-    lines.append(f"At war with: {s.names_of(s.enemies)}." if s.enemies else "At peace.")
+        lines.append("Subjects: " + ", ".join(s.name_of(t) + auto(t) for t in s.subjects) + ".")
+    if s.wars:
+        wars = []
+        for w in s.wars:
+            how = "which we attacked" if w.we_attacked else "which attacked us"
+            since = f", since {save_date(w.start_date)}" if w.start_date else ""
+            wars.append(f"{s.name_of(w.enemy)} ({how}{since})")
+        lines.append("At war with: " + "; ".join(wars) + ".")
+    else:
+        lines.append("At peace.")
+    if s.wargoals:
+        lines.append("Holds war goals against: " + ", ".join(
+            f"{s.name_of(w.other)} ({w.type.replace('_', ' ')})" for w in s.wargoals) + ".")
+    if s.wargoals_against:
+        lines.append("Countries with war goals against it: " + s.names_of([w.other for w in s.wargoals_against]) + ".")
     if s.neighbors:
         lines.append(f"Neighbours: {s.names_of(s.neighbors)}.")
     if s.states:

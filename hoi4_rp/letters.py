@@ -16,7 +16,7 @@ import time
 import unicodedata
 from typing import Dict, List, Optional
 
-from . import bridge, gamelog, llm
+from . import bridge, gamestate, llm
 from .letter_mod import EDITBOX_NAME
 
 POLL_SECONDS = 0.5
@@ -73,15 +73,32 @@ def _clean_for_game(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()
 
 
-def _system_prompt(them: gamelog.CountryInfo, me: gamelog.CountryInfo) -> str:
+def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    facts = []
+    if me.tag in them.enemies:
+        facts.append(f"{them.name} and {me.name} are AT WAR with each other.")
+    if them.faction and them.faction == me.faction:
+        facts.append(f"Both are members of the {them.faction}.")
+    if me.tag in them.neighbors:
+        facts.append("They share a border.")
+    if them.overlord == me.tag:
+        facts.append(f"{them.name} is a subject of {me.name}.")
+    if me.overlord == them.tag:
+        facts.append(f"{me.name} is a subject of {them.name}.")
+    return " ".join(facts) or "No war, alliance, border or subject relation between them."
+
+
+def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
     return (
         f"You are roleplaying the government of {them.name} in the grand strategy game Hearts of Iron IV. "
-        f"The date is {me.date.strip()}. {them.name} is led by {them.leader} of the {them.party} "
-        f"({them.ideology} ideology).\n\n"
-        f"You are corresponding by diplomatic letter with {me.name}, led by {me.leader} of the {me.party} "
-        f"({me.ideology} ideology). Write {them.name}'s reply to their latest letter, in the voice of "
-        f"{them.leader} or their foreign office, true to {them.name}'s interests, ideology and outlook at "
-        f"this date. Be in character: you may be warm, cold, evasive or hostile as fits.\n\n"
+        f"The date is {them.date.strip()}. The situation below is live from the game, which may have "
+        f"diverged from real history: trust it over your own historical knowledge.\n\n"
+        f"YOUR COUNTRY:\n{gamestate.describe(them)}\n\n"
+        f"THE COUNTRY WRITING TO YOU:\n{gamestate.describe(me)}\n\n"
+        f"BETWEEN YOU: {_relation(them, me)}\n\n"
+        f"Write {them.name}'s reply to their latest letter, in the voice of {them.leader} or their "
+        f"foreign office, true to {them.name}'s interests, ideology and situation. Be in character: you "
+        f"may be warm, cold, evasive or hostile as fits.\n\n"
         f"Rules: plain text only, no markdown. At most 120 words. You write from {them.name}, so any "
         f"place line is your own capital, not {me.name}'s. Open with a short salutation and end "
         "with a signature. These letters are flavour only: do not claim that anything in the game "
@@ -103,11 +120,12 @@ def _show_reply(player: str, sender: str, text: str) -> None:
 
 def handle_letter(player: str, to: str, text: str) -> None:
     print(f"\n{player} -> {to}: {text}")
-    me, them = gamelog.describe(player), gamelog.describe(to)
-    if not me or not them:
-        print("  could not read country info from game.log; using tags only")
-        me = me or gamelog.CountryInfo(player, player, "its leader", "government", "unknown", "")
-        them = them or gamelog.CountryInfo(to, to, "its leader", "government", "unknown", "")
+    try:
+        me, them = gamestate.country(player), gamestate.country(to)
+    except gamestate.StateError as e:
+        print("  could not read the game state:", e)
+        _show_reply(player, to, "(The courier could not find his way: the game state is unavailable.)")
+        return
     history = _history.setdefault(to, [])
     history.append({"role": "user", "content": f"Letter from {me.name}:\n\n{text}"})
     del history[:-MAX_HISTORY]

@@ -25,7 +25,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/mod_files.py   template events + localisation generator (slots, pictures, ids)
     hoi4_rp/letter_mod.py  letter GUI generator: diplomacy button, writing window, reply window
     hoi4_rp/letters.py     reads sent letters through the bridge, writes replies with the LLM
-    hoi4_rp/gamelog.py     reads names/leaders/date by logging them to game.log
+    hoi4_rp/gamestate.py   live game state (names, parties, factions, wars, states, ideas, focuses)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
     hoi4_rp/game.py        show an event, wait for the pick, run effects via eval_effect
     hoi4_rp/bridge.py      loads the bridge client (override path with HOI4_BRIDGE_CLIENT)

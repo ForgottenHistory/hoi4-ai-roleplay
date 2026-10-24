@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from . import bridge, gamestate
 
@@ -138,6 +138,49 @@ def prompt_help(them_name: str, me_name: str, rel: Relation) -> str:
     if rel.at_war:
         lines.append(f"You are at war with {me_name}, so no agreements are possible.")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- offers (letters a country starts itself)
+# A country writing first may attach one offer, [[offer pact]]; the player gets Accept/Decline buttons.
+# Accepting applies the same action as above (them = the country that offered, me = the player).
+
+OFFER_LABELS = {          # neutral names, for the window and the chronicle
+    "pact": "a non-aggression pact",
+    "access": "military access",
+    "docking": "docking rights",
+    "guarantee": "a guarantee of independence",
+    "market": "market access",
+}
+_OFFER = re.compile(r"\[\[\s*offer\s+([a-z_]+)\s*\]\]", re.I)
+
+
+def offerable(rel: Relation) -> List[str]:
+    """Agreements that could be offered right now: not at war, not already in place."""
+    return [] if rel.at_war else [a.command for a in ACTIONS if not rel.in_place[a.command]]
+
+
+def offer_help(them_name: str, me_name: str, allowed: List[str], expected: bool = False) -> str:
+    """expected: the letter is written because of the country's policy, so making an offer is its point."""
+    if not allowed:
+        return "Make no formal offer in this letter."
+    fmt = {"me_name": me_name, "them_name": them_name}
+    when = ("Your policy is to propose one of these now: make that offer the purpose of this letter, unless "
+            "the situation has changed so much that it no longer suits you."
+            if expected else
+            "Only offer something your policy is willing to give, and only if it suits this letter.")
+    lines = [f"OFFER. You may attach ONE formal offer to {me_name}; they will get Accept and Decline buttons. "
+             f"Write the offer into the letter too, then add the command after the letter. {when} "
+             "Possible offers:"]
+    for cmd in allowed:
+        lines.append(f"- [[offer {cmd}]]: {_BY_COMMAND[cmd].offer.format(**fmt)}")
+    return "\n".join(lines)
+
+
+def parse_offer(text: str, allowed: List[str]) -> Tuple[str, Optional[str]]:
+    """Strip offer commands; returns (clean text, the first allowed offer or None)."""
+    found = [m.group(1).lower() for m in _OFFER.finditer(text)]
+    clean = re.sub(r"[ \t]+\n", "\n", _OFFER.sub("", text)).strip()
+    return clean, next((c for c in found if c in allowed), None)
 
 
 def parse(text: str) -> Tuple[str, List[Tuple[str, int]]]:

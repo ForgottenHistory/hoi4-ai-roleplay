@@ -28,7 +28,8 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/letters.py     reads sent letters through the bridge, writes replies with the LLM
     hoi4_rp/gamestate.py   live game state (names, parties, factions, wars, states, ideas, focuses)
     hoi4_rp/chronicle.py   one-query world snapshots; their differences become dated events
-    hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects
+    hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; offers
+    hoi4_rp/policy.py      neighbours' policies toward the player (stance, urgency, offers)
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
     hoi4_rp/game.py        show an event, wait for the pick, run effects via eval_effect
@@ -69,3 +70,16 @@ Python removes them, checks them in the game and applies what's allowed:
 
 What was applied is shown under the letter and remembered in the campaign chronicle. Letters a
 country starts on its own carry no commands.
+
+## Policies and offers
+
+Each neighbour keeps a policy toward you (`hoi4_rp/policy.py`): a stance (friendly, cordial,
+indifferent, wary, hostile), an urgency 0-3, the agreements it would offer you, and a few sentences on
+what it wants and fears. The LLM writes it from the full game state and memory as four plain
+`KEY: value` lines; it's refreshed every 90 game days or after something happens between you, one
+at a time in a background thread so letters never wait for it.
+
+Policies shape every letter that country writes. An urgency-3 neighbour writes soon even if it hasn't
+been quiet, and quiet-period writers are picked by urgency. A letter a country starts can carry one
+offer from its policy (`[[offer pact]]`); it arrives with Accept/Decline instead of Close, accepting
+applies the agreement, and either answer is remembered.

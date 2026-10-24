@@ -73,6 +73,10 @@ class Campaign:
             self.data["events"] = [e for e in self.data["events"] if e["date"] <= key]
             for tag, letters in self.data["letters"].items():
                 self.data["letters"][tag] = [x for x in letters if x["date"] <= key]
+            self.data["policies"] = {t: p for t, p in self.data.get("policies", {}).items() if p["date"] <= key}
+            offer = self.data.get("pending_offer")
+            if offer and offer["date"] > key:
+                self.data["pending_offer"] = None
             self.data["snapshot"] = None
         if key:
             self.data["last_date"] = key

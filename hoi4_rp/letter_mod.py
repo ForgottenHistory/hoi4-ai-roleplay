@@ -166,6 +166,24 @@ _REPLY_WINDOW = """	# Reply window, size @SIZE@: @TEXT_H@ px of text.
 			buttonText = "AIRP_CLOSE"
 			clicksound = click_close
 		}
+
+		# With an offer attached (airp_offer set), Accept/Decline replace Close.
+		buttonType = {
+			name = "airp_accept_button"
+			position = { x = 80 y = @BUTTON_Y@ }
+			quadTextureSprite = "GFX_button_123x34"
+			buttonFont = "hoi_16mbs"
+			buttonText = "AIRP_ACCEPT"
+			clicksound = click_action
+		}
+		buttonType = {
+			name = "airp_decline_button"
+			position = { x = 317 y = @BUTTON_Y@ }
+			quadTextureSprite = "GFX_button_123x34"
+			buttonFont = "hoi_16mbs"
+			buttonText = "AIRP_DECLINE"
+			clicksound = click_close
+		}
 	}
 """
 
@@ -278,6 +296,20 @@ _REPLY_GUI = """	airp_letter_reply_@SIZE@ = {
 			airp_close_button_click = {
 				clear_variable = airp_reply_from
 			}
+			# letters.py reads the answer (1 accept, 2 decline), applies it and clears airp_offer.
+			airp_accept_button_click = {
+				set_variable = { airp_offer_answer = 1 }
+				clear_variable = airp_reply_from
+			}
+			airp_decline_button_click = {
+				set_variable = { airp_offer_answer = 2 }
+				clear_variable = airp_reply_from
+			}
+		}
+		triggers = {
+			airp_close_button_visible = { NOT = { has_variable = airp_offer } }
+			airp_accept_button_visible = { has_variable = airp_offer }
+			airp_decline_button_visible = { has_variable = airp_offer }
 		}
 		ai_enabled = { always = no }
 	}
@@ -323,6 +355,8 @@ def _loc() -> str:
         ' AIRP_REPLY_BODY:0 "[This.GetAirpReplyBody]"',
         ' airp_reply_body:0 ""',
         ' AIRP_CLOSE:0 "Close"',
+        ' AIRP_ACCEPT:0 "Accept"',
+        ' AIRP_DECLINE:0 "Decline"',
     ]
     from .actions import opinion_loc
     lines += opinion_loc()

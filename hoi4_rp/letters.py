@@ -25,9 +25,9 @@ import time
 import unicodedata
 from typing import Dict, List, Optional
 
-from . import bridge, campaign, chronicle, gamestate, llm
+from . import actions, bridge, campaign, chronicle, gamestate, llm
 from .config import settings
-from .letter_mod import EDITBOX_NAME, PAGE_NAME
+from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
 POLL_SECONDS = 0.5
 CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded when the date moved)
@@ -129,7 +129,14 @@ def _initiative_task(them: gamestate.CountryState, me: gamestate.CountryState, r
 
 
 def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign,
-                   task: str = "") -> str:
+                   task: str = "", actions_help: str = "") -> str:
+    consequences = (
+        f"{actions_help}\n\nOnly those commands change anything in the game: don't claim other changes "
+        "(no other treaties take effect, no units move)."
+        if actions_help else
+        "These letters are flavour only: do not claim that anything in the game changes "
+        "(no treaties take effect, no units move)."
+    )
     return (
         f"You are roleplaying the government of {them.name} in the grand strategy game Hearts of Iron IV. "
         f"The date is {them.date.strip()}. The situation below is live from the game, which may have "
@@ -144,17 +151,17 @@ def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState, cam
         f"{task or _reply_task(them, me)}\n\n"
         f"Rules: plain text only, no markdown. At most 120 words. You write from {them.name}, so any "
         f"place line is your own capital, not {me.name}'s. Open with a short salutation and end "
-        "with a signature. These letters are flavour only: do not claim that anything in the game "
-        "changes (no treaties take effect, no units move)."
+        f"with a signature.\n\n{consequences}"
     )
 
 
 def _show_reply(player: str, sender: str, text: str) -> None:
     body = text.replace("\r", "").replace("\n", "\\n")
+    size = reply_size_for(text)       # which of the reply window's heights fits the letter
     replies = bridge.send(
         f"bridge.setloc airp_reply_body {body}",
         f"eval_effect {player} = {{ clear_variable = airp_awaiting_from "
-        f"set_variable = {{ airp_reply_from = {sender}.id }} }}",
+        f"set_variable = {{ airp_reply_size = {size} }} set_variable = {{ airp_reply_from = {sender}.id }} }}",
     )
     bad = [r for r in replies if not r.startswith("OK")]
     if bad:
@@ -184,17 +191,27 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.at(key)
     camp.add_letter(to, player, text, key)
     camp.save()
+    help_text = actions.prompt_help(them.name, me.name, actions.relation(to, player))
     try:
-        prompt = [{"role": "system", "content": _system_prompt(them, me, camp)}] + _conversation(camp, them, me)
-        reply = _clean_for_game(llm.chat(prompt))
+        prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
+                  + _conversation(camp, them, me))
+        raw = llm.chat(prompt)
     except llm.LLMError as e:
         print("  LLM error:", e)
         _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
         return
+    letter, commands = actions.parse(raw)
+    reply = _clean_for_game(letter)
     camp.add_letter(to, to, reply, key)
+    outcomes, events = actions.apply(to, player, them.name, me.name, commands)
+    for e in events:
+        camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False}])
     camp.save()
     print(f"{to} replies:\n{reply}")
-    _show_reply(player, to, reply)
+    if commands:
+        print(f"  commands: {commands} -> {outcomes or 'nothing applied'}")
+    shown = reply + ("\n\n\u00a7G" + "\n".join(outcomes) + "\u00a7!" if outcomes else "")
+    _show_reply(player, to, shown)
 
 
 def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) -> None:
@@ -211,7 +228,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
                                              f"Write your letter to them now.)"}])
     try:
-        text = _clean_for_game(llm.chat(prompt))
+        text = _clean_for_game(actions.parse(llm.chat(prompt))[0])   # no actions in letters they start
     except llm.LLMError as e:
         print(f"  {sender} could not write (LLM error): {e}")
         return

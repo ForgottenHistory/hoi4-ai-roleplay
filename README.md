@@ -28,6 +28,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/letters.py     reads sent letters through the bridge, writes replies with the LLM
     hoi4_rp/gamestate.py   live game state (names, parties, factions, wars, states, ideas, focuses)
     hoi4_rp/chronicle.py   one-query world snapshots; their differences become dated events
+    hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
     hoi4_rp/game.py        show an event, wait for the pick, run effects via eval_effect
@@ -52,3 +53,19 @@ save files. Its memory lives in `data/campaigns/<id>.json`:
 
 When a country answers a letter it sees your whole correspondence and the events it took part in, plus
 those involving you or the major powers. Loading an earlier save drops memories dated after it.
+
+## Consequences
+
+Replies can change the game (`hoi4_rp/actions.py`). The LLM appends simple commands to its letter,
+Python removes them, checks them in the game and applies what's allowed:
+
+- `[[opinion N]]`: the replying country's opinion of you, -20..+20 (snapped to mod-defined opinion
+  modifiers that fade by 1 per month)
+- `[[pact]]`: a non-aggression pact, only when you asked for one
+- `[[access]]`: military access through their territory, only when you asked for it
+- `[[docking]]`: docking rights in their ports, only when you asked for it
+- `[[guarantee]]`: they guarantee your independence, only when you asked for it
+- `[[market]]`: market access with each other, only when you asked for it
+
+What was applied is shown under the letter and remembered in the campaign chronicle. Letters a
+country starts on its own carry no commands.

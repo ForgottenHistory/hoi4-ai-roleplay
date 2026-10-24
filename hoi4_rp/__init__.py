@@ -1,4 +1,4 @@
-"""AI Roleplay: an LLM game master for singleplayer HOI4 (Kaiserredux).
+"""AI Roleplay: an LLM game master for singleplayer HOI4 (vanilla).
 
 The LLM writes flavour and makes small calls on the story's flow. It never replaces the HOI4 AI.
 Everything reaches the game through the console bridge (version.dll + named pipe):

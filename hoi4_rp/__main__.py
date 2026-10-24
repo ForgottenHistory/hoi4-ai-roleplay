@@ -1,5 +1,7 @@
 """python -m hoi4_rp write-mod   (re)generate the mod files
    python -m hoi4_rp test        fire a hand-written event in the running game and apply the pick
+   python -m hoi4_rp letters     answer diplomatic letters written in game (keep running while playing)
+   python -m hoi4_rp llm "text"  send one message to the LLM (NanoGPT) and print the reply
 """
 
 import sys
@@ -36,5 +38,17 @@ if __name__ == "__main__":
         sys.exit(0)
     if cmd == "test":
         sys.exit(_test())
+    if cmd == "letters":
+        from . import letters
+        try:
+            sys.exit(letters.run())
+        except KeyboardInterrupt:
+            sys.exit(0)
+    if cmd == "llm":
+        from . import llm
+        prompt = " ".join(sys.argv[2:]) or "Say hello in one short sentence."
+        print(f"[{llm.model()}]")
+        print(llm.chat([{"role": "user", "content": prompt}]))
+        sys.exit(0)
     print(__doc__)
     sys.exit(2)

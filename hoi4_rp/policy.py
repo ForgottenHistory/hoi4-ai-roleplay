@@ -219,8 +219,10 @@ def refresh_priority(camp, tag: str, player: str, today: str) -> int:
     return 0
 
 
-def wants_to_write(p: Dict) -> bool:
-    """Urgent, or something to propose or do with some urgency."""
+def wants_to_write(p: Optional[Dict]) -> bool:
+    """Urgent, or something to propose or do with some urgency (no policy, or a stale one: no)."""
+    if not p:
+        return False
     return p["urgency"] >= 3 or (p["urgency"] >= 2 and bool(p["offers"] or p["asks"] or p["breaks"]))
 
 

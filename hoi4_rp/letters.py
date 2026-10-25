@@ -97,10 +97,22 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         facts.append(f"Both are members of the {them.faction}.")
     if me.tag in them.neighbors:
         facts.append("They share a border.")
+    def subject(sub: gamestate.CountryState, lord: gamestate.CountryState) -> str:
+        level = sub.autonomy.get(lord.tag) or lord.autonomy.get(sub.tag) or ""
+        return (f"{sub.name} is a SUBJECT (puppet) of {lord.name}"
+                + (f" (autonomy level: {level.replace('_', ' ')})" if level else "")
+                + f": it is not independent. {lord.name} directs its foreign policy and it follows {lord.name} "
+                  f"into war and peace; it cannot ally with or fight anyone against {lord.name}'s will. "
+                  f"Whatever {sub.name} wrote or felt before this came about, this is its situation now.")
     if them.overlord == me.tag:
-        facts.append(f"{them.name} is a subject of {me.name}.")
+        facts.append(subject(them, me))
     if me.overlord == them.tag:
-        facts.append(f"{me.name} is a subject of {them.name}.")
+        facts.append(subject(me, them))
+    if them.capitulated and me.tag in them.enemies:
+        facts.append(f"{them.name} has CAPITULATED to {me.name} and its allies: it has lost the war and is "
+                     f"at their mercy.")
+    if me.capitulated and them.tag in me.enemies:
+        facts.append(f"{me.name} has CAPITULATED: it has lost the war against {them.name} and is at its mercy.")
     if any(w.other == me.tag for w in them.wargoals):
         facts.append(f"{them.name} holds a war goal against {me.name}.")
     if any(w.other == them.tag for w in me.wargoals):
@@ -168,9 +180,16 @@ def _history_note(camp: campaign.Campaign, them: gamestate.CountryState, me: gam
     if not camp.letters_with(them.tag):
         return (f"You and {me.name} have never exchanged letters before: this is the first correspondence "
                 f"between you. Don't refer to earlier letters, offers or answers.")
+    last = camp.letters_with(them.tag)[-1]["date"]
+    changed = [e["text"] for e in camp.data["events"]
+               if e["date"] > last and them.tag in e["tags"] and e.get("type") in policy.RELATION_TYPES
+               and (me.tag in e["tags"] or e["type"] != "war")]
+    since = (f" Since the last letter between you, your situation has changed: {' '.join(changed)} The earlier "
+             f"letters were written before this; write from your situation as it is now."
+             if changed else "")
     return (f"Your earlier correspondence with {me.name} follows as the conversation, each letter dated. Stay "
             f"consistent with what you wrote before, and let what happened since colour your reply. Refer only to "
-            f"letters, offers and answers that actually appear there or in what you remember. {silence}")
+            f"letters, offers and answers that actually appear there or in what you remember.{since} {silence}")
 
 
 def _transcript(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
@@ -297,6 +316,8 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
             continue                                       # things changed since: they may ask again
         refused.update(r["keys"])
     pol = policy.current(camp, tag)
+    if not pol and policy.stale(camp, tag):
+        return [], []                                      # its old aims no longer apply; wait for the new ones
     offers = pol["offers"] if pol else actions.GIVES + actions.state_gives(rel)
     asks = pol["asks"] if pol else actions.ASKS + actions.state_asks(rel)
     ok = lambda k: k not in refused and actions.possible(rel, k)
@@ -464,7 +485,7 @@ class _Session:
     # ---- neighbours' policies toward the player, refreshed one at a time in the background
     def policies(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:
         if self.policy_job:
-            tag, fut, key, rel, cid = self.policy_job
+            tag, fut, key, rel, cid, basis = self.policy_job
             if not fut.done():
                 return
             self.policy_job = None
@@ -476,7 +497,7 @@ class _Session:
                 print(f"  policy for {tag} failed: {e}")
                 return
             p = policy.parse(text, rel)
-            p.update(date=key, when=campaign.date_words(key))
+            p.update(date=key, when=campaign.date_words(key), basis=basis)
             camp.data.setdefault("policies", {})[tag] = p
             camp.save()
             words = lambda keys: ", ".join(actions.word(k) for k in keys) or "none"
@@ -487,9 +508,10 @@ class _Session:
             me = gamestate.country(player)
         except gamestate.StateError:
             return
-        for tag in policy_countries(me, snap):
-            if not policy.needs_refresh(camp, tag, player, snap["date"]):
-                continue
+        # Most needed first (none or stale, then something happened, then just old); ties in importance order.
+        ranked = [(policy.refresh_priority(camp, tag, player, snap["date"]), tag) for tag in policy_countries(me, snap)]
+        ranked = sorted([r for r in ranked if r[0]], key=lambda r: -r[0])
+        for _, tag in ranked:
             try:
                 them = gamestate.country(tag)
             except gamestate.StateError:
@@ -499,7 +521,8 @@ class _Session:
                          f"{_context(them, me, camp)}\n\nYOUR CORRESPONDENCE WITH {me.name.upper()}:\n"
                          f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, rel)}"},
                         {"role": "user", "content": f"State {them.name}'s policy toward {me.name} now."}]
-            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7), snap["date"], rel, camp.id)
+            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7), snap["date"], rel, camp.id,
+                               policy.basis(snap, tag, player))
             return
 
     # ---- who writes to the player on their own

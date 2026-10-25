@@ -80,7 +80,12 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
                        "tags": tags, "text": text, "major": world or major(*tags)})
 
     for t in nc.keys() - oc.keys():
-        add([t], f"{name(t)} appeared as a country.", "country_new")
+        lord = nc[t]["overlord"]
+        if lord:
+            # e.g. annexed in a peace deal and released as a puppet: the overlord is part of the event
+            add([t, lord], f"{name(t)} was established as a country, a subject of {name(lord)}.", "subject")
+        else:
+            add([t], f"{name(t)} appeared as a country.", "country_new")
     for t in oc.keys() - nc.keys():
         add([t], f"{name(t)} ceased to exist.", "country_gone")
 
@@ -116,6 +121,10 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
         x, y = pair.split("|")
         if x in nc and y in nc:
             add([x, y], f"{name(x)} and {name(y)} are no longer at war.", "peace")
+        elif x in nc or y in nc:
+            lost = y if x in nc else x
+            add([x, y], f"The war between {name(x)} and {name(y)} ended: {name(lost)} was defeated and "
+                        f"ceased to exist.", "peace")
 
     moved: Dict[Tuple[str, str], List[str]] = defaultdict(list)
     for sid, (sname, owner) in new["states"].items():

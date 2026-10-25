@@ -14,6 +14,9 @@ to a default, and only things possible right now are kept:
 It feeds every letter that country writes, decides who writes first when it's quiet (urgency), and holds
 what it may propose (Accept/Decline) or do on its own. Refreshed every REFRESH_DAYS of game time, or sooner
 when something happens between the two; refreshes run in the background (letters.py).
+A policy remembers the relationship it was written under (basis(): overlords, war, capitulation). Once that
+changes (say the country was beaten and became the player's puppet) the policy is stale: it is left out of
+prompts and refreshed before anything else.
 Stored lists hold deal keys from actions.py ("give:pact", "ask:access", "end:access", "embargo").
 """
 
@@ -27,6 +30,9 @@ from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
 REFRESH_DAYS = 90
+TERRITORY_REFRESH_DAYS = 30   # states changing hands between the two refresh a policy at most this often
+# Events that change what the two countries are to each other (a policy written before one is stale).
+RELATION_TYPES = {"subject", "independence", "capitulation", "war", "peace", "country_gone", "country_new"}
 
 
 def instructions(them_name: str, me_name: str, rel: "actions.Relation") -> str:
@@ -115,10 +121,39 @@ def _future(camp, p: Dict) -> bool:
     return p["date"] > (camp.data.get("last_date") or p["date"])
 
 
+def basis(snap: Optional[Dict], tag: str, player: str) -> str:
+    """The relationship between the two in a chronicle snapshot: who is whose subject, war, capitulation."""
+    c = (snap or {}).get("countries", {})
+    if tag not in c or player not in c:
+        return ""
+    at_war = "|".join(sorted([tag, player])) in snap.get("wars", [])
+    return (f"{c[tag]['overlord']}/{c[player]['overlord']}/{'war' if at_war else 'peace'}/"
+            f"{int(c[tag]['capitulated'])}{int(c[player]['capitulated'])}")
+
+
+def stale(camp, tag: str) -> bool:
+    """Written under a relationship that no longer holds."""
+    p = camp.data.setdefault("policies", {}).get(tag)
+    if not p:
+        return False
+    if p.get("basis"):
+        now = basis(camp.snapshot, tag, camp.data["player"])
+        return bool(now) and now != p["basis"]
+    # Older policies don't store their basis: a relation change with the player since counts, and so does the
+    # country itself capitulating, vanishing or coming back (older chronicles didn't tie those to the player).
+    player = camp.data["player"]
+    return any(e["date"] > p["date"] and tag in e["tags"] and e.get("type") in RELATION_TYPES
+               and (player in e["tags"] or e["type"] in ("capitulation", "country_gone", "country_new"))
+               for e in camp.data["events"])
+
+
 def current(camp, tag: str) -> Optional[Dict]:
+    """The country's policy toward the player, or None (none yet, or stale until it is refreshed)."""
     p = camp.data.setdefault("policies", {}).get(tag)
     if p and _future(camp, p):
         del camp.data["policies"][tag]
+        return None
+    if p and stale(camp, tag):
         return None
     if p:   # policies saved before asks/breaks held bare words in "offers"
         p["offers"] = [o if ":" in o else f"give:{o}" for o in p.get("offers", [])]
@@ -127,17 +162,23 @@ def current(camp, tag: str) -> Optional[Dict]:
     return p
 
 
-def needs_refresh(camp, tag: str, player: str, today: str) -> bool:
+def refresh_priority(camp, tag: str, player: str, today: str) -> int:
+    """How badly the policy needs rewriting: 3 none or stale, 2 something happened between the two,
+    1 just old, 0 not needed."""
     raw = camp.data.setdefault("policies", {}).get(tag)
-    if not raw or "asks" not in raw or _future(camp, raw):   # none, old format, or from another game/save
-        return True
-    p = current(camp, tag)
-    if _days(today) - _days(p["date"]) >= REFRESH_DAYS:
-        return True
+    if not raw or "asks" not in raw or _future(camp, raw) or stale(camp, tag):
+        return 3
+    age = _days(today) - _days(raw["date"])
     # something happened in the world between the two since the policy was set (not just letter outcomes,
-    # or every answered proposal would refresh the policy and start the next one)
-    return any(e["date"] > p["date"] and tag in e["tags"] and player in e["tags"] and e.get("type") in WORLD_TYPES
-               for e in camp.data["events"])
+    # or every answered proposal would refresh the policy and start the next one). States changing hands
+    # happen all through a war, so they alone refresh it only now and then.
+    since = {e["type"] for e in camp.data["events"]
+             if e["date"] > raw["date"] and tag in e["tags"] and player in e["tags"] and e.get("type") in WORLD_TYPES}
+    if since - {"territory"}:
+        return 2
+    if age >= REFRESH_DAYS or (since and age >= TERRITORY_REFRESH_DAYS):
+        return 1
+    return 0
 
 
 def wants_to_write(p: Dict) -> bool:

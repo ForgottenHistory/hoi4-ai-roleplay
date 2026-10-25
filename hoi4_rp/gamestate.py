@@ -132,6 +132,7 @@ class CountryState:
     ideology: str = ""                  # ruling ideology group, e.g. "democratic"
     capital: str = ""
     is_major: bool = False
+    capitulated: bool = False           # defeated in a war still going on
     stability: Optional[float] = None   # 0..1
     war_support: Optional[float] = None
     political_power: Optional[float] = None
@@ -189,6 +190,7 @@ def _effect(tag: str) -> str:
         f'log = "{p}ideology|[THIS.GetRulingIdeology]"',
         f'log = "{p}capital|[THIS.Capital.GetName]"',
         f'if = {{ limit = {{ is_major = yes }} log = "{p}major|yes" }}',
+        f'if = {{ limit = {{ has_capitulated = yes }} log = "{p}capitulated|yes" }}',
         f'log = "{p}strength|{"|".join(f"[?THIS.{v}]" for v in STRENGTH_FIELDS.values())}"',
     ]
     for ideo, prop in _PARTY_PROPS.items():
@@ -335,6 +337,8 @@ def country(tag: str) -> CountryState:
             s.names[s.overlord] = oname or s.overlord
         elif key == "major":
             s.is_major = True
+        elif key == "capitulated":
+            s.capitulated = True
         elif key == "strength":
             for name, value in zip(STRENGTH_FIELDS, rest.split("|")):
                 try:
@@ -495,9 +499,13 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
         lines.append("Not in any faction.")
     auto = lambda t: f" ({s.autonomy[t].replace('_', ' ')})" if s.autonomy.get(t) else ""
     if s.overlord:
-        lines.append(f"A subject of {s.name_of(s.overlord)}{auto(s.overlord)}.")
+        lines.append(f"NOT INDEPENDENT: a subject (puppet) of {s.name_of(s.overlord)}{auto(s.overlord)}, which "
+                     f"controls its foreign policy.")
     if s.subjects:
-        lines.append("Subjects: " + ", ".join(s.name_of(t) + auto(t) for t in s.subjects) + ".")
+        lines.append("Subjects (puppets it controls): " + ", ".join(s.name_of(t) + auto(t) for t in s.subjects) + ".")
+    if s.capitulated:
+        lines.append("HAS CAPITULATED: its armies are beaten and its government has surrendered or fled; it can no "
+                     "longer resist, and the winners will decide its fate at the peace.")
     if s.wars:
         wars = []
         for w in s.wars:

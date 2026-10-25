@@ -59,10 +59,6 @@ def opinion_loc() -> List[str]:
 
 # ---------------------------------------------------------------- the relations between them and me
 
-def _trigger(script: str) -> bool:
-    return bridge.send(f"eval_trigger {script}")[0].rstrip().endswith("yes")
-
-
 def _docking_given(giver: str, receiver: str) -> bool:
     """`giver` gives `receiver` docking rights (read from the receiver's save-format block)."""
     rel = gamestate._relations(bridge.country_block(receiver)).get(giver, "")
@@ -71,15 +67,15 @@ def _docking_given(giver: str, receiver: str) -> bool:
 
 # relation name -> (them, me) -> does it exist right now?
 _CHECKS: Dict[str, Callable[[str, str], bool]] = {
-    "pact": lambda t, m: _trigger(f"{m} = {{ has_non_aggression_pact_with = {t} }}"),
-    "they_access": lambda t, m: _trigger(f"{t} = {{ gives_military_access_to = {m} }}"),
-    "my_access": lambda t, m: _trigger(f"{m} = {{ gives_military_access_to = {t} }}"),
+    "pact": lambda t, m: bridge.trigger(f"{m} = {{ has_non_aggression_pact_with = {t} }}"),
+    "they_access": lambda t, m: bridge.trigger(f"{t} = {{ gives_military_access_to = {m} }}"),
+    "my_access": lambda t, m: bridge.trigger(f"{m} = {{ gives_military_access_to = {t} }}"),
     "they_docking": lambda t, m: _docking_given(t, m),
     "my_docking": lambda t, m: _docking_given(m, t),
-    "they_guarantee": lambda t, m: _trigger(f"{t} = {{ has_guaranteed = {m} }}"),
-    "my_guarantee": lambda t, m: _trigger(f"{m} = {{ has_guaranteed = {t} }}"),
-    "market": lambda t, m: _trigger(f"{m} = {{ has_market_access_with = {t} }}"),
-    "embargo": lambda t, m: _trigger(f"{t} = {{ is_embargoing = {m} }}"),
+    "they_guarantee": lambda t, m: bridge.trigger(f"{t} = {{ has_guaranteed = {m} }}"),
+    "my_guarantee": lambda t, m: bridge.trigger(f"{m} = {{ has_guaranteed = {t} }}"),
+    "market": lambda t, m: bridge.trigger(f"{m} = {{ has_market_access_with = {t} }}"),
+    "embargo": lambda t, m: bridge.trigger(f"{t} = {{ is_embargoing = {m} }}"),
 }
 
 
@@ -133,7 +129,7 @@ def border_states(owner: str, other: str) -> Dict[str, BorderState]:
 
 def relation(them: str, me: str) -> Relation:
     from . import peace
-    at_war = _trigger(f"{me} = {{ has_war_with = {them} }}")
+    at_war = bridge.trigger(f"{me} = {{ has_war_with = {them} }}")
     return Relation(at_war=at_war,
                     exists={name: check(them, me) for name, check in _CHECKS.items()},
                     them_border=border_states(them, me), me_border=border_states(me, them),

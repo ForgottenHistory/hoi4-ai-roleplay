@@ -40,34 +40,21 @@ POLL_SECONDS = 0.5
 CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded when the date moved)
 
 
-def decode_country(value: float) -> Optional[str]:
-    """A country stored in a variable shows up as a packed number: 0x40 marker + the tag's 3 bytes."""
-    raw = round(value * 100000) & 0xFFFFFFFF
-    if raw >> 24 != 0x40:
-        return None
-    return bytes([raw & 0xFF, (raw >> 8) & 0xFF, (raw >> 16) & 0xFF]).decode("ascii", "replace")
-
-
 def read_outbox(block: str) -> Optional[str]:
     """Recipient tag if a letter was just sent, else None."""
     m = re.search(r"\bairp_outbox_to=(-?[\d.]+)", block)
-    return decode_country(float(m.group(1))) if m else None
-
-
-def _unescape(line: str) -> str:
-    """Bridge replies are one line: backslash-n is a line break, a doubled backslash is one backslash."""
-    return re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), line)
+    return bridge.decode_country(float(m.group(1))) if m else None
 
 
 def read_letter_box() -> str:
-    reply = bridge.send(f"bridge.editbox {EDITBOX_NAME}")[0]
-    if not reply.startswith("OK"):
-        raise RuntimeError(f"could not read the letter: {reply}")
-    return _unescape(reply[3:]).strip()
+    try:
+        return bridge.editbox(EDITBOX_NAME)
+    except bridge.BridgeError as e:
+        raise RuntimeError(f"could not read the letter: {e}") from None
 
 
 def clear_letter_box() -> None:
-    bridge.send(f"bridge.editbox.set {EDITBOX_NAME}")
+    bridge.editbox_set(EDITBOX_NAME)
 
 
 def _clean_for_game(text: str) -> str:

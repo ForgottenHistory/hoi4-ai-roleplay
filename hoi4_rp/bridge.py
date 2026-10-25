@@ -14,4 +14,5 @@ if not os.path.isfile(os.path.join(_DIR, "hoi4bridge.py")):
 if _DIR not in sys.path:
     sys.path.insert(0, _DIR)
 
-from hoi4bridge import BridgeUnavailable, country_block, player_tag, send, setloc  # noqa: E402,F401
+from hoi4bridge import (BridgeError, BridgeUnavailable, country_block, decode_country, editbox,  # noqa: E402,F401
+                        editbox_set, loc, player_tag, query, send, setloc, surrender, trigger)

@@ -25,36 +25,26 @@ from . import bridge, leaders
 
 IDEOLOGIES = ["democratic", "communism", "fascism", "neutrality"]       # vanilla ideology groups
 _PARTY_PROPS = {"democratic": "Democratic", "communism": "Communist", "fascism": "Fascist", "neutrality": "Neutral"}
-_SEP = "\x1e"
 
 
 class StateError(RuntimeError):
     pass
 
 
-def _unescape(s: str) -> str:
-    return re.sub(r"\\(.)", lambda m: "\n" if m.group(1) == "n" else m.group(1), s)
-
-
 def query(effect: str) -> List[str]:
-    """Run an effect in the game and return the lines its `log = "..."` statements printed."""
-    reply = bridge.send(f"bridge.query {' '.join(effect.split())}")[0]
-    if not reply.startswith("OK"):
-        raise StateError(reply)
-    body = reply[3:]
-    # Older bridge builds keep the log stream's trailing line break on each line.
-    return [_unescape(x).rstrip("\r\n") for x in body.split(_SEP)] if body else []
+    """Run an effect in the game and return the lines its `log = "..."` statements printed (bridge.query)."""
+    try:
+        return bridge.query(effect)
+    except bridge.BridgeError as e:
+        raise StateError(str(e)) from None
 
 
 def loc(*keys: str) -> List[str]:
     """Localised text for each key, as the game shows it (a missing key comes back unchanged)."""
-    if not keys:
-        return []
-    reply = bridge.send("bridge.loc " + " ".join(keys))[0]
-    if not reply.startswith("OK"):
-        raise StateError(reply)
-    vals = [_unescape(x) for x in reply[3:].split(_SEP)]
-    return vals + [""] * (len(keys) - len(vals))
+    try:
+        return bridge.loc(*keys)
+    except bridge.BridgeError as e:
+        raise StateError(str(e)) from None
 
 
 # ---------------------------------------------------------------- save-format block helpers
@@ -329,13 +319,13 @@ def _diplomacy(s: CountryState, block: str) -> None:
 def _surrender(s: CountryState) -> None:
     """The game's own surrender numbers, as the war overview tooltip shows them (needs a bridge with
     bridge.surrender; older bridges leave occupation and limit unknown)."""
-    reply = bridge.send(f"bridge.surrender {s.tag}")[0]
-    if not reply.startswith("OK"):
+    try:
+        vals = bridge.surrender(s.tag)
+    except bridge.BridgeError:
         return
-    vals = dict(kv.split("=", 1) for kv in reply[3:].split() if "=" in kv)
-    s.surrender = _float(vals.get("progress", "")) if vals.get("progress") else s.surrender
-    s.occupation = _float(vals.get("occupation", ""))
-    s.surrender_limit = _float(vals.get("limit", ""))
+    s.surrender = vals.get("progress", s.surrender)
+    s.occupation = vals.get("occupation")
+    s.surrender_limit = vals.get("limit")
 
 
 def _diplomacy_level(s: CountryState) -> None:

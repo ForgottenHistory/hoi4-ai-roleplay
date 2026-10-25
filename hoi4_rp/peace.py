@@ -19,15 +19,11 @@ from typing import Optional, Tuple
 from . import bridge, gamestate
 
 
-def _trigger(script: str) -> bool:
-    return bridge.send(f"eval_trigger {script}")[0].rstrip().endswith("yes")
-
-
 def possible(me: str, other: str) -> bool:
     """Peace can be made between the two right now (see the module notes)."""
     side = lambda enemy: (f"is_subject = no OR = {{ is_faction_leader = yes is_in_faction = no }} "
                           f"NOT = {{ civilwar_target = {enemy} }}")
-    return _trigger(f"{me} = {{ has_war_with = {other} {side(other)} {other} = {{ {side(me)} }} }}")
+    return bridge.trigger(f"{me} = {{ has_war_with = {other} {side(other)} {other} = {{ {side(me)} }} }}")
 
 
 def blocker(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
@@ -41,7 +37,7 @@ def blocker(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
         if x.faction and x.faction_leader and x.faction_leader != x.tag:
             return (f"{x.name} fights as a member of the {x.faction}, so peace can only come through its leader, "
                     f"{x.name_of(x.faction_leader)}")
-    if _trigger(f"{me.tag} = {{ OR = {{ civilwar_target = {them.tag} {them.tag} = {{ civilwar_target = {me.tag} }} }} }}"):
+    if bridge.trigger(f"{me.tag} = {{ OR = {{ civilwar_target = {them.tag} {them.tag} = {{ civilwar_target = {me.tag} }} }} }}"):
         return "this is a civil war: it ends only when one side is gone"
     return ""
 

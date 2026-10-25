@@ -247,7 +247,8 @@ def _show_reply(player: str, sender: str, text: str, offer: bool = False) -> Non
     replies = bridge.send(
         f"bridge.setloc airp_reply_body {body}",
         f"eval_effect {player} = {{ clear_variable = airp_awaiting_from {offer_var} "
-        f"set_variable = {{ airp_reply_size = {size} }} set_variable = {{ airp_reply_from = {sender}.id }} }}",
+        f"set_variable = {{ airp_reply_size = {size} }} set_variable = {{ airp_reply_from = {sender}.id }} "
+        f"add_to_variable = {{ airp_reply_refresh = 1 }} }}",   # update the window now, even while paused
     )
     bad = [r for r in replies if not r.startswith("OK")]
     if bad:

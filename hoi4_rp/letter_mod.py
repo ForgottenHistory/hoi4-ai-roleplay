@@ -292,18 +292,24 @@ _REPLY_GUI = """	airp_letter_reply_@SIZE@ = {
 			has_variable = airp_reply_from
 			check_variable = { airp_reply_size = @SIZE@ }
 		}
+		# Scripted guis update every tick, and a paused game has none: a reply opened while paused showed the
+		# buttons of the state before (Close instead of Accept/Decline). Bumping this variable updates it at once.
+		dirty = airp_reply_refresh
 		effects = {
 			airp_close_button_click = {
 				clear_variable = airp_reply_from
+				add_to_variable = { airp_reply_refresh = 1 }
 			}
 			# letters.py reads the answer (1 accept, 2 decline), applies it and clears airp_offer.
 			airp_accept_button_click = {
 				set_variable = { airp_offer_answer = 1 }
 				clear_variable = airp_reply_from
+				add_to_variable = { airp_reply_refresh = 1 }
 			}
 			airp_decline_button_click = {
 				set_variable = { airp_offer_answer = 2 }
 				clear_variable = airp_reply_from
+				add_to_variable = { airp_reply_refresh = 1 }
 			}
 		}
 		triggers = {

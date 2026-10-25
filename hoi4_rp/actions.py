@@ -16,6 +16,9 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
     [[offer annex]] / [[annex]]   them joins me entirely (annexed by agreement, like the Anschluss)
     [[offer subject TAG]]     a proposal item: them hands me its subject TAG (it becomes my subject)
     [[ask subject TAG]]       a proposal item: them asks me to hand it my subject TAG
+    [[offer civ N]] [[ask civ N]] [[offer mil N]] [[ask mil N]]   factories as currency (FACTORY_NOTE): N
+                              civilian or military factories, taken from the giver's states at random and built
+                              instantly in the receiver's core states at random; [[civ N]] grants them when asked
 
 Each deal checks the game first: it must be possible right now (agreements need peace and must not exist
 yet; ending one needs it to exist). Effect directions were checked in game:
@@ -110,6 +113,8 @@ class Relation:
     me_subject: bool = False     # I am a subject of anyone
     them_subjects: Dict[str, str] = None   # them's subjects: tag -> name
     me_subjects: Dict[str, str] = None     # my subjects: tag -> name
+    them_factories: Dict[str, int] = None  # "civ"/"mil" -> how many them has
+    me_factories: Dict[str, int] = None
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -166,7 +171,8 @@ def relation(them: str, me: str) -> Relation:
                     peace_ok=at_war and peace.possible(me, them), bound=bound,
                     them_subject=bridge.trigger(f"{them} = {{ is_subject = yes }}"),
                     me_subject=bridge.trigger(f"{me} = {{ is_subject = yes }}"),
-                    them_subjects=subjects_of(them), me_subjects=subjects_of(me))
+                    them_subjects=subjects_of(them), me_subjects=subjects_of(me),
+                    them_factories=factory_counts(them), me_factories=factory_counts(me))
 
 
 # ---------------------------------------------------------------- deals
@@ -297,6 +303,76 @@ def is_state(key: str) -> bool:
 _SUBJECT_NAMES: Dict[str, str] = {}
 
 
+# ---------------------------------------------------------------- factories as currency
+# "give:civ:10": them gives me 10 civilian factories; "ask:mil:5": them asks me for 5 military factories. The
+# factories come out of the giver's states at random (weighted by how many each has) and are built instantly in the
+# receiver's owned, controlled core states at random, with an extra building slot where a state has none free.
+
+FACTORIES = {"civ": ("industrial_complex", "civilian factories"), "mil": ("arms_factory", "military factories")}
+MAX_FACTORIES = 30
+FACTORY_NOTE = ("Factories are a nation's wealth and its power to arm: giving them away weakens you for years. Trade "
+                "them only for something worth as much (a province, a subject, real protection), in amounts that "
+                "match what is at stake.")
+
+
+FACTORY_KEYS = ("give:civ", "give:mil", "ask:civ", "ask:mil")   # amount chosen in the command
+
+
+def is_factory_key(key: str) -> bool:
+    parts = key.split(":")
+    return len(parts) == 3 and parts[0] in ("give", "ask") and parts[1] in FACTORIES and parts[2].isdigit()
+
+
+def factory_base(key: str) -> str:
+    """'give:civ:10' -> 'give:civ' (what the allowed lists hold); other keys unchanged."""
+    return key.rsplit(":", 1)[0] if is_factory_key(key) else key
+
+
+def factory_counts(tag: str) -> Dict[str, int]:
+    lines = gamestate.query(f'{tag} = {{ log = "AIRPF|[?THIS.num_of_civilian_factories]|'
+                            f'[?THIS.num_of_military_factories]" }}')
+    for line in lines:
+        if line.startswith("AIRPF|"):
+            civ, _, mil = line[6:].partition("|")
+            try:
+                return {"civ": int(float(civ)), "mil": int(float(mil))}
+            except ValueError:
+                pass
+    return {"civ": 0, "mil": 0}
+
+
+def transfer_factories(giver: str, receiver: str, kind: str, n: int) -> Optional[Tuple[int, List[str], List[str]]]:
+    """Move n factories of `kind` ("civ"/"mil"). Returns (moved, giver state names, receiver state names)."""
+    import random
+    building = FACTORIES[kind][0]
+    lvl = f"{building}_level" if kind == "civ" else "arms_factory_level"
+    have, room = [], []
+    for line in gamestate.query(
+            f'{giver} = {{ every_owned_state = {{ log = "AIRPG|[THIS.GetID]|[THIS.GetName]|[?THIS.{lvl}]" }} }} '
+            f'{receiver} = {{ every_owned_state = {{ limit = {{ is_core_of = {receiver} is_controlled_by = {receiver} }} '
+            f'log = "AIRPR|[THIS.GetID]|[THIS.GetName]" }} }}'):
+        f = line.split("|")
+        if f[0] == "AIRPG" and len(f) >= 4:
+            have += [(f[1], f[2])] * int(float(f[3] or 0))
+        elif f[0] == "AIRPR" and len(f) >= 3:
+            room.append((f[1], f[2]))
+    if not have or not room:
+        return None
+    taken = random.sample(have, min(n, len(have)))
+    placed = [random.choice(room) for _ in taken]
+    script = []
+    for sid in dict.fromkeys(s for s, _ in taken):
+        script.append(f"{sid} = {{ remove_building = {{ type = {building} level = {sum(1 for s, _ in taken if s == sid)} }} }}")
+    for sid, _ in placed:
+        script.append(f"{sid} = {{ if = {{ limit = {{ NOT = {{ free_building_slots = {{ building = {building} size > 0 "
+                      f"include_locked = yes }} }} }} add_extra_state_shared_building_slots = 1 }} "
+                      f"add_building_construction = {{ type = {building} level = 1 instant_build = yes }} }}")
+    if not _effect(" ".join(script)):
+        return None
+    names = lambda pairs: list(dict.fromkeys(name for _, name in pairs))
+    return len(taken), names(taken), names(placed)
+
+
 def is_subject_key(key: str) -> bool:
     return key.startswith(("give:subject:", "ask:subject:"))
 
@@ -324,6 +400,14 @@ def state_asks(rel: Relation) -> List[str]:
 
 
 def get_deal(key: str) -> Optional[Deal]:
+    if is_factory_key(key) or key in FACTORY_KEYS:
+        verb, kind, n = (key + ":0").split(":")[:3]
+        what = f"{n} {FACTORIES[kind][1]}" if n != "0" else f"N {FACTORIES[kind][1]}"
+        if verb == "give":
+            return Deal(key, "factories", False, True, f"give {{me_name}} {what} of yours", what, "",
+                        f"{{them_name}} gave us {what}.", f"{{them_name}} gave {{me_name}} {what}.")
+        return Deal(key, "factories", False, True, f"ask {{me_name}} to give you {what}", what, "",
+                    f"We gave {{them_name}} {what}.", f"{{me_name}} gave {{them_name}} {what}.", True)
     if is_subject_key(key):
         tag = key.rsplit(":", 1)[1]
         name = _SUBJECT_NAMES.get(tag, tag)
@@ -353,6 +437,13 @@ def get_deal(key: str) -> Optional[Deal]:
 
 
 def possible(rel: Relation, key: str) -> bool:
+    if key in ("give:civ", "give:mil", "ask:civ", "ask:mil"):           # the amount comes with the command
+        side = rel.them_factories if key.startswith("give:") else rel.me_factories
+        return not rel.at_war and (side or {}).get(key.split(":")[1], 0) > 0
+    if is_factory_key(key):
+        verb, kind, n = key.split(":")
+        side = rel.them_factories if verb == "give" else rel.me_factories
+        return not rel.at_war and 0 < int(n) <= min(MAX_FACTORIES, (side or {}).get(kind, 0))
     if is_subject_key(key):
         tag = key.rsplit(":", 1)[1]
         return not rel.at_war and tag in ((rel.them_subjects if key.startswith("give:") else rel.me_subjects) or {})
@@ -400,6 +491,8 @@ def described(key: str) -> str:
         return f"{word(key)} ({get_deal(key).label})"
     if is_subject_key(key):
         return f"subject {key.rsplit(':', 1)[1]} ({_SUBJECT_NAMES.get(key.rsplit(':', 1)[1], '')})"
+    if is_factory_key(key) or key in ("give:civ", "give:mil", "ask:civ", "ask:mil"):
+        return word(key)
     if key == "give:submit":
         return "submit (become their subject)"
     if key == "ask:submit":
@@ -435,11 +528,16 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
         f"- [[opinion N]]: how this letter changed {them_name}'s opinion of {me_name}, N from -20 to +20. "
         "Use it when the letter was notably friendly or offensive; leave it out for ordinary letters.",
     ]
-    gives = possible_keys(rel, GIVES) + state_gives(rel)
+    gives = possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
     if gives:
         lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
                      f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
-        lines += [f"- [[{word(k)}]]: {get_deal(k).prompt.format(**f)}" for k in gives]
+        lines += [f"- [[{word(k)}{' N' if k in FACTORY_KEYS else ''}]]: {get_deal(k).prompt.format(**f)}"
+                  for k in gives]
+        if any(k in FACTORY_KEYS for k in gives):
+            have = rel.them_factories or {}
+            lines.append(f"{FACTORY_NOTE} You have {have.get('civ', 0)} civilian and {have.get('mil', 0)} military "
+                         f"factories.")
         if any(is_state(k) for k in gives):
             lines.append(TERRITORY_NOTE)
         if "give:submit" in gives or "give:annex" in gives:
@@ -470,8 +568,12 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
              f"{me_name} accepts or declines the whole package with one Accept/Decline. {when} Write the proposal "
              f"into the letter, then add one command per item after the letter. Every item the letter proposes "
              f"MUST have its command, or it has no effect; propose nothing in the text that isn't listed here."]
-    lines += [f"- [[offer {word(k)}]]: offer to {get_deal(k).prompt.format(**f)}" for k in offers]
-    lines += [f"- [[ask {word(k)}]]: {get_deal(k).prompt.format(**f)}" for k in asks]
+    lines += [f"- [[offer {word(k)}{' N' if k in FACTORY_KEYS else ''}]]: offer to "
+              f"{get_deal(k).prompt.format(**f)}" for k in offers]
+    lines += [f"- [[ask {word(k)}{' N' if k in FACTORY_KEYS else ''}]]: {get_deal(k).prompt.format(**f)}"
+              for k in asks]
+    if any(k in FACTORY_KEYS for k in offers + asks):
+        lines.append(FACTORY_NOTE + f" N is a whole number up to {MAX_FACTORIES}, at most what the giver has.")
     if any(is_state(k) for k in offers + asks):
         lines.append(TERRITORY_NOTE)
     if any(k in offers + asks for k in ("give:submit", "ask:submit", "give:annex")):
@@ -638,7 +740,7 @@ def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     text = _SUBJECT.sub("", _CEDE.sub("", _SUBJECT_DEAL.sub("", text)))
     for m in _COMMAND.finditer(text):
         verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
-        what = f"state:{num}" if what == "state" else what
+        what = f"state:{num}" if what == "state" else f"{what}:{num}" if what in FACTORIES and num else what
         if verb == "offer":
             proposals.append(f"give:{what}")
         elif verb == "ask":
@@ -679,7 +781,7 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
     for key, value in commands:
         if key.startswith(("cede:", "free:", "transfer:")):
             continue                                   # apply_cedes(), apply_subjects()
-        if key in done or (allowed is not None and key not in allowed):
+        if key in done or (allowed is not None and factory_base(key) not in allowed):
             if key not in done:
                 print(f"  [[{key}]] not allowed here, ignored")
             continue
@@ -690,12 +792,28 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 shown.append((f"{them_name}'s opinion of us {'improved' if v > 0 else 'worsened'} ({v:+d}).", v < 0))
             continue
         deal = get_deal(key)
-        if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)):
+        if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)
+                        and not is_factory_key(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
             why = "not a border state" if is_state(key) else f"{deal.relation} exists: {rel.exists.get(deal.relation)}"
             print(f"  {key} not possible now (at war: {rel.at_war}, {why})")
+            continue
+        if is_factory_key(key):
+            verb, kind, n = key.split(":")
+            giver, receiver = (them, me) if verb == "give" else (me, them)
+            moved = transfer_factories(giver, receiver, kind, int(n))
+            if moved:
+                count, frm, to = moved
+                what = f"{count} {FACTORIES[kind][1]}"
+                line = (f"{them_name} gave us {what} (from {', '.join(frm[:4])}; built in {', '.join(to[:4])})."
+                        if verb == "give" else f"We gave {them_name} {what} (from {', '.join(frm[:4])}).")
+                shown.append((line, verb == "ask"))
+                events.append({"type": key, "tags": [them, me], "text": (
+                    f"{them_name} gave {me_name} {what}." if verb == "give" else f"{me_name} gave {them_name} {what}.")})
+                side = rel.them_factories if verb == "give" else rel.me_factories
+                side[kind] = max(0, side.get(kind, 0) - count)
             continue
         if key == "give:peace":
             from . import peace
@@ -727,7 +845,7 @@ MAX_PACKAGE = 3
 
 def package(proposals: List[str], allowed: List[str]) -> List[str]:
     """The proposal items to keep: allowed ones, each once, at most MAX_PACKAGE."""
-    kept = list(dict.fromkeys(p for p in proposals if p in allowed))[:MAX_PACKAGE]
+    kept = list(dict.fromkeys(p for p in proposals if factory_base(p) in allowed))[:MAX_PACKAGE]
     for alone in ("give:peace", "give:submit", "ask:submit", "give:annex"):         # offered on their own, never bundled
         if alone in kept:
             return [alone]
@@ -740,7 +858,11 @@ def package_text(keys: List[str], who: str = "they") -> str:
     plural = who == "they"
     parts = []
     for k in keys:
-        if is_subject_key(k):
+        if is_factory_key(k):
+            what = get_deal(k).label
+            parts.append(f"{who} {'ask' if plural else 'asks'} us for {what}" if k.startswith("ask:") else
+                         f"{who} {'offer' if plural else 'offers'} {what}")
+        elif is_subject_key(k):
             name = _SUBJECT_NAMES.get(k.rsplit(":", 1)[1], k.rsplit(":", 1)[1])
             parts.append(f"{who} {'ask' if plural else 'asks'} for our subject {name}" if k.startswith("ask:") else
                          f"{who} {'offer' if plural else 'offers'} {'their' if plural else 'its'} subject {name}")

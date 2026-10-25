@@ -103,6 +103,7 @@ class Relation:
     exists: Dict[str, bool]            # relation name -> exists now
     them_border: Dict[str, BorderState] = None   # them's non-capital states bordering me (flags: my cores/claims)
     me_border: Dict[str, BorderState] = None     # my non-capital states bordering them (flags: their cores/claims)
+    peace_ok: bool = False                       # at war, and peace can be made now (peace.possible)
 
 
 _STATE_NAMES: Dict[str, str] = {}      # state id -> name, filled as border states are read
@@ -131,9 +132,12 @@ def border_states(owner: str, other: str) -> Dict[str, BorderState]:
 
 
 def relation(them: str, me: str) -> Relation:
-    return Relation(at_war=_trigger(f"{me} = {{ has_war_with = {them} }}"),
+    from . import peace
+    at_war = _trigger(f"{me} = {{ has_war_with = {them} }}")
+    return Relation(at_war=at_war,
                     exists={name: check(them, me) for name, check in _CHECKS.items()},
-                    them_border=border_states(them, me), me_border=border_states(me, them))
+                    them_border=border_states(them, me), me_border=border_states(me, them),
+                    peace_ok=at_war and peace.possible(me, them))
 
 
 # ---------------------------------------------------------------- deals
@@ -174,6 +178,11 @@ DEALS: List[Deal] = [
     Deal("give:market", "market", False, True, "open market access between you and {me_name}", "market access",
          "{them} = {{ give_market_access = {me} }}",
          "Market access opened with {them_name}.", "{them_name} and {me_name} opened market access to each other."),
+    # Peace (peace.py): only at war, only on its own; the effect is peace.make, not script
+    Deal("give:peace", "peace", False, False, "end the war with {me_name}: if they accept, a peace conference "
+         "settles the terms according to how the war stands", "peace (a peace conference)", "",
+         "Peace with {them_name}: the peace conference begins.",
+         "{me_name} accepted {them_name}'s offer of peace, and a peace conference began."),
     # them asks me to grant (proposals in letters them starts)
     Deal("ask:access", "my_access", False, True, "ask {me_name} for military access through their territory",
          "military access through our territory", _rel("them", "me", "military_access", "yes"),
@@ -206,7 +215,7 @@ DEALS: List[Deal] = [
          "{them_name} lifted its trade embargo on us.", "{them_name} lifted its trade embargo on {me_name}."),
 ]
 BY_KEY = {d.key: d for d in DEALS}
-GIVES = [d.key for d in DEALS if d.key.startswith("give:")]
+GIVES = [d.key for d in DEALS if d.key.startswith("give:") and d.key != "give:peace"]   # peace: peace.py rules
 ASKS = [d.key for d in DEALS if d.key.startswith("ask:")]
 UNILATERAL = [d.key for d in DEALS if d.key.startswith("end:") or d.key == "embargo"]
 
@@ -261,6 +270,8 @@ def possible(rel: Relation, key: str) -> bool:
         sid = key.rsplit(":", 1)[1]
         border = rel.them_border if key.startswith("give:") else rel.me_border
         return not rel.at_war and sid in (border or {})
+    if key == "give:peace":
+        return rel.at_war and rel.peace_ok
     d = BY_KEY[key]
     if d.peace and rel.at_war:
         return False
@@ -422,8 +433,16 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
-            why = "not a border state" if is_state(key) else f"{deal.relation} exists: {rel.exists[deal.relation]}"
+            why = "not a border state" if is_state(key) else f"{deal.relation} exists: {rel.exists.get(deal.relation)}"
             print(f"  {key} not possible now (at war: {rel.at_war}, {why})")
+            continue
+        if key == "give:peace":
+            from . import peace
+            outcome = peace.make(me, them)
+            if outcome:
+                rel.at_war = rel.peace_ok = False
+                shown.append((deal.shown.format(**fmt) + " " + outcome, False))
+                events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
             continue
         if _effect(deal.effect.format(**fmt)):
             if is_state(key):
@@ -445,7 +464,8 @@ MAX_PACKAGE = 3
 
 def package(proposals: List[str], allowed: List[str]) -> List[str]:
     """The proposal items to keep: allowed ones, each once, at most MAX_PACKAGE."""
-    return list(dict.fromkeys(p for p in proposals if p in allowed))[:MAX_PACKAGE]
+    kept = list(dict.fromkeys(p for p in proposals if p in allowed))[:MAX_PACKAGE]
+    return ["give:peace"] if "give:peace" in kept else kept      # peace is offered on its own
 
 
 def package_text(keys: List[str], who: str = "they") -> str:

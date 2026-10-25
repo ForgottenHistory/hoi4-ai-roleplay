@@ -32,7 +32,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import actions, bridge, campaign, chronicle, gamestate, leaders, llm, policy, style, subjects, war, world
+from . import actions, bridge, campaign, chronicle, gamestate, leaders, llm, peace, policy, style, subjects, war, world
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -284,9 +284,10 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.add_letter(to, player, text, key)
     camp.save()
     rel = actions.relation(to, player)
-    offers, asks = _proposals(camp, to, rel, key)
+    offers, asks = _proposals(camp, to, rel, key, reply=True)
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
-                 + actions.proposal_help(them.name, me.name, offers, asks, expected=False))
+                 + actions.proposal_help(them.name, me.name, offers, asks, expected=False)
+                 + ("\n\n" + _peace_help(them, me, camp, reply=True) if "give:peace" in offers else ""))
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
                   + _conversation(camp, them, me))
@@ -312,8 +313,13 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         print(f"  commands: {commands} -> {[o for o, _ in outcomes] or 'nothing applied'}")
     shown = reply + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
     if items:
-        shown += "\n\n" + actions.proposal_line(items, them.name)
+        shown += "\n\n" + actions.proposal_line(items, them.name) + _peace_line(items, me, them)
     _show_reply(player, to, shown, offer=bool(items))
+
+
+def _peace_line(items: List[str], me: gamestate.CountryState, them: gamestate.CountryState) -> str:
+    """Under a peace offer: what the peace conference would bring."""
+    return "\n§Y" + peace.estimate(me, them)[1] + "§!" if "give:peace" in items else ""
 
 
 def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: str) -> List[str]:
@@ -324,16 +330,54 @@ def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: s
     return items
 
 
-def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: str):
+def _peace_offer(camp: campaign.Campaign, tag: str, rel: "actions.Relation", today: int, reply: bool) -> List[str]:
+    """["give:peace"] if `tag` may offer the player peace now: peace can be made (peace.possible), and its war
+    stance is 'seek peace' or softer (in a reply, where the player may have asked for peace: 'open to terms' or
+    softer). A refused peace isn't offered again until the war turns (the policy basis changes) or refusal_days
+    pass."""
+    if not actions.possible(rel, "give:peace"):
+        return []
+    pol = policy.current(camp, tag)
+    if not pol or pol.get("war") not in war.STANCES or war.STANCES.index(pol["war"]) < (1 if reply else 2):
+        return []
+    basis = policy.basis(camp.snapshot, tag, camp.data["player"])
+    for r in camp.data.get("refusals", []):
+        if (r["from"] == tag and "give:peace" in r["keys"] and r.get("basis") == basis
+                and today - _days(r["date"]) < settings().letters.refusal_days):
+            return []
+    return ["give:peace"]
+
+
+def _peace_help(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign,
+                reply: bool) -> str:
+    """What the LLM needs to decide on peace: its stance and how a peace conference would turn out."""
+    margin, _ = peace.estimate(me, them)
+    pct = round(abs(margin) * 100)
+    outcome = ("a white peace: neither side gains anything" if pct == 0 else
+               f"{me.name} would receive about {pct}% of the war score, to take from you" if margin > 0 else
+               f"you would receive about {pct}% of the war score, to take from {me.name}")
+    pol = policy.current(camp, them.tag) or {}
+    when = (f"if {me.name} asked for peace or terms and your war stance accepts it, or if your stance is to seek "
+            f"peace" if reply else "your war stance is to seek peace, so this is the moment to offer it")
+    return (f"PEACE. You may offer {me.name} peace with [[offer peace]], on its own (no other items): "
+            f"{when}. If {me.name} accepts, a peace conference settles the terms by how the war stands; right now "
+            f"that would be {outcome}. Your war stance: {pol.get('war', 'unknown')}. Never offer peace while your "
+            f"stance is to fight on, and don't offer it if you refuse their request; say in the letter what you "
+            f"offer or refuse.")
+
+
+def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: str, reply: bool = False):
     """What `tag` may propose now: its policy's offers and asks, or, for a country without a policy (not a
     neighbour), anything currently possible, left to the LLM's judgement. Nothing if anyone proposed
     within proposal_gap_days; never an item the player refused within refusal_days, unless something
-    happened in the world between the two since."""
+    happened in the world between the two since. Peace (at war) follows its own rules (_peace_offer) and
+    isn't held back by the gap."""
     cfg = settings().letters
     today = _days(key)
+    peace_offer = _peace_offer(camp, tag, rel, today, reply)
     proposed = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("proposal")]
     if proposed and today - _days(max(proposed)) < cfg.proposal_gap_days:
-        return [], []
+        return peace_offer, []
     player = camp.data["player"]
     refused = set()
     for r in camp.data.get("refusals", []):
@@ -348,8 +392,8 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
         return [], []                                      # its old aims no longer apply; wait for the new ones
     offers = pol["offers"] if pol else actions.GIVES + actions.state_gives(rel)
     asks = pol["asks"] if pol else actions.ASKS + actions.state_asks(rel)
-    ok = lambda k: k not in refused and actions.possible(rel, k)
-    return [k for k in offers if ok(k)], [k for k in asks if ok(k)]
+    ok = lambda k: k not in refused and k != "give:peace" and actions.possible(rel, k)
+    return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
 
 
 def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) -> None:
@@ -371,7 +415,8 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     expected = (bool(pol) and pol["urgency"] >= 3 and not reason
                 and bool(offers or asks or [s for s in steps if s != "end:embargo"]))
     task = (_initiative_task(them, me, reason) + "\n\n"
-            + actions.letter_help(them.name, me.name, offers, asks, steps, expected))
+            + actions.letter_help(them.name, me.name, offers, asks, steps, expected)
+            + ("\n\n" + _peace_help(them, me, camp, reply=False) if "give:peace" in offers else ""))
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
               + _conversation(camp, them, me)
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
@@ -397,7 +442,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
         print(f"  steps: {[o for o, _ in outcomes]}")
     shown = text + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
     if items:
-        shown += "\n\n" + actions.proposal_line(items, them.name)
+        shown += "\n\n" + actions.proposal_line(items, them.name) + _peace_line(items, me, them)
     _show_reply(player, sender, shown, offer=bool(items))
 
 
@@ -427,7 +472,8 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> None:
         print(f"accepted {tag}'s proposal: {[o for o, _ in outcomes] or 'nothing applied'}")
     else:
         text = f"{me_name} declined the proposal ({what})."
-        camp.data.setdefault("refusals", []).append({"from": tag, "keys": items, "date": key})
+        camp.data.setdefault("refusals", []).append({"from": tag, "keys": items, "date": key,
+                                                     "basis": policy.basis(camp.snapshot, tag, player)})
         print(f"declined {tag}'s proposal: {items}")
     camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "offer_answer",
                       "tags": [tag, player], "text": text, "major": False}])

@@ -274,6 +274,11 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         print("  could not read the game state:", e)
         _show_reply(player, to, "(The courier could not find his way: the game state is unavailable.)")
         return
+    if them.capitulated:                               # no government left to answer: no LLM call
+        print(f"  {them.name} has capitulated; no reply")
+        _show_reply(player, to, f"(No answer comes. {them.name} has capitulated, and no government remains "
+                                f"to receive your letter.)")
+        return
     key = campaign.date_key(them.date)
     camp.at(key)
     camp.add_letter(to, player, text, key)
@@ -438,12 +443,19 @@ def _days(key: str) -> int:
         return 0
 
 
+def active(snap: Optional[Dict], tag: str) -> bool:
+    """Exists and hasn't capitulated. A capitulated country has no government left: it gets no policy and writes
+    no letters (it comes back, if at all, after the peace)."""
+    c = (snap or {}).get("countries", {}).get(tag)
+    return bool(c) and not c.get("capitulated")
+
+
 def policy_countries(me: gamestate.CountryState, snap: Dict) -> List[str]:
     """Countries that keep a policy toward the player, most important first (refreshes go in this order):
     neighbours, overlord and subjects, enemies, faction members, then the major powers."""
     majors = [t for t, c in snap["countries"].items() if c["major"]]
     order = me.neighbors + [me.overlord or ""] + me.subjects + me.enemies + me.faction_members + majors
-    return [t for t in dict.fromkeys(order) if t and t != me.tag and t in snap["countries"]]
+    return [t for t in dict.fromkeys(order) if t and t != me.tag and active(snap, t)]
 
 
 def relevance(me: gamestate.CountryState, tag: str) -> int:
@@ -570,7 +582,7 @@ class _Session:
             if player not in e["tags"]:
                 continue
             for other in e["tags"]:
-                if other != player and other in snap["countries"] and not self._cooling(camp, other, today):
+                if other != player and active(snap, other) and not self._cooling(camp, other, today):
                     self.pending[other] = (self.pending.get(other, "") + " " + e["text"]).strip()
         if self.pending:
             return
@@ -583,7 +595,7 @@ class _Session:
         for tag in list(camp.data.get("policies", {})):
             p = policy.current(camp, tag)
             own = [x for x in camp.letters_with(tag) if x.get("initiated")]
-            if (policy.wants_to_write(p) and tag in snap["countries"] and not self._cooling(camp, tag, today)
+            if (policy.wants_to_write(p) and active(snap, tag) and not self._cooling(camp, tag, today)
                     and (not own or own[-1]["date"] < p["date"])):
                 self.pending[tag] = ""
                 return
@@ -610,6 +622,8 @@ class _Session:
             return
         tag = next(iter(self.pending))
         reason = self.pending.pop(tag)
+        if not active(self.camp.snapshot, tag):
+            return                                     # capitulated (or gone) since it was queued
         write_first(self.camp, player, tag, reason)
 
 

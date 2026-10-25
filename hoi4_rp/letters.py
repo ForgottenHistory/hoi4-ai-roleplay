@@ -297,6 +297,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.save()
     rel = actions.relation(to, player)
     offers, asks = _proposals(camp, to, rel, key, reply=True)
+    actions.economy(them.name, me.name, rel)
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
                  + actions.proposal_help(them.name, me.name, offers, asks, expected=False)
                  + (f"\n{_COUNTER}" if offers or asks else "")
@@ -504,6 +505,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     pol = policy.current(camp, sender)
     rel = actions.relation(sender, player)
     offers, asks = _proposals(camp, sender, rel, key)
+    actions.economy(them.name, me.name, rel)
     steps = [k for k in (pol["breaks"] if pol else []) if actions.possible(rel, k)]
     if actions.possible(rel, "end:embargo") and "end:embargo" not in steps:
         steps.append("end:embargo")                       # lifting an embargo is always allowed

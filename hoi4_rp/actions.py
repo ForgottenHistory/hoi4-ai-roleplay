@@ -89,15 +89,27 @@ _CHECKS: Dict[str, Callable[[str, str], bool]] = {
 
 @dataclass
 class BorderState:
+    """A state its owner could trade (any but the capital), with what it is worth."""
     id: str
     name: str
     core: bool          # the other country holds a core on it
     claim: bool         # the other country claims it
+    own_core: bool = False    # the owner's own core land (heartland), not a colony or other non-core land
+    border: bool = False      # it borders the other country
+    civ: int = 0
+    mil: int = 0
+    pop_k: int = 0
+    resources: str = ""       # e.g. "oil 12, steel 4"
 
     def note(self, other_name: str) -> str:
-        bits = ([f"{other_name} holds a core there"] if self.core else []) + \
-               ([f"{other_name} claims it"] if self.claim else [])
-        return f"{self.name}" + (f" ({'; '.join(bits)})" if bits else "")
+        worth = [f"{self.civ} civilian / {self.mil} military factories", f"{self.pop_k:,}k people"]
+        if self.resources:
+            worth.append(self.resources)
+        bits = (["its own core land" if self.own_core else "not its core land (a colony or other holding)"]
+                + (["borders " + other_name] if self.border else ["does not border " + other_name])
+                + ([f"{other_name} holds a core there"] if self.core else [])
+                + ([f"{other_name} claims it"] if self.claim else []))
+        return f"{self.name} ({'; '.join(worth + bits)})"
 
 
 @dataclass
@@ -137,25 +149,35 @@ def bound_note(them_name: str, me_name: str, bound: str) -> str:
 _STATE_NAMES: Dict[str, str] = {}      # state id -> name, filled as border states are read
 
 
+_RESOURCES = ["oil", "aluminium", "rubber", "tungsten", "steel", "chromium"]
+_STATE_FLAGS = {"AIRPC": "core", "AIRPK": "claim", "AIRPO": "own_core", "AIRPN": "border"}
+
+
 def border_states(owner: str, other: str) -> Dict[str, BorderState]:
-    """`owner`'s states, other than its capital, that border `other`, with `other`'s cores and claims."""
+    """Every state `owner` could trade with `other` (all but its capital, near or far), with its worth and how it
+    stands: `owner`'s own core or not, bordering `other` or not, `other`'s cores and claims."""
     from .gamestate import query
-    eff = (f'{owner} = {{ every_owned_state = {{ limit = {{ is_capital = no any_neighbor_state = {{ is_owned_by = {other} }} }} '
-           f'log = "AIRPB|[THIS.GetID]|[THIS.GetName]" '
+    res = "|".join(f"[?THIS.resource@{r}]" for r in _RESOURCES)
+    eff = (f'{owner} = {{ every_owned_state = {{ limit = {{ is_capital = no }} '
+           f'log = "AIRPB|[THIS.GetID]|[THIS.GetName]|[?THIS.industrial_complex_level]|[?THIS.arms_factory_level]|'
+           f'[?THIS.state_population_k]|{res}" '
            f'if = {{ limit = {{ is_core_of = {other} }} log = "AIRPC|[THIS.GetID]" }} '
-           f'if = {{ limit = {{ is_claimed_by = {other} }} log = "AIRPK|[THIS.GetID]" }} }} }}')
+           f'if = {{ limit = {{ is_claimed_by = {other} }} log = "AIRPK|[THIS.GetID]" }} '
+           f'if = {{ limit = {{ is_core_of = {owner} }} log = "AIRPO|[THIS.GetID]" }} '
+           f'if = {{ limit = {{ any_neighbor_state = {{ is_owned_by = {other} }} }} log = "AIRPN|[THIS.GetID]" }} }} }}')
+    num = lambda x: int(float(x)) if x.strip().replace(".", "", 1).isdigit() else 0
     out: Dict[str, BorderState] = {}
     for line in query(eff):
         kind, _, rest = line.partition("|")
-        sid, _, name = rest.partition("|")
-        sid = sid.strip()
-        if kind == "AIRPB":
-            out[sid] = BorderState(sid, name.strip(), False, False)
-            _STATE_NAMES[sid] = name.strip()
-        elif kind == "AIRPC" and sid in out:
-            out[sid].core = True
-        elif kind == "AIRPK" and sid in out:
-            out[sid].claim = True
+        f = [x.strip() for x in rest.split("|")]
+        sid = f[0]
+        if kind == "AIRPB" and len(f) >= 5:
+            amounts = [num(x) for x in f[5:5 + len(_RESOURCES)]]
+            out[sid] = BorderState(sid, f[1], False, False, civ=num(f[2]), mil=num(f[3]), pop_k=num(f[4]),
+                                   resources=", ".join(f"{r} {a}" for r, a in zip(_RESOURCES, amounts) if a))
+            _STATE_NAMES[sid] = f[1]
+        elif sid in out and kind in _STATE_FLAGS:
+            setattr(out[sid], _STATE_FLAGS[kind], True)
     return out
 
 
@@ -273,8 +295,9 @@ UNILATERAL = [d.key for d in DEALS if d.key.startswith("end:") or d.key == "emba
 
 
 # ---------------------------------------------------------------- territory
-# "give:state:35": them cedes state 35 to me; "ask:state:34": them asks me to cede state 34. Only states that
-# border the other country and aren't a capital (Relation.them_border / me_border), and only in peace.
+# "give:state:35": them cedes state 35 to me; "ask:state:34": them asks me to cede state 34. Any state but the
+# capital, near or far (Relation.them_border / me_border, named for history: they hold every tradeable state, each
+# with its worth), and only in peace.
 #     A = { transfer_state = ID }      A becomes owner and controller of state ID (checked in game)
 
 _BORDER_INFO: Dict[str, BorderState] = {}       # territory key -> state info, from the latest relation()
@@ -286,9 +309,13 @@ SUBMIT_NOTE = ("Submission is the gravest step of all. A government offers it on
                "rulers truly want union, or it has no other way out. Never offer, demand or grant either lightly, "
                "or in the same breath as small favours.")
 
-TERRITORY_NOTE = ("Territory is a grave matter. A government cedes its own land only under real pressure, for "
-                  "something substantial in return, or where the other side holds a core; it demands land only "
-                  "where it has a core, a claim or real leverage. Real pressure counts: a country facing a far "
+TERRITORY_NOTE = ("Land differs. A country's own core land, its heartland, is a grave matter: ceded only under "
+                  "real pressure, for something substantial in return, or where the other side holds a core. A "
+                  "colony or other non-core holding can be sold or traded at a fair price, as states have always done "
+                  "(weigh its factories, people and resources against what is offered, and what is offered against "
+                  "your own economy). If an offer is substantial but not enough, haggle: ask for more, or for "
+                  "something alongside, rather than refuse outright. A government demands land only where it has a "
+                  "core, a claim or real leverage. Real pressure counts: a country facing a far "
                   "stronger neighbour that has shown it will use force, with no ally willing to fight for it, may "
                   "judge that giving up a province now saves the rest, as states have done throughout history; "
                   "a proud or reckless government may still refuse.")
@@ -316,6 +343,16 @@ FACTORY_NOTE = ("Factories are a nation's wealth and its power to arm: giving th
 
 
 FACTORY_KEYS = ("give:civ", "give:mil", "ask:civ", "ask:mil")   # amount chosen in the command
+ECONOMY: Dict[str, str] = {}   # {"text": both sides' industry} for the help of the letter being written (economy())
+
+
+def economy(them_name: str, me_name: str, rel: "Relation") -> str:
+    """Both sides' industry, so offers of land or factories can be weighed against what each has."""
+    t, m = rel.them_factories or {}, rel.me_factories or {}
+    ECONOMY["text"] = (f"Industry: you ({them_name}) have {t.get('civ', 0)} civilian and {t.get('mil', 0)} military "
+                       f"factories; {me_name} has {m.get('civ', 0)} civilian and {m.get('mil', 0)} military. Weigh "
+                       f"factories offered or asked as a share of what the giver has.")
+    return ECONOMY["text"]
 
 
 def is_factory_key(key: str) -> bool:
@@ -576,6 +613,8 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
         lines.append(FACTORY_NOTE + f" N is a whole number up to {MAX_FACTORIES}, at most what the giver has.")
     if any(is_state(k) for k in offers + asks):
         lines.append(TERRITORY_NOTE)
+    if any(is_state(k) or k in FACTORY_KEYS for k in offers + asks) and ECONOMY.get("text"):
+        lines.append(ECONOMY["text"])
     if any(k in offers + asks for k in ("give:submit", "ask:submit", "give:annex")):
         lines.append(SUBMIT_NOTE)
     return "\n".join(lines)

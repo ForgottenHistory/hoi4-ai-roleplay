@@ -32,7 +32,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import actions, bridge, campaign, chronicle, gamestate, leaders, llm, policy, style, subjects, world
+from . import actions, bridge, campaign, chronicle, gamestate, leaders, llm, policy, style, subjects, war, world
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -465,7 +465,7 @@ class _Session:
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
         self.pool = ThreadPoolExecutor(max_workers=1)  # policy refreshes: the slow LLM part runs here
-        self.policy_job: Optional[tuple] = None        # (tag, future, date key, actions.Relation, campaign id)
+        self.policy_job: Optional[tuple] = None   # (tag, future, date key, Relation, campaign id, basis, war baseline)
 
     def campaign_for(self, player: str, cid: int) -> campaign.Campaign:
         if not cid:
@@ -509,7 +509,7 @@ class _Session:
     # ---- neighbours' policies toward the player, refreshed one at a time in the background
     def policies(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:
         if self.policy_job:
-            tag, fut, key, rel, cid, basis = self.policy_job
+            tag, fut, key, rel, cid, basis, baseline = self.policy_job
             if not fut.done():
                 return
             self.policy_job = None
@@ -520,13 +520,16 @@ class _Session:
             except llm.LLMError as e:
                 print(f"  policy for {tag} failed: {e}")
                 return
-            p = policy.parse(text, rel)
+            p = policy.parse(text, rel, baseline)
             p.update(date=key, when=campaign.date_words(key), basis=basis)
             camp.data.setdefault("policies", {})[tag] = p
             camp.save()
             words = lambda keys: ", ".join(actions.word(k) for k in keys) or "none"
             print(f"  policy {tag} -> {player}: {p['stance']}, urgency {p['urgency']}, offers {words(p['offers'])}, "
                   f"asks {words(p['asks'])}, breaks {words(p['breaks'])}: {p['policy']}")
+            if p.get("war"):
+                print(f"    war stance {p['war']} (situation: {p['war_baseline']}): {p.get('war_why', '')} "
+                      f"Terms: {p.get('terms', '')}")
             return
         try:
             me = gamestate.country(player)
@@ -541,12 +544,16 @@ class _Session:
             except gamestate.StateError:
                 continue
             rel = actions.relation(tag, player)
+            baseline, war_part = None, ""
+            if player in them.enemies:
+                baseline, reasons = war.pressure(them, me, camp)
+                war_part = policy.war_instructions(them.name, me.name, baseline, reasons, war.separate_peace_note(them))
             messages = [{"role": "system", "content":
                          f"{_context(them, me, camp)}\n\nYOUR CORRESPONDENCE WITH {me.name.upper()}:\n"
-                         f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, rel)}"},
+                         f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, rel, war_part)}"},
                         {"role": "user", "content": f"State {them.name}'s policy toward {me.name} now."}]
             self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7), snap["date"], rel, camp.id,
-                               policy.basis(snap, tag, player))
+                               policy.basis(snap, tag, player), baseline)
             return
 
     # ---- who writes to the player on their own

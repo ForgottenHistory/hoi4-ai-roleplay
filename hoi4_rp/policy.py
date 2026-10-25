@@ -10,6 +10,11 @@ to a default, and only things possible right now are kept:
     ASKS: access                         agreements it would ask the player to grant it
     BREAKS: end access, embargo          agreements it means to end, or an embargo
     POLICY: Two or three sentences.
+At war with the player, three more (war.py):
+    WAR: seek peace                      fight on | open to terms | seek peace | any terms
+    WHY: One sentence: why, given who leads it.
+    TERMS: One sentence: what it would give up or demand.
+The war stance starts from a baseline the numbers set (war.pressure) and may move at most one step from it.
 
 It feeds every letter that country writes, decides who writes first when it's quiet (urgency), and holds
 what it may propose (Accept/Decline) or do on its own. Refreshed every REFRESH_DAYS of game time, or sooner
@@ -25,7 +30,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
-from . import actions
+from . import actions, war
 from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
@@ -35,7 +40,26 @@ TERRITORY_REFRESH_DAYS = 30   # states changing hands between the two refresh a 
 RELATION_TYPES = {"subject", "independence", "capitulation", "war", "peace", "country_gone", "country_new"}
 
 
-def instructions(them_name: str, me_name: str, rel: "actions.Relation") -> str:
+def war_instructions(them_name: str, me_name: str, baseline: int, reasons: List[str], note: str) -> str:
+    """The extra lines asked of a country at war with the player."""
+    lo, hi = max(0, baseline - 1), min(len(war.STANCES) - 1, baseline + 1)
+    allowed = war.STANCES[lo:hi + 1]
+    return (
+        f"\n\nYOU ARE AT WAR WITH {me_name.upper()}. Also decide how {them_name} means to end this war. The war "
+        f"situation points to: {war.STANCES[baseline].upper()} ({', '.join(reasons)}). Choose from "
+        f"{', '.join(allowed)}: the situation's stance, or one step from it if {them_name}'s leader, their traits, "
+        f"ideology and people would really take it differently (a fanatical regime may hold on a step longer; a "
+        f"government answerable to a war-weary public may sue a step sooner). Meanings: "
+        + "; ".join(f"{s}: {war.MEANING[s]}" for s in war.STANCES) + "."
+        + (f" {note}" if note else "")
+        + f"\nAdd these three lines:\n"
+        f"WAR: one of {', '.join(allowed)}\n"
+        f"WHY: one sentence on why, given who leads {them_name}\n"
+        f"TERMS: one sentence on what {them_name} would give up, or demand, to end the war"
+    )
+
+
+def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part: str = "") -> str:
     def words(keys: List[str]) -> str:
         return ", ".join(actions.described(k) for k in keys) or "(none possible right now)"
     gives = actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)
@@ -45,7 +69,7 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation") -> str:
         f"Decide {them_name}'s current foreign policy toward {me_name}, as {them_name}'s government would "
         f"see it today: its interests, fears, ideology, alliances, the situation above and what you remember. "
         f"This is internal policy, not a letter.\n\n"
-        f"Answer with exactly these six lines and nothing else:\n"
+        f"Answer with exactly these lines and nothing else:\n"
         f"STANCE: one of {', '.join(STANCES)}\n"
         f"URGENCY: 0 to 3, how pressing it is for {them_name} to contact {me_name} now "
         f"(0 nothing to say, 3 something must be said soon)\n"
@@ -58,6 +82,7 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation") -> str:
         f"it means to deal with them"
         + (f"\n\nStates are listed with their number (state N). {actions.TERRITORY_NOTE}"
            if rel.them_border or rel.me_border else "")
+        + war_part
     )
 
 
@@ -91,9 +116,10 @@ def _keys(value: str, allowed: List[str]) -> List[str]:
     return list(dict.fromkeys(out))
 
 
-def parse(text: str, rel: "actions.Relation") -> Dict:
+def parse(text: str, rel: "actions.Relation", war_baseline: Optional[int] = None) -> Dict:
     """Read the lines leniently. Unknown stances become 'indifferent', urgency is clamped to 0..3, and each
-    list keeps only deals possible right now."""
+    list keeps only deals possible right now. At war (war_baseline given), the war stance is kept within one step
+    of the baseline, and a country seeking peace has something urgent to say."""
     def line(key: str) -> str:
         # tolerate markdown (**Stance:**) and a dash instead of a colon
         m = re.search(rf"^[\W_]*{key}[*_\s]*[:\-–]+\s*(.+)$", text, re.I | re.M)
@@ -105,10 +131,19 @@ def parse(text: str, rel: "actions.Relation") -> Dict:
     urgency = max(0, min(3, int(m.group(0)))) if m else 0
     policy = line("policy")
     if not policy:          # tolerate a policy written as a paragraph after the other lines
-        rest = re.sub(r"^[\W_]*(stance|urgency|offers|asks|breaks)[*_\s]*[:\-–].*$", "", text,
+        rest = re.sub(r"^[\W_]*(stance|urgency|offers|asks|breaks|war|why|terms)[*_\s]*[:\-–].*$", "", text,
                       flags=re.I | re.M).strip()
         policy = re.sub(r"\s+", " ", rest)[:600]
+    out_war = {}
+    if war_baseline is not None:
+        got = war.parse_stance(line("war"))
+        level = war_baseline if got is None else max(war_baseline - 1, min(war_baseline + 1, got))
+        out_war = {"war": war.STANCES[level], "war_baseline": war.STANCES[war_baseline],
+                   "war_why": line("why"), "terms": line("terms")}
+        if level >= 2:
+            urgency = 3                                  # suing for peace is worth a letter
     return {
+        **out_war,
         "stance": stance, "urgency": urgency, "policy": policy,
         "offers": _keys(line("offers"), actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)),
         "asks": _keys(line("asks"), actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)),
@@ -127,8 +162,11 @@ def basis(snap: Optional[Dict], tag: str, player: str) -> str:
     if tag not in c or player not in c:
         return ""
     at_war = "|".join(sorted([tag, player])) in snap.get("wars", [])
-    return (f"{c[tag]['overlord']}/{c[player]['overlord']}/{'war' if at_war else 'peace'}/"
-            f"{int(c[tag]['capitulated'])}{int(c[player]['capitulated'])}")
+    out = (f"{c[tag]['overlord']}/{c[player]['overlord']}/{'war' if at_war else 'peace'}/"
+           f"{int(c[tag]['capitulated'])}{int(c[player]['capitulated'])}")
+    if at_war:   # a war that turns (surrender progress crossing a quarter on either side) needs a new stance
+        out += f"/{war.band(c[tag].get('surrender'))}{war.band(c[player].get('surrender'))}"
+    return out
 
 
 def stale(camp, tag: str) -> bool:
@@ -192,7 +230,14 @@ def describe(p: Optional[Dict], them_name: str, me_name: str) -> str:
         return ""
     def words(keys: List[str]) -> str:
         return ", ".join(actions.described(k) for k in keys) or "none"
-    return (f"YOUR CURRENT POLICY TOWARD {me_name.upper()} (set {p.get('when', p['date'])}): stance {p['stance']}. "
-            f"{p['policy']} Would be willing to offer them (not offered yet unless the letters show it): "
-            f"{words(p['offers'])}. Want from them: {words(p['asks'])}. "
-            f"Mean to end or impose: {words(p['breaks'])}.")
+    out = (f"YOUR CURRENT POLICY TOWARD {me_name.upper()} (set {p.get('when', p['date'])}): stance {p['stance']}. "
+           f"{p['policy']} Would be willing to offer them (not offered yet unless the letters show it): "
+           f"{words(p['offers'])}. Want from them: {words(p['asks'])}. "
+           f"Mean to end or impose: {words(p['breaks'])}.")
+    if p.get("war"):
+        out += (f"\nYOUR WAR STANCE: {p['war'].upper()}: {war.MEANING.get(p['war'], '')}."
+                + (f" {p['war_why']}" if p.get("war_why") else "")
+                + (f" Terms: {p['terms']}" if p.get("terms") else "")
+                + " Your letters follow this stance: the tone is yours, but don't vow to fight to the end while "
+                  "seeking peace, or beg for peace while meaning to fight on.")
+    return out

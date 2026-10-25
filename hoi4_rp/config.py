@@ -26,6 +26,7 @@ DEFAULTS = {
         "model": "xiaomi/mimo-v2.6-pro",
         "temperature": "0.9",
         "max_tokens": "1500",
+        "log_prompts": "no",
         "timeout": "120",
         "retries": "2",
     },
@@ -56,6 +57,7 @@ class LLMSettings:
     max_tokens: int
     timeout: float
     retries: int
+    log_prompts: bool     # keep every full prompt and reply in data/logs/prompts (for debugging)
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,7 @@ def settings() -> Settings:
             max_tokens=s.getint("max_tokens"),
             timeout=s.getfloat("timeout"),
             retries=s.getint("retries"),
+            log_prompts=s.getboolean("log_prompts"),
         ),
         letters=LetterSettings(
             incoming=lt.getboolean("incoming"),

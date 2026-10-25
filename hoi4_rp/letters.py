@@ -311,7 +311,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
                   + _conversation(camp, them, me, f"(Reply in {style.current().length}.)"))
-        raw = llm.chat(prompt)
+        raw = llm.chat(prompt, kind="reply", about=to)
     except llm.LLMError as e:
         print("  LLM error:", e)
         _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
@@ -528,7 +528,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
                                              f"Write your letter to them now, in {style.current().length}.)"}])
     try:
-        raw = llm.chat(prompt)
+        raw = llm.chat(prompt, kind="letter", about=sender)
     except llm.LLMError as e:
         print(f"  {sender} could not write (LLM error): {e}")
         return
@@ -785,7 +785,8 @@ class _Session:
             except gamestate.StateError:
                 ideologies = []
             msgs = reputation.judge_messages(camp, player, item, world.text(ideologies))
-        self.gm_job = (kind, item, self.gm_pool.submit(llm.chat, msgs, None, 0.3), camp.id)
+        about = item.get("to") or next((t for t in item.get("tags", []) if t != player), "")
+        self.gm_job = (kind, item, self.gm_pool.submit(llm.chat, msgs, None, 0.3, None, kind, about), camp.id)
 
     # ---- neighbours' policies toward the player, refreshed one at a time in the background
     def policies(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:
@@ -836,7 +837,8 @@ class _Session:
                          f"{_context(them, me, camp)}\n\nYOUR CORRESPONDENCE WITH {me.name.upper()}:\n"
                          f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, rel, war_part)}"},
                         {"role": "user", "content": f"State {them.name}'s policy toward {me.name} now."}]
-            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7), snap["date"], rel, camp.id,
+            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7, None, "policy", tag),
+                               snap["date"], rel, camp.id,
                                policy.basis(snap, tag, player), baseline)
             return
 

@@ -35,6 +35,26 @@ def date_key(date_text: str) -> str:
     return f"{int(year):04d}.{mon:02d}.{int(day):02d}.{int(hour):02d}"
 
 
+def save_key(raw: str) -> str:
+    """Save-format date '1939.9.1.12' -> '1939.09.01.12'."""
+    try:
+        y, m, d, h = (int(x) for x in (raw.split(".") + ["0"] * 4)[:4])
+        return f"{y:04d}.{m:02d}.{d:02d}.{h:02d}"
+    except ValueError:
+        return ""
+
+
+def shift(key: str, days: int) -> str:
+    """The date key `days` later (negative: earlier)."""
+    import datetime
+    try:
+        y, m, d, h = (int(x) for x in key.split(".")[:4])
+        t = datetime.date(y, m, d) + datetime.timedelta(days=days)
+        return f"{t.year:04d}.{t.month:02d}.{t.day:02d}.{h:02d}"
+    except ValueError:
+        return ""
+
+
 def date_words(key: str) -> str:
     """'1936.01.01.12' -> '1 January 1936'."""
     try:
@@ -93,6 +113,8 @@ class Campaign:
                 self.data["letters"][tag] = [x for x in letters if x["date"] <= key]
             self.data["policies"] = {t: p for t, p in self.data.get("policies", {}).items() if p["date"] <= key}
             self.data["refusals"] = [r for r in self.data.get("refusals", []) if r["date"] <= key]
+            self.data["surrender"] = {t: [x for x in h if x[0] <= key]
+                                      for t, h in self.data.get("surrender", {}).items()}
             offer = self.data.get("pending_offer")
             if offer and offer["date"] > key:
                 self.data["pending_offer"] = None
@@ -109,6 +131,23 @@ class Campaign:
     @snapshot.setter
     def snapshot(self, snap: Dict) -> None:
         self.data["snapshot"] = snap
+
+    def record_surrender(self, snap: Dict) -> None:
+        """Keep each warring country's surrender progress over time (only changes are stored)."""
+        hist = self.data.setdefault("surrender", {})
+        for tag, c in snap["countries"].items():
+            v = c.get("surrender")
+            if v is None:
+                continue
+            h = hist.setdefault(tag, [])
+            if not h or abs(h[-1][1] - v) >= 0.01:
+                h.append([snap["date"], round(v, 3)])
+                del h[:-100]
+
+    def surrender_at(self, tag: str, key: str) -> Optional[float]:
+        """Surrender progress as last recorded on or before `key`."""
+        h = [x for x in self.data.get("surrender", {}).get(tag, []) if x[0] <= key]
+        return h[-1][1] if h else None
 
     def add_events(self, events: List[Dict]) -> None:
         self.data["events"].extend(events)

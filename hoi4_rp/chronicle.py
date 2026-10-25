@@ -21,6 +21,7 @@ _EFFECT = (
     'if = { limit = { is_in_faction = yes } log = "F|[THIS.GetTag]|[THIS.GetFactionName]|[THIS.FactionLeader.GetTag]" } '
     'if = { limit = { is_subject = yes } log = "O|[THIS.GetTag]|[THIS.Overlord.GetTag]" } '
     'if = { limit = { has_capitulated = yes } log = "K|[THIS.GetTag]" } '
+    'if = { limit = { has_war = yes } log = "P|[THIS.GetTag]|[?THIS.surrender_progress]" } '
     'every_enemy_country = { log = "W|[PREV.GetTag]|[THIS.GetTag]" } '
     '} '
     'every_state = { log = "S|[THIS.GetID]|[THIS.GetName]|[THIS.Owner.GetTag]" }'
@@ -59,6 +60,11 @@ def snapshot(player: str) -> Dict:
             c[f[0]]["overlord"] = f[1]
         elif kind == "K" and f[0] in c:
             c[f[0]]["capitulated"] = True
+        elif kind == "P" and f[0] in c and len(f) >= 2:
+            try:
+                c[f[0]]["surrender"] = float(f[1])
+            except ValueError:
+                pass
         elif kind == "W" and len(f) >= 2:
             wars.add("|".join(sorted(f[:2])))
         elif kind == "S" and len(f) >= 3:

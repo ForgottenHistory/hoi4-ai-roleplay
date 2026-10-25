@@ -123,6 +123,30 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         (f" {comparison}" if comparison else "")
 
 
+def _war(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    """The war between the two, if any: who is winning, the facts, and how it has moved."""
+    if me.tag not in them.enemies:
+        return ""
+    lines = [gamestate.war_balance(them, me)]
+    today = campaign.date_key(them.date)
+    war = next((w for w in them.wars if w.enemy == me.tag), None)
+    start = campaign.save_key(war.start_date) if war and war.start_date else ""
+    if start and today:
+        months = (_days(today) - _days(start)) // 30
+        lines.append("The war began " + (f"{months} months ago." if months > 1 else "less than two months ago."))
+    for x in (them, me):
+        past = []
+        for label, days in (("a month ago", 30), ("three months ago", 90)):
+            then = campaign.shift(today, -days)
+            v = camp.surrender_at(x.tag, then) if start and then >= start else None
+            if v is not None:
+                past.append(f"{label} {round(v * 100)}%")
+        if past:
+            lines.append(f"{x.name}'s surrender progress {', '.join(past)}; now {round((x.surrender or 0) * 100)}%.")
+    lines.append("Your government knows all this. Whatever your tone, don't pretend the war stands otherwise.")
+    return "THE WAR BETWEEN YOU:\n" + "\n".join(lines)
+
+
 def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
     events = [e for e in camp.data["events"]
               if them.tag in e["tags"] or me.tag in e["tags"] or e.get("major")]
@@ -159,6 +183,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"YOUR COUNTRY:\n{gamestate.describe(them)}\n\n"
         f"THE COUNTRY YOU CORRESPOND WITH:\n{gamestate.describe(me)}\n\n"
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
+        + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")
         + (f"{pol}\n\n" if pol else "")
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
         f"{me.name}, or the major powers):\n{_memory(camp, them, me)}"
@@ -473,6 +498,7 @@ class _Session:
                     print(f"  [{e['when']}] {e['text']}")
                 camp.add_events(events)
             camp.snapshot = snap
+            camp.record_surrender(snap)
             camp.save()
             if old is not None:
                 self.plan_letters(camp, player, snap, events)

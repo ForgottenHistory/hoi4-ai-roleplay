@@ -121,6 +121,14 @@ class Wargoal:
 
 
 @dataclass
+class Occupied:
+    id: str
+    name: str
+    other: str                  # tag: who controls it (our state) or who owns it (a state we hold)
+    core: bool = False          # a core state of its owner (known for our own states)
+
+
+@dataclass
 class CountryState:
     tag: str
     date: str = ""
@@ -154,6 +162,13 @@ class CountryState:
     opinion: Dict[str, float] = field(default_factory=dict)   # this country's opinion of others (cached_sum)
     names: Dict[str, str] = field(default_factory=dict)       # display name of every tag above
     strength: Dict[str, float] = field(default_factory=dict)  # STRENGTH_FIELDS -> value (industry, army, manpower)
+    # At war only:
+    surrender: Optional[float] = None       # surrender progress 0..1 (1 = capitulation)
+    enemy_strength: Optional[float] = None  # its enemies' army strength relative to its own
+    core_states: int = 0                    # core states it owns
+    occupied: List[Occupied] = field(default_factory=list)   # its states someone else controls
+    holds: List[Occupied] = field(default_factory=list)      # others' states it controls
+    capital_held_by: str = ""               # tag holding its capital, if not itself
 
     def name_of(self, tag: Optional[str]) -> str:
         return self.names.get(tag, tag) if tag else ""
@@ -205,10 +220,30 @@ def _effect(tag: str) -> str:
         f'every_enemy_country = {{ log = "{p}enemy|{tn}" }}',
         f'every_neighbor_country = {{ log = "{p}neighbor|{tn}" }}',
         f'every_owned_state = {{ log = "{p}state|[THIS.GetID]|[THIS.GetName]" }}',
+        # The front (PREV inside a state loop is the country): surrender progress, enemy strength, occupation.
+        f'if = {{ limit = {{ has_war = yes }} '
+        f'log = "{p}war|[?THIS.surrender_progress]|[?THIS.enemies_strength_ratio]" '
+        f'set_temp_variable = {{ airp_cores = 0 }} '
+        f'every_owned_state = {{ limit = {{ is_core_of = PREV }} add_to_temp_variable = {{ airp_cores = 1 }} }} '
+        f'log = "{p}cores|[?airp_cores]" '
+        f'every_owned_state = {{ limit = {{ NOT = {{ is_controlled_by = PREV }} }} '
+        f'if = {{ limit = {{ is_core_of = PREV }} log = "{p}occupied|[THIS.GetID]|[THIS.GetName]|[THIS.Controller.GetTag]|[THIS.Controller.GetName]|core" }} '
+        f'else = {{ log = "{p}occupied|[THIS.GetID]|[THIS.GetName]|[THIS.Controller.GetTag]|[THIS.Controller.GetName]|" }} }} '
+        f'every_controlled_state = {{ limit = {{ NOT = {{ is_owned_by = PREV }} }} '
+        f'log = "{p}holds|[THIS.GetID]|[THIS.GetName]|[THIS.Owner.GetTag]|[THIS.Owner.GetName]" }} '
+        f'capital_scope = {{ if = {{ limit = {{ NOT = {{ is_controlled_by = PREV }} }} '
+        f'log = "{p}capital_held|[THIS.Controller.GetTag]|[THIS.Controller.GetName]" }} }} }}',
         # PREV inside the loop is the country being described.
         f'every_other_country = {{ limit = {{ has_wargoal_against = PREV }} log = "{p}wargoal_against|{tn}" }}',
     ]
     return f"{tag} = {{ {' '.join(lines)} }}"
+
+
+def _float(text: str) -> Optional[float]:
+    try:
+        return float(text.strip())
+    except ValueError:
+        return None
 
 
 def names_for(tags: List[str]) -> Dict[str, str]:
@@ -351,6 +386,19 @@ def country(tag: str) -> CountryState:
                     s.strength[name] = float(value.strip())
                 except ValueError:
                     pass
+        elif key == "war":
+            sp, _, esr = rest.partition("|")
+            s.surrender, s.enemy_strength = _float(sp), _float(esr)
+        elif key == "cores":
+            s.core_states = int(_float(rest) or 0)
+        elif key in ("occupied", "holds"):
+            sid, sname, otag, oname, core = (rest.split("|") + [""] * 5)[:5]
+            s.names[otag.strip()] = oname.strip() or otag.strip()
+            getattr(s, key).append(Occupied(sid.strip(), sname.strip(), otag.strip(), core.strip() == "core"))
+        elif key == "capital_held":
+            ctag, _, cname = rest.partition("|")
+            s.capital_held_by = ctag.strip()
+            s.names[s.capital_held_by] = cname.strip() or s.capital_held_by
         elif key == "wargoal_against":
             ctag, _, cname = rest.partition("|")
             s.names[ctag] = cname or ctag
@@ -465,6 +513,94 @@ def strength_text(s: CountryState) -> str:
             f"Manpower available to recruit: {_men(g('manpower_k'))}; population {_men(g('population_k'))}.")
 
 
+def _state_list(states: List[Occupied], limit: int = 12) -> str:
+    names = [x.name for x in states[:limit]]
+    return ", ".join(names) + (f" and {len(states) - limit} more" if len(states) > limit else "")
+
+
+def _by_other(states: List[Occupied]) -> Dict[str, List[Occupied]]:
+    out: Dict[str, List[Occupied]] = {}
+    for x in states:
+        out.setdefault(x.other, []).append(x)
+    return out
+
+
+def front_text(s: CountryState) -> str:
+    """How the country's wars stand for it: surrender progress, enemy strength, occupied land, the capital."""
+    if s.surrender is None:
+        return ""
+    out = [f"War situation: surrender progress {round(s.surrender * 100)}% (the game's measure of a country's "
+           f"collapse; at 100% it capitulates)."]
+    if s.enemy_strength:
+        out.append(f"Its enemies' armies together are {s.enemy_strength:.1f} times as strong as its own.")
+    if s.capital_held_by:
+        out.append(f"ITS CAPITAL {s.capital} IS OCCUPIED by {s.name_of(s.capital_held_by)}.")
+    if s.occupied:
+        cores = sum(x.core for x in s.occupied)
+        out.append(f"Occupied by others: {len(s.occupied)} of its {len(s.states)} states"
+                   + (f" ({cores} of its {s.core_states} core states)" if s.core_states else "") + ": "
+                   + "; ".join(f"{_state_list(xs)} held by {s.name_of(t)}" for t, xs in _by_other(s.occupied).items())
+                   + ".")
+    elif s.wars:
+        out.append("No enemy holds any of its land.")
+    if s.holds:
+        out.append(f"It occupies {len(s.holds)} states of other countries: "
+                   + "; ".join(f"{_state_list(xs)} of {s.name_of(t)}" for t, xs in _by_other(s.holds).items()) + ".")
+    return " ".join(out)
+
+
+def _war_score(x: CountryState, enemy: CountryState) -> float:
+    """How far `x` is beaten by `enemy` (the Simple Peace Deals mod's measure): its surrender progress, scaled by
+    the share of its occupied core land that the enemy and the enemy's allies hold."""
+    if not x.surrender:
+        return 0.0
+    lost = [o for o in x.occupied if o.core]
+    if not lost:
+        return x.surrender
+    side = {enemy.tag, *enemy.faction_members}
+    return x.surrender * sum(o.other in side for o in lost) / len(lost)
+
+
+def war_balance(a: CountryState, b: CountryState) -> str:
+    """Who is winning the war between a and b, from a's side, as a verdict and the facts behind it."""
+    if a.capitulated:
+        verdict = f"LOST: {a.name} has capitulated."
+    elif b.capitulated:
+        verdict = f"WON: {b.name} has capitulated."
+    else:
+        mine, theirs = _war_score(a, b), _war_score(b, a)
+        margin = mine - theirs
+        if (a.surrender or 0) >= 0.75 and margin > 0:
+            verdict = f"COLLAPSING: {a.name} is close to capitulation."
+        elif (b.surrender or 0) >= 0.75 and margin < 0:
+            verdict = f"WINNING DECISIVELY: {b.name} is close to capitulation."
+        elif margin >= 0.3:
+            verdict = f"LOSING BADLY: {a.name} is clearly losing the war."
+        elif margin >= 0.1:
+            verdict = f"LOSING: the war is going against {a.name}."
+        elif margin <= -0.3:
+            verdict = f"WINNING DECISIVELY: {a.name} is clearly winning the war."
+        elif margin <= -0.1:
+            verdict = f"WINNING: the war is going {a.name}'s way."
+        elif max(mine, theirs) < 0.05:
+            verdict = "UNDECIDED: neither side has gained much yet."
+        else:
+            verdict = "EVEN: neither side has the upper hand."
+    held_by_b = [x for x in a.occupied if x.other == b.tag]
+    held_by_a = [x for x in b.occupied if x.other == a.tag]
+    facts = [f"Surrender progress: {a.name} {round((a.surrender or 0) * 100)}%, "
+             f"{b.name} {round((b.surrender or 0) * 100)}%."]
+    facts.append(f"{b.name} holds {len(held_by_b)} of {a.name}'s states"
+                 + (f" ({_state_list(held_by_b)})" if held_by_b else "")
+                 + f"; {a.name} holds {len(held_by_a)} of {b.name}'s"
+                 + (f" ({_state_list(held_by_a)})" if held_by_a else "") + ".")
+    if a.capital_held_by == b.tag:
+        facts.append(f"{b.name} holds {a.name}'s capital.")
+    if b.capital_held_by == a.tag:
+        facts.append(f"{a.name} holds {b.name}'s capital.")
+    return f"Verdict for {a.name}: {verdict} " + " ".join(facts)
+
+
 def strength_comparison(a: CountryState, b: CountryState) -> str:
     """One line comparing two countries' factories, divisions and deployed soldiers."""
     if not a.strength or not b.strength:
@@ -526,6 +662,9 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
                    if w.our_casualties or w.their_casualties else "")
             wars.append(f"{s.name_of(w.enemy)} ({how}{since}{cas})")
         lines.append("At war with: " + "; ".join(wars) + ".")
+        front = front_text(s)
+        if front:
+            lines.append(front)
     else:
         lines.append("At peace.")
     if s.wargoals:

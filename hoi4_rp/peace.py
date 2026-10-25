@@ -66,6 +66,7 @@ def make(me: str, other: str) -> Optional[str]:
         print("  peace: could not read the countries:", e)
         return None
     margin, line = estimate(a, b)
+    # Checked in game: the scope country is the winner and `tag` the loser (whatever ROOT is).
     winner, loser = (me, other) if margin >= 0 else (other, me)
     reply = bridge.send(f"eval_effect {winner} = {{ start_peace_conference = {{ tag = {loser} "
                         f"score_factor = {abs(margin):.3f} }} }}")[0]

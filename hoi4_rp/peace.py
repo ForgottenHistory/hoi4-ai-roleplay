@@ -7,8 +7,7 @@ the share of its occupied core land the other side and its allies hold. The side
 is its share of the conference score (0 = white peace). The offer shows that number, and accepting uses it.
 
 When peace can be made (possible()):
-    at war with each other, for at least the minimum war length (config [letters] peace_min_months; auto = 3
-    months, 6 if one side is a major power, 12 if both are)
+    at war with each other (for any length of time: how long it has lasted is in the war context, letters._war)
     neither is a subject (its overlord decides) and both lead their faction or are in none
     not a civil war
 """
@@ -18,35 +17,24 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 from . import bridge, gamestate
-from .config import settings
 
 
 def _trigger(script: str) -> bool:
     return bridge.send(f"eval_trigger {script}")[0].rstrip().endswith("yes")
 
 
-def min_months(me: str, other: str) -> int:
-    configured = settings().letters.peace_min_months
-    if configured.isdigit():
-        return int(configured)
-    majors = sum(_trigger(f"{t} = {{ is_major = yes }}") for t in (me, other))
-    return (3, 6, 12)[majors]
-
-
 def possible(me: str, other: str) -> bool:
     """Peace can be made between the two right now (see the module notes)."""
-    n = min_months(me, other)
     side = lambda enemy: (f"is_subject = no OR = {{ is_faction_leader = yes is_in_faction = no }} "
                           f"NOT = {{ civilwar_target = {enemy} }}")
-    return _trigger(f"{me} = {{ has_war_with = {other} war_length_with = {{ tag = {other} months > {n - 1} }} "
-                    f"{side(other)} {other} = {{ {side(me)} }} }}")
+    return _trigger(f"{me} = {{ has_war_with = {other} {side(other)} {other} = {{ {side(me)} }} }}")
 
 
 def blocker(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
     """Why the two can't make peace right now, in words for the other side (empty if they can, or aren't at war)."""
     if me.tag not in them.enemies:
         return ""
-    for x, y in ((them, me), (me, them)):
+    for x in (them, me):
         if x.overlord:
             return (f"{x.name} is a subject of {x.name_of(x.overlord)}, so peace between you can only come through "
                     f"{x.name_of(x.overlord)}")
@@ -55,11 +43,6 @@ def blocker(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
                     f"{x.name_of(x.faction_leader)}")
     if _trigger(f"{me.tag} = {{ OR = {{ civilwar_target = {them.tag} {them.tag} = {{ civilwar_target = {me.tag} }} }} }}"):
         return "this is a civil war: it ends only when one side is gone"
-    n = min_months(me.tag, them.tag)
-    if not _trigger(f"{me.tag} = {{ war_length_with = {{ tag = {them.tag} months > {n - 1} }} }}"):
-        war = next((w for w in them.wars if w.enemy == me.tag), None)
-        since = f" (it began {gamestate.save_date(war.start_date)})" if war and war.start_date else ""
-        return f"this war is too young: peace can be made only once it has lasted {n} months{since}"
     return ""
 
 

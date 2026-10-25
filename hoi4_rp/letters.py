@@ -124,6 +124,15 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         (f" {comparison}" if comparison else "")
 
 
+def _ago(days: int) -> str:
+    """12 -> '12 days ago', 45 -> '6 weeks ago', 400 -> '13 months ago'."""
+    if days < 14:
+        return "today" if days <= 0 else f"{days} day{'s' if days > 1 else ''} ago"
+    if days < 60:
+        return f"{days // 7} weeks ago"
+    return f"{days // 30} months ago"
+
+
 def _war(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
     """The war between the two, if any: who is winning, the facts, and how it has moved."""
     if me.tag not in them.enemies:
@@ -133,8 +142,7 @@ def _war(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.Co
     war = next((w for w in them.wars if w.enemy == me.tag), None)
     start = campaign.save_key(war.start_date) if war and war.start_date else ""
     if start and today:
-        months = (_days(today) - _days(start)) // 30
-        lines.append("The war began " + (f"{months} months ago." if months > 1 else "less than two months ago."))
+        lines.append(f"The war began {_ago(_days(today) - _days(start))}, on {campaign.date_words(start)}.")
     for x in (them, me):
         past = []
         for label, days in (("a month ago", 30), ("three months ago", 90)):

@@ -63,23 +63,37 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
     p = name(player)
     old_ties, new_ties = old.get("ties") or {}, new.get("ties") or {}
     deeds: List[Dict] = []
+    oc = old["countries"]
+    lord_of = lambda t: (oc.get(t) or nc.get(t) or {}).get("overlord", "")
+    batch = {(e["type"], t) for e in events if player in e["tags"] for t in e["tags"] if t != player}
+    # A subject at war or peace together with its overlord in the same moment: one deed, the overlord's.
+    with_lord = lambda kind, t: bool(lord_of(t)) and (kind, lord_of(t)) in batch
 
     for e in events:
         if player not in e["tags"]:
             continue
         other = next((t for t in e["tags"] if t != player), "")
+        if e["type"] in ("war", "peace") and with_lord(e["type"], other):
+            continue
         if e["type"] == "war" and other:
             if bridge.trigger(f"{player} = {{ has_offensive_war_with = {other} }}"):
                 ties = [TIE_WORDS[k].format(p=p, o=name(other)) for k in old_ties.get(other, []) if k in TIE_WORDS]
                 deals = [x["text"] for x in camp.data["events"]
                          if other in x["tags"] and player in x["tags"] and x.get("type", "").startswith(_DEAL_TYPES)
                          and campaign.shift(new["date"], -730) <= x["date"]]
-                goal = bridge.trigger(f"{player} = {{ has_wargoal_against = {other} }}")
+                # The war goal as it stood before the war (declaring may use it up), else as it stands now.
+                before = old_ties.get(other, [])
+                goal = ("my_wargoal" in before or "my_justifying" in before
+                        or bridge.trigger(f"{player} = {{ has_wargoal_against = {other} }}"))
+                drawn = [name(t) for (kind, t) in batch if kind == "war" and lord_of(t) == other]
                 facts = (f"{p} declared war on {name(other)}."
+                         + (f" Its subjects {', '.join(drawn)} were drawn in with it." if drawn else "")
                          + (f" Just before, there was {'; '.join(ties)}." if ties else
                             " Nothing bound the two by treaty just before.")
                          + (f" Deals between them in the last two years: {' '.join(deals)}" if deals else "")
-                         + (f" {p} held a war goal against {name(other)}." if goal else
+                         + ((f" {p} was still justifying a war goal against {name(other)}, not yet complete."
+                             if "my_justifying" in before and "my_wargoal" not in before else
+                             f" {p} held a war goal against {name(other)}.") if goal else
                             f" {p} held no war goal against {name(other)}."))
                 deeds.append(_deed(new, [player, other], facts))
             else:
@@ -91,12 +105,16 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
                                            f"whose independence it had guaranteed."))
                         break
         elif e["type"] == "peace" and e["text"].startswith("Peace between"):
-            deeds.append(_deed(new, [player, other], e["text"]))
+            subs = [x["text"] for x in events if x["type"] == "peace" and x["text"].startswith("Peace between")
+                    and player in x["tags"] and any(lord_of(t) == other for t in x["tags"] if t != player)]
+            deeds.append(_deed(new, [player, other], " ".join([e["text"]] + subs)))
 
     at_war = lambda t: "|".join(sorted([player, t])) in new.get("wars", [])
     for other, kinds in old_ties.items():
         if other not in nc or at_war(other) or nc[other].get("overlord") == player:
             continue
+        if {"faction", "subject"} & set(new_ties.get(other, [])):
+            continue                     # joined the player's faction or became its subject: nothing was broken
         for kind in ("my_guarantee", "pact"):
             if kind in kinds and kind not in new_ties.get(other, []):
                 # A pact the other side ended by letter isn't the player's doing; a guarantee only the player ends.

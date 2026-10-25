@@ -41,6 +41,7 @@ DEFAULTS = {
     "world": {
         "setting": "auto",
         "lore_file": "",
+        "game_dir": "",
     },
 }
 
@@ -71,6 +72,7 @@ class LetterSettings:
 class WorldSettings:
     setting: str          # auto | vanilla | kaiserreich
     lore_file: str        # optional text file with extra setting notes
+    game_dir: str         # HOI4 install folder (found automatically when empty)
 
 
 @dataclass(frozen=True)
@@ -111,5 +113,6 @@ def settings() -> Settings:
         world=WorldSettings(
             setting=(w.get("setting") or "auto").strip().lower(),
             lore_file=(w.get("lore_file") or "").strip(),
+            game_dir=(w.get("game_dir") or "").strip(),
         ),
     )

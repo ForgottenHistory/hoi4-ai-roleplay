@@ -4,6 +4,8 @@
    python -m hoi4_rp run         answer letters and keep the world chronicle (keep running while playing;
                                  `letters` is the same)
    python -m hoi4_rp llm "text"  send one message to the LLM (NanoGPT) and print the reply
+   python -m hoi4_rp subjects [TAG]  list the subject levels the game and mods define, or one subject's
+                                 level, the levels open to it and its progress
 """
 
 import sys
@@ -50,6 +52,20 @@ if __name__ == "__main__":
         s = gamestate.country(tag)
         print(f"[{s.date}]")
         print(gamestate.describe(s))
+        sys.exit(0)
+    if cmd == "subjects":
+        from . import gamestate, subjects
+        if len(sys.argv) > 2:
+            s = gamestate.country(sys.argv[2])
+            if not s.overlord:
+                print(f"{s.name} is not a subject")
+                sys.exit(1)
+            print(subjects.relation_text(s.tag, s.name, s.overlord, s.name_of(s.overlord),
+                                         s.autonomy.get(s.overlord, "")))
+            sys.exit(0)
+        print(f"game folder: {subjects.game_dir()}")
+        for lv in sorted(subjects.levels().values(), key=lambda lv: lv.freedom):
+            print(f"{lv.freedom:.2f}  {lv.name} ({lv.id}): {subjects.rules_text(lv.id, 'it', 'the overlord')}")
         sys.exit(0)
     if cmd in ("run", "letters"):
         from . import letters

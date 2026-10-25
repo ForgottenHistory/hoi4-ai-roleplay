@@ -14,6 +14,7 @@ Standalone project. It needs only:
     python -m hoi4_rp run         # answer letters + keep the world chronicle (keep it running while you play)
     python -m hoi4_rp state [TAG] # print a country's live game state
     python -m hoi4_rp llm "hi"    # send one message to the LLM and print the reply
+    python -m hoi4_rp subjects [TAG]  # subject levels from the game and mod files, or one subject's level and progress
 
 Settings live in `config.ini` (model, endpoint, temperature, limits). It's your personal copy and
 git-ignored; on first run it's created from `config.example.ini`. The LLM runs through NanoGPT; the

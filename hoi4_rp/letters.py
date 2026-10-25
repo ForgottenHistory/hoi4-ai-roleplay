@@ -31,7 +31,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import actions, bridge, campaign, chronicle, gamestate, llm, policy, style, world
+from . import actions, bridge, campaign, chronicle, gamestate, llm, policy, style, subjects, world
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -99,11 +99,8 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         facts.append("They share a border.")
     def subject(sub: gamestate.CountryState, lord: gamestate.CountryState) -> str:
         level = sub.autonomy.get(lord.tag) or lord.autonomy.get(sub.tag) or ""
-        return (f"{sub.name} is a SUBJECT (puppet) of {lord.name}"
-                + (f" (autonomy level: {level.replace('_', ' ')})" if level else "")
-                + f": it is not independent. {lord.name} directs its foreign policy and it follows {lord.name} "
-                  f"into war and peace; it cannot ally with or fight anyone against {lord.name}'s will. "
-                  f"Whatever {sub.name} wrote or felt before this came about, this is its situation now.")
+        detail = subjects.relation_text(sub.tag, sub.name, lord.tag, lord.name, level) if level else ""
+        return f"{sub.name} is a SUBJECT of {lord.name}, not an independent country. {detail}".strip()
     if them.overlord == me.tag:
         facts.append(subject(them, me))
     if me.overlord == them.tag:

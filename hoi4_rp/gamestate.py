@@ -150,7 +150,7 @@ class CountryState:
     wars: List[War] = field(default_factory=list)             # one per enemy, with direction and start
     wargoals: List[Wargoal] = field(default_factory=list)     # justified against others
     wargoals_against: List[Wargoal] = field(default_factory=list)  # others' wargoals against us
-    autonomy: Dict[str, str] = field(default_factory=dict)    # subject or overlord tag -> autonomy state
+    autonomy: Dict[str, str] = field(default_factory=dict)    # subject or overlord tag -> subject level id
     opinion: Dict[str, float] = field(default_factory=dict)   # this country's opinion of others (cached_sum)
     names: Dict[str, str] = field(default_factory=dict)       # display name of every tag above
     strength: Dict[str, float] = field(default_factory=dict)  # STRENGTH_FIELDS -> value (industry, army, manpower)
@@ -273,9 +273,8 @@ def _diplomacy(s: CountryState, block: str) -> None:
         if pm:
             pup = rel[pm.end():_walk(rel, pm.end()) - 1]
             first, second = _field(pup, "first"), _field(pup, "second")
-            state = (_field(pup, "autonomy_state") or "").replace("autonomy_", "")
             if s.tag in (first, second):
-                s.autonomy[second if first == s.tag else first] = state
+                s.autonomy[second if first == s.tag else first] = _field(pup, "autonomy_state") or ""
     dipl = _sub_block(block, "diplomacy", 2) or ""
     for wg in re.finditer(r'wargoaldata_actor="([A-Z0-9]{3})"\s*wargoaldata_recipient="([A-Z0-9]{3})"\s*type=(\w+)',
                           _sub_block(dipl, "wargoals", 3) or ""):
@@ -287,6 +286,13 @@ def _diplomacy(s: CountryState, block: str) -> None:
             continue
         war = _war(_relations(bridge.country_block(enemy)).get(s.tag, ""), s.tag)
         s.wars.append(war or War(enemy=enemy, we_attacked=False, start_date=""))
+
+
+def _diplomacy_level(s: CountryState) -> None:
+    rel = _relations(bridge.country_block(s.overlord)).get(s.tag, "")
+    pup = re.search(r"\bpuppet=\{", rel)
+    if pup:
+        s.autonomy[s.overlord] = _field(rel[pup.end():_walk(rel, pup.end()) - 1], "autonomy_state") or ""
 
 
 def _named(ids: List[str], hide_missing: bool) -> List[Named]:
@@ -365,6 +371,8 @@ def country(tag: str) -> CountryState:
     focus_block = _sub_block(block, "focus", 2) or ""
     s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
     _diplomacy(s, block)
+    if s.overlord and s.overlord not in s.autonomy:      # the relation is kept in the overlord's block
+        _diplomacy_level(s)
     s.names.update(names_for([w.other for w in s.wargoals if w.other not in s.names]))
     return s
 
@@ -497,12 +505,15 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
                      f"members {s.names_of(s.faction_members)}).")
     else:
         lines.append("Not in any faction.")
-    auto = lambda t: f" ({s.autonomy[t].replace('_', ' ')})" if s.autonomy.get(t) else ""
+    from . import subjects
+    auto = lambda t: f" ({subjects.name(s.autonomy[t])})" if s.autonomy.get(t) else ""
     if s.overlord:
-        lines.append(f"NOT INDEPENDENT: a subject (puppet) of {s.name_of(s.overlord)}{auto(s.overlord)}, which "
-                     f"controls its foreign policy.")
+        lvl = s.autonomy.get(s.overlord, "")
+        rules = subjects.rules_text(lvl, s.name, s.name_of(s.overlord)) if lvl else ""
+        lines.append(f"NOT INDEPENDENT: a subject of {s.name_of(s.overlord)}{auto(s.overlord)}. " + (rules or ""))
     if s.subjects:
-        lines.append("Subjects (puppets it controls): " + ", ".join(s.name_of(t) + auto(t) for t in s.subjects) + ".")
+        lines.append("Subjects it controls, with their level: "
+                     + "; ".join(s.name_of(t) + auto(t) for t in s.subjects) + ".")
     if s.capitulated:
         lines.append("HAS CAPITULATED: its armies are beaten and its government has surrendered or fled; it can no "
                      "longer resist, and the winners will decide its fate at the peace.")

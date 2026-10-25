@@ -38,6 +38,8 @@ from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
 POLL_SECONDS = 0.5
 CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded when the date moved)
+IDLE_SECONDS = 600        # game date still this long (paused, player away): no background LLM work, no letters
+RETRY_SECONDS = 60        # after a failed background LLM call, wait this long before the next one
 
 
 def read_outbox(block: str) -> Optional[str]:
@@ -575,6 +577,23 @@ class _Session:
         self.policy_job: Optional[tuple] = None   # (tag, future, date key, Relation, campaign id, basis, war baseline)
         self.gm_pool = ThreadPoolExecutor(max_workers=1)   # the reputation game master's LLM calls
         self.gm_job: Optional[tuple] = None       # (kind, item, future, campaign id)
+        self.date_seen = ""                       # the game date at the last snapshot
+        self.active_at = time.monotonic()         # when the date last moved or the player last wrote
+        self.retry_at = 0.0                       # no background LLM call before this (after a failure)
+        self.was_idle = False
+
+    def idle(self) -> bool:
+        """The game date hasn't moved for IDLE_SECONDS: paused, maybe with nobody there. Background AI work
+        (policies, the game master, letters countries start) waits; the player's own letters are still answered."""
+        idle = time.monotonic() - self.active_at > IDLE_SECONDS
+        if idle != self.was_idle:
+            print("game paused for a while: background AI work paused" if idle else "background AI work resumed")
+            self.was_idle = idle
+        return idle
+
+    def failed(self) -> None:
+        """A background LLM call failed: back off before the next one."""
+        self.retry_at = time.monotonic() + RETRY_SECONDS
 
     def campaign_for(self, player: str, cid: int) -> campaign.Campaign:
         if not cid:
@@ -598,6 +617,8 @@ class _Session:
         # Cheap, and repeating it covers a restarted game.
         bridge.send(f"bridge.editbox.multiline {EDITBOX_NAME}", f"bridge.editbox.mirror {EDITBOX_NAME} {PAGE_NAME}")
         snap = chronicle.snapshot(player)
+        if snap["date"] != self.date_seen:
+            self.date_seen, self.active_at = snap["date"], now
         camp = self.campaign_for(player, snap["campaign"])
         if camp.at(snap["date"]):
             print(f"{campaign.date_words(snap['date'])}: an earlier save was loaded; later memories dropped")
@@ -615,8 +636,9 @@ class _Session:
             camp.save()
             if old is not None:
                 self.plan_letters(camp, player, snap, events)
-        self.policies(camp, player, snap)
-        self.game_master(camp, player, snap)
+        if not self.idle() and time.monotonic() >= self.retry_at:
+            self.policies(camp, player, snap)
+            self.game_master(camp, player, snap)
         return camp
 
     # ---- the reputation game master: reads promises in the player's letters and judges deeds, in the background
@@ -634,6 +656,7 @@ class _Session:
                 text = fut.result()
             except llm.LLMError as e:
                 print(f"  game master failed: {e}")
+                self.failed()
                 return
             if kind == "promises":
                 found = reputation.read_promises(text)
@@ -676,6 +699,7 @@ class _Session:
                 text = fut.result()
             except llm.LLMError as e:
                 print(f"  policy for {tag} failed: {e}")
+                self.failed()
                 return
             p = policy.parse(text, rel, baseline)
             p.update(date=key, when=campaign.date_words(key), basis=basis)
@@ -763,7 +787,7 @@ class _Session:
 
     def deliver(self, player: str, block: str) -> None:
         """Let one waiting country write, if the player isn't reading or awaiting a letter."""
-        if not self.pending or not self.camp:
+        if not self.pending or not self.camp or self.idle():
             return
         if re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
             return
@@ -798,6 +822,7 @@ def run() -> int:
                     print("letter recipient decoded as the player's own country; check on_sent_effect scopes")
                     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from }}")
                 elif to and text.strip():
+                    session.active_at = time.monotonic()      # the player is here
                     handle_letter(session.chronicle(player, force=True), player, to, text)
                 else:
                     print("empty letter; nothing to answer")

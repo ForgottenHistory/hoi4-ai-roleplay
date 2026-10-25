@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from . import bridge
+from . import bridge, leaders
 
 IDEOLOGIES = ["democratic", "communism", "fascism", "neutrality"]       # vanilla ideology groups
 _PARTY_PROPS = {"democratic": "Democratic", "communism": "Communist", "fascism": "Fascist", "neutrality": "Neutral"}
@@ -171,6 +171,7 @@ class CountryState:
     occupied: List[Occupied] = field(default_factory=list)   # its states someone else controls
     holds: List[Occupied] = field(default_factory=list)      # others' states it controls
     capital_held_by: str = ""               # tag holding its capital, if not itself
+    leader_info: Optional["leaders.Leader"] = None   # the leader as a person (leaders.py)
 
     def name_of(self, tag: Optional[str]) -> str:
         return self.names.get(tag, tag) if tag else ""
@@ -429,6 +430,10 @@ def country(tag: str) -> CountryState:
     m = re.search(r"\n\t\t\tpolitical_power=(-?[\d.]+)", politics)
     s.political_power = float(m.group(1)) if m else None
     s.parties = _parties(tag, politics, parties, s.leader)
+    try:
+        s.leader_info = leaders.current(tag, politics)
+    except StateError:
+        pass
     s.ideas = _named((_sub_block(politics, "ideas", 3) or "").split(), hide_missing=True)
     focus_block = _sub_block(block, "focus", 2) or ""
     s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
@@ -652,6 +657,9 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
             + (f", led by {p.leader}" if p.leader else "") + (", in power" if p.ruling else "") + ")"
             for p in s.parties) + ".",
     ]
+    who = leaders.describe(s.leader_info)
+    if who:
+        lines.append(who)
     ruling = next((p for p in s.parties if p.ruling and p.description), None)
     if ruling and details:
         lines.append(f"About the ruling party, {ruling.name}: {ruling.description}")

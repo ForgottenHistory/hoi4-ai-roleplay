@@ -25,13 +25,14 @@ letter it starts can carry one offer, shown with Accept/Decline (airp_offer / ai
 from __future__ import annotations
 
 import random
+import threading
 import re
 import time
 import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import actions, bridge, campaign, chronicle, gamestate, llm, policy, style, subjects, world
+from . import actions, bridge, campaign, chronicle, gamestate, leaders, llm, policy, style, subjects, world
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -608,6 +609,8 @@ class _Session:
 def run() -> int:
     print(f"watching for letters and world events (model {llm.model()}). Ctrl+C to stop.")
     session = _Session()
+    # Leader biographies are indexed from the game and mod files (several seconds for big mods): do it now.
+    threading.Thread(target=leaders.warm, daemon=True).start()
     while True:
         try:
             player = bridge.player_tag()

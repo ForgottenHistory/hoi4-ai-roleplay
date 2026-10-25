@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from . import bridge, gamestate
 
@@ -91,7 +91,8 @@ _CHECKS: Dict[str, Callable[[str, str], bool]] = {
 
 @dataclass
 class BorderState:
-    """A state its owner could trade (any but the capital), with what it is worth."""
+    """A state of its owner, with what it is worth. Any but the capital can be ceded; resource rights may be
+    given in the capital too."""
     id: str
     name: str
     core: bool          # the other country holds a core on it
@@ -102,12 +103,14 @@ class BorderState:
     mil: int = 0
     pop_k: int = 0
     resources: str = ""       # e.g. "oil 12, steel 4"
+    capital: bool = False
 
     def note(self, other_name: str) -> str:
         worth = [f"{self.civ} civilian / {self.mil} military factories", f"{self.pop_k:,}k people"]
         if self.resources:
             worth.append(self.resources)
-        bits = (["its own core land" if self.own_core else "not its core land (a colony or other holding)"]
+        bits = ((["its capital"] if self.capital else [])
+                + ["its own core land" if self.own_core else "not its core land (a colony or other holding)"]
                 + (["borders " + other_name] if self.border else ["does not border " + other_name])
                 + ([f"{other_name} holds a core there"] if self.core else [])
                 + ([f"{other_name} claims it"] if self.claim else []))
@@ -131,6 +134,8 @@ class Relation:
     me_factories: Dict[str, int] = None
     them_parties: Dict[str, str] = None    # parties not in power: ideology id -> "Name (ideology)" (set_parties)
     me_parties: Dict[str, str] = None
+    them_rights: Set[str] = None    # them's states whose resource rights I already hold
+    me_rights: Set[str] = None      # my states whose resource rights them already holds
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -154,17 +159,18 @@ _STATE_NAMES: Dict[str, str] = {}      # state id -> name, filled as border stat
 
 
 _RESOURCES = ["oil", "aluminium", "rubber", "tungsten", "steel", "chromium"]
-_STATE_FLAGS = {"AIRPC": "core", "AIRPK": "claim", "AIRPO": "own_core", "AIRPN": "border"}
+_STATE_FLAGS = {"AIRPC": "core", "AIRPK": "claim", "AIRPO": "own_core", "AIRPN": "border", "AIRPX": "capital"}
 
 
 def border_states(owner: str, other: str) -> Dict[str, BorderState]:
-    """Every state `owner` could trade with `other` (all but its capital, near or far), with its worth and how it
-    stands: `owner`'s own core or not, bordering `other` or not, `other`'s cores and claims."""
+    """Every state of `owner`, near or far, with its worth and how it stands: `owner`'s own core or not, its
+    capital, bordering `other` or not, `other`'s cores and claims."""
     from .gamestate import query
     res = "|".join(f"[?THIS.resource@{r}]" for r in _RESOURCES)
-    eff = (f'{owner} = {{ every_owned_state = {{ limit = {{ is_capital = no }} '
+    eff = (f'{owner} = {{ every_owned_state = {{ '
            f'log = "AIRPB|[THIS.GetID]|[THIS.GetName]|[?THIS.industrial_complex_level]|[?THIS.arms_factory_level]|'
            f'[?THIS.state_population_k]|{res}" '
+           f'if = {{ limit = {{ is_capital = yes }} log = "AIRPX|[THIS.GetID]" }} '
            f'if = {{ limit = {{ is_core_of = {other} }} log = "AIRPC|[THIS.GetID]" }} '
            f'if = {{ limit = {{ is_claimed_by = {other} }} log = "AIRPK|[THIS.GetID]" }} '
            f'if = {{ limit = {{ is_core_of = {owner} }} log = "AIRPO|[THIS.GetID]" }} '
@@ -198,7 +204,8 @@ def relation(them: str, me: str) -> Relation:
                     them_subject=bridge.trigger(f"{them} = {{ is_subject = yes }}"),
                     me_subject=bridge.trigger(f"{me} = {{ is_subject = yes }}"),
                     them_subjects=subjects_of(them), me_subjects=subjects_of(me),
-                    them_factories=factory_counts(them), me_factories=factory_counts(me))
+                    them_factories=factory_counts(them), me_factories=factory_counts(me),
+                    them_rights=rights_held(me, them), me_rights=rights_held(them, me))
 
 
 # ---------------------------------------------------------------- deals
@@ -327,6 +334,47 @@ TERRITORY_NOTE = ("Land differs. A country's own core land is dear: ceded at a h
 
 def is_state(key: str) -> bool:
     return key.startswith(("give:state:", "ask:state:"))
+
+
+# ---------------------------------------------------------------- resource rights
+# "give:rights:46": them gives me the rights to the resources of its state 46 (the output ships to me, the land
+# stays theirs); "ask:rights:12": them asks me for mine. Any tradeable state with resources, in peace, without end.
+#     GIVER = { give_resource_rights = { receiver = RECEIVER state = ID } }     (checked in game: no end date)
+#     RECEIVER = { remove_resource_rights = ID }                                 (undoes it)
+
+RIGHTS_NOTE = ("Resource rights hand over a state's whole output of oil, steel, aluminium and the rest, for good, "
+               "while the land stays yours: a real loss to your own industry, but far cheaper than ceding the "
+               "state. Weigh the amounts against what you get, and against how much you need them yourself.")
+
+
+def is_rights(key: str) -> bool:
+    return key.startswith(("give:rights:", "ask:rights:"))
+
+
+def rights_held(receiver: str, giver: str) -> Set[str]:
+    """`giver`'s states whose resource rights `receiver` already holds (from `receiver`'s supply routes)."""
+    try:
+        block = bridge.country_block(receiver)
+    except Exception:
+        return set()
+    out = set()
+    for m in re.finditer(r'from_state=(\d+)\s+to_state=\d+\s+sender="(\w+)"\s+receiver="(\w+)"', block):
+        if m.group(2) == giver and m.group(3) == receiver and \
+                "given_resource_rights" in block[m.end():m.end() + 600]:
+            out.add(m.group(1))
+    return out
+
+
+def rights_gives(rel: "Relation") -> List[str]:
+    keys = [f"give:rights:{sid}" for sid, s in (rel.them_border or {}).items() if s.resources]
+    _BORDER_INFO.update({k: rel.them_border[k.rsplit(":", 1)[1]] for k in keys})
+    return keys
+
+
+def rights_asks(rel: "Relation") -> List[str]:
+    keys = [f"ask:rights:{sid}" for sid, s in (rel.me_border or {}).items() if s.resources]
+    _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
+    return keys
 
 
 # "give:subject:SLO": them hands me its subject; "ask:subject:SLO": them asks me to hand it my subject.
@@ -467,13 +515,13 @@ def subject_asks(rel: Relation) -> List[str]:
 
 
 def state_gives(rel: Relation) -> List[str]:
-    keys = [f"give:state:{sid}" for sid in (rel.them_border or {})]
+    keys = [f"give:state:{sid}" for sid, s in (rel.them_border or {}).items() if not s.capital]
     _BORDER_INFO.update({k: rel.them_border[k.rsplit(":", 1)[1]] for k in keys})
     return keys
 
 
 def state_asks(rel: Relation) -> List[str]:
-    keys = [f"ask:state:{sid}" for sid in (rel.me_border or {})]
+    keys = [f"ask:state:{sid}" for sid, s in (rel.me_border or {}).items() if not s.capital]
     _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
     return keys
 
@@ -511,6 +559,23 @@ def get_deal(key: str) -> Optional[Deal]:
                     f"our subject {name}", f"{{me}} = {{{{ end_puppet = {tag} }}}} {{them}} = {{{{ puppet = {tag} }}}}",
                     f"We handed {name} over to {{them_name}}.", f"{{me_name}} handed its subject {name} over to "
                     f"{{them_name}}.", True)
+    if is_rights(key):
+        sid = key.rsplit(":", 1)[1]
+        info = _BORDER_INFO.get(key)
+        name = info.name if info else _STATE_NAMES.get(sid, f"state {sid}")
+        what = f"{name} ({info.resources})" if info and info.resources else name
+        label = f"the resource rights in {what}"
+        if key.startswith("give:"):
+            return Deal(key, "rights", False, True, f"give {{me_name}} the rights to the resources of your state "
+                        f"{what}: its output goes to them for good, the land stays yours", label,
+                        f"{{them}} = {{{{ give_resource_rights = {{{{ receiver = {{me}} state = {sid} }}}} }}}}",
+                        f"{{them_name}} gave us the resource rights in {name}.",
+                        f"{{them_name}} gave {{me_name}} the resource rights in {name}.")
+        return Deal(key, "rights", False, True, f"ask {{me_name}} for the rights to the resources of its state "
+                    f"{what}: its output would come to you for good", label,
+                    f"{{me}} = {{{{ give_resource_rights = {{{{ receiver = {{them}} state = {sid} }}}} }}}}",
+                    f"We gave {{them_name}} the resource rights in {name}.",
+                    f"{{me_name}} gave {{them_name}} the resource rights in {name}.", True)
     if not is_state(key):
         return BY_KEY.get(key)
     sid = key.rsplit(":", 1)[1]
@@ -545,14 +610,22 @@ def possible(rel: Relation, key: str) -> bool:
     if is_subject_key(key):
         tag = key.rsplit(":", 1)[1]
         return not rel.at_war and tag in ((rel.them_subjects if key.startswith("give:") else rel.me_subjects) or {})
+    if is_rights(key):
+        sid = key.rsplit(":", 1)[1]
+        give = key.startswith("give:")
+        if (rel.them_subject and rel.bound != "subject") if give else (rel.me_subject and rel.bound != "overlord"):
+            return False                               # a subject's resources are its overlord's to give
+        state = ((rel.them_border if give else rel.me_border) or {}).get(sid)
+        held = (rel.them_rights if give else rel.me_rights) or set()
+        return not rel.at_war and bool(state and state.resources) and sid not in held
     if is_state(key):
         sid = key.rsplit(":", 1)[1]
         if key.startswith("give:") and rel.them_subject and rel.bound != "subject":
             return False                               # a subject's land is its overlord's to give
         if key.startswith("ask:") and rel.me_subject and rel.bound != "overlord":
             return False
-        border = rel.them_border if key.startswith("give:") else rel.me_border
-        return not rel.at_war and sid in (border or {})
+        border = (rel.them_border if key.startswith("give:") else rel.me_border) or {}
+        return not rel.at_war and sid in border and not border[sid].capital
     if key == "give:peace":
         return rel.at_war and rel.peace_ok
     if key == "give:annex":
@@ -585,7 +658,7 @@ def word(key: str) -> str:
 
 def described(key: str) -> str:
     """Policy vocabulary with the state name where there is one: 'state 35 (Brabant)'."""
-    if is_state(key):
+    if is_state(key) or is_rights(key):
         return f"{word(key)} ({get_deal(key).label})"
     if is_subject_key(key):
         return f"subject {key.rsplit(':', 1)[1]} ({_SUBJECT_NAMES.get(key.rsplit(':', 1)[1], '')})"
@@ -629,7 +702,7 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
         "Use it when the letter was notably friendly or offensive; leave it out for ordinary letters.",
     ]
     gives = (possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
-             + possible_keys(rel, govt_gives(rel)))
+             + possible_keys(rel, govt_gives(rel)) + possible_keys(rel, rights_gives(rel)))
     if gives:
         lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
                      f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
@@ -643,6 +716,8 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
                          f"factories.")
         if any(is_state(k) for k in gives):
             lines.append(TERRITORY_NOTE)
+        if any(is_rights(k) for k in gives):
+            lines.append(RIGHTS_NOTE)
         if "give:submit" in gives or "give:annex" in gives:
             lines.append(SUBMIT_NOTE)
     lines += _unilateral_lines(them_name, me_name, possible_keys(rel, UNILATERAL),
@@ -679,7 +754,9 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
         lines.append(FACTORY_NOTE + f" N is a whole number up to {MAX_FACTORIES}, at most what the giver has.")
     if any(is_state(k) for k in offers + asks):
         lines.append(TERRITORY_NOTE)
-    if any(is_state(k) or k in FACTORY_KEYS for k in offers + asks) and ECONOMY.get("text"):
+    if any(is_rights(k) for k in offers + asks):
+        lines.append(RIGHTS_NOTE)
+    if any(is_state(k) or is_rights(k) or k in FACTORY_KEYS for k in offers + asks) and ECONOMY.get("text"):
         lines.append(ECONOMY["text"])
     if any(k in offers + asks for k in ("give:submit", "ask:submit", "give:annex")):
         lines.append(SUBMIT_NOTE)
@@ -851,7 +928,7 @@ def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     text = _GOVT.sub("", _SUBJECT.sub("", _CEDE.sub("", _SUBJECT_DEAL.sub("", text))))
     for m in _COMMAND.finditer(text):
         verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
-        what = f"state:{num}" if what == "state" else f"{what}:{num}" if what in FACTORIES and num else what
+        what = f"{what}:{num}" if what in ("state", "rights") or (what in FACTORIES and num) else what
         if verb == "offer":
             proposals.append(f"give:{what}")
         elif verb == "ask":
@@ -904,7 +981,7 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             continue
         deal = get_deal(key)
         if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)
-                        and not is_factory_key(key) and not is_govt_key(key)):
+                        and not is_factory_key(key) and not is_govt_key(key) and not is_rights(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
@@ -944,6 +1021,10 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
         if _effect(deal.effect.format(**fmt)):
             if is_state(key):
                 (rel.them_border if key.startswith("give:") else rel.me_border).pop(key.rsplit(":", 1)[1], None)
+            elif is_rights(key):
+                held = rel.them_rights if key.startswith("give:") else rel.me_rights
+                if held is not None:
+                    held.add(key.rsplit(":", 1)[1])
             elif is_subject_key(key):
                 ((rel.them_subjects if key.startswith("give:") else rel.me_subjects) or {}).pop(key.rsplit(":", 1)[1], None)
             else:
@@ -989,6 +1070,10 @@ def package_text(keys: List[str], who: str = "they") -> str:
             name = _SUBJECT_NAMES.get(k.rsplit(":", 1)[1], k.rsplit(":", 1)[1])
             parts.append(f"{who} {'ask' if plural else 'asks'} for our subject {name}" if k.startswith("ask:") else
                          f"{who} {'offer' if plural else 'offers'} {'their' if plural else 'its'} subject {name}")
+        elif is_rights(k):
+            what = get_deal(k).label
+            parts.append(f"{who} {'ask' if plural else 'asks'} for {what.replace('the ', 'our ', 1)}"
+                         if k.startswith("ask:") else f"{who} {'offer' if plural else 'offers'} {what}")
         elif is_state(k):
             name = get_deal(k).label
             parts.append(f"{who} {'ask' if plural else 'asks'} for {name}" if k.startswith("ask:") else

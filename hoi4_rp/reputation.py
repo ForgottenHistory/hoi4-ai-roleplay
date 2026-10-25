@@ -233,7 +233,7 @@ def add_threats(camp: campaign.Campaign, letter: Dict, threats: List[Tuple[Optio
             "deadline": campaign.shift(letter["date"], months * 30) if months else "", "status": "open", "how": ""})
 
 
-_YIELDS = ("give:submit", "give:annex", "give:state", "give:subject", "give:govt", "cede:")
+_YIELDS = ("give:submit", "give:annex", "give:state", "give:subject", "give:govt", "give:rights", "cede:")
 
 
 def _settle_threats(camp: campaign.Campaign, player: str, new: Dict, events: List[Dict], name) -> None:

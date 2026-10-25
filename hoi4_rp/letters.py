@@ -289,7 +289,8 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     offers, asks = _proposals(camp, to, rel, key, reply=True)
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
                  + actions.proposal_help(them.name, me.name, offers, asks, expected=False)
-                 + ("\n\n" + _peace_note(them, me, camp, offers, reply=True) if rel.at_war else ""))
+                 + ("\n\n" + _peace_note(them, me, camp, offers, reply=True) if rel.at_war else "")
+                 + ("\n\n" + actions.cede_help(them.name, me.name, actions.own_states(to)) if not rel.at_war else ""))
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
                   + _conversation(camp, them, me, f"(Reply in {style.current().length}.)"))
@@ -303,6 +304,10 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.add_letter(to, to, reply, key)
     outcomes, events = actions.apply(to, player, them.name, me.name, commands,
                                      allowed=["opinion"] + actions.GIVES + actions.UNILATERAL + actions.state_gives(rel))
+    if not rel.at_war:                                  # land for a third country, at the player's request
+        more_shown, more_events = actions.apply_cedes(to, player, them.name, me.name, commands,
+                                                      (camp.snapshot or {}).get("countries", {}))
+        outcomes, events = outcomes + more_shown, events + more_events
     for e in events:
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False}])
     # Proposal items are only kept if still possible after what was just applied.

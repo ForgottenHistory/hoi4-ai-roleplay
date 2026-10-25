@@ -424,12 +424,88 @@ def letter_help(them_name: str, me_name: str, offers: List[str], asks: List[str]
 # ---------------------------------------------------------------- parsing and applying
 
 _COMMAND = re.compile(r"\[\[\s*(?:(offer|ask|end)\s+)?([a-z_]+)\s*([+-]?\d+)?\s*\]\]", re.I)
+_CEDE = re.compile(r"\[\[\s*state\s+(\d+)\s+to\s+([^\]]+?)\s*\]\]", re.I)   # [[state 35 to Lithuania]]
+
+
+# ---------------------------------------------------------------- land for a third country
+# At the player's request, them cedes one of its states to another country: "cede:35:Lithuania" (the recipient as
+# the LLM named it; resolved against the countries in the world). Never the capital, never to a country at war
+# with them.
+
+def own_states(them: str) -> Dict[str, str]:
+    """them's states other than its capital: id -> name."""
+    out = {}
+    for line in gamestate.query(f'{them} = {{ every_owned_state = {{ limit = {{ is_capital = no }} '
+                                f'log = "AIRPO|[THIS.GetID]|[THIS.GetName]" }} }}'):
+        if line.startswith("AIRPO|"):
+            sid, _, name = line[6:].partition("|")
+            out[sid.strip()] = name.strip()
+            _STATE_NAMES[sid.strip()] = name.strip()
+    return out
+
+
+def cede_help(them_name: str, me_name: str, states: Dict[str, str]) -> str:
+    if not states:
+        return ""
+    return (f"Land for a third country: ONLY if {me_name} asked you to cede one of your states to ANOTHER country "
+            f"(not to {me_name}) and you agree, add [[state N to COUNTRY]], with N from your states below and the "
+            f"country's name. One command per state. {TERRITORY_NOTE}\nYour states (number: name): "
+            + ", ".join(f"{sid}: {name}" for sid, name in states.items()) + ".")
+
+
+def _recipient(name: str, countries: Dict[str, Dict]) -> Optional[str]:
+    """A country by tag or by (part of) its name."""
+    key = name.strip().strip(".").upper()
+    if key in countries:
+        return key
+    low = name.strip().strip(".").lower()
+    for tag, c in countries.items():
+        if c.get("name", "").lower() == low:
+            return tag
+    hits = [tag for tag, c in countries.items() if low and low in c.get("name", "").lower()]
+    if len(hits) == 1:
+        return hits[0]
+    # "Kingdom of Lithuania" for the game's "Lithuania": the longest country name found inside the given one
+    inside = [(len(c.get("name", "")), tag) for tag, c in countries.items()
+              if len(c.get("name", "")) > 3 and re.search(r"\b" + re.escape(c["name"].lower()) + r"\b", low)]
+    return max(inside)[1] if inside else None
+
+
+def apply_cedes(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple[str, int]],
+                countries: Dict[str, Dict]) -> Tuple[List[Tuple[str, bool]], List[Dict]]:
+    """Carry out [[state N to COUNTRY]] commands. `countries`: the chronicle snapshot's countries (tag -> info)."""
+    shown: List[Tuple[str, bool]] = []
+    events: List[Dict] = []
+    cedes = [k for k, _ in commands if k.startswith("cede:")]
+    if not cedes:
+        return shown, events
+    mine = own_states(them)
+    for key in dict.fromkeys(cedes):
+        _, sid, who = key.split(":", 2)
+        rec = _recipient(who, countries)
+        if sid not in mine:
+            print(f"  [[state {sid} to {who}]]: not one of {them}'s states (or its capital), ignored")
+            continue
+        if not rec or rec == them or rec == me:
+            print(f"  [[state {sid} to {who}]]: no such third country, ignored")
+            continue
+        if bridge.trigger(f"{them} = {{ has_war_with = {rec} }}"):
+            print(f"  [[state {sid} to {who}]]: {them} is at war with {rec}, ignored")
+            continue
+        rec_name = countries.get(rec, {}).get("name", rec)
+        if _effect(f"{rec} = {{ transfer_state = {sid} }}"):
+            shown.append((f"{them_name} ceded {mine[sid]} to {rec_name}.", False))
+            events.append({"type": "cede:third", "tags": [them, rec, me],
+                           "text": f"At {me_name}'s request, {them_name} ceded {mine[sid]} to {rec_name}."})
+            mine.pop(sid)
+    return shown, events
 
 
 def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     """Strip all commands. Returns (clean text, immediate [(key or 'opinion', number)], proposals [key])."""
-    immediate: List[Tuple[str, int]] = []
+    immediate: List[Tuple[str, int]] = [(f"cede:{m.group(1)}:{m.group(2)}", 0) for m in _CEDE.finditer(text)]
     proposals: List[str] = []
+    text = _CEDE.sub("", text)
     for m in _COMMAND.finditer(text):
         verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
         what = f"state:{num}" if what == "state" else what
@@ -471,6 +547,8 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
     rel = relation(them, me)
     done = set()
     for key, value in commands:
+        if key.startswith("cede:"):
+            continue                                   # land for a third country: apply_cedes()
         if key in done or (allowed is not None and key not in allowed):
             if key not in done:
                 print(f"  [[{key}]] not allowed here, ignored")

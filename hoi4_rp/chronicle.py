@@ -15,8 +15,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
-from .campaign import ID_VARIABLE, date_key, date_words
-from .gamestate import query
+from .campaign import ID_VARIABLE, date_key, date_words, save_key
+from .gamestate import StateError, query, save_date, timed_activities
 
 _EFFECT = (
     'log = "I|[?' + ID_VARIABLE + ']" '
@@ -199,8 +199,9 @@ def peace_terms(old: Dict, new: Dict, a: str, b: str, asked: str = "") -> Option
     Only the loser's losses are described: the loser is the side that capitulated, else the one further along in
     surrender. Forcing a government on part of a country creates a new country with the loser's original tag; a
     puppet is a new or existing country that is now the winner's subject. War reparations and dismantled military
-    industry show as factories a country's states hold but it can't use (its count is lower than its states'
-    total). Resource rights aren't detected: they don't show in the state or country numbers."""
+    industry shows as military factory levels gone from states. Demilitarized zones, war reparations and resource
+    rights are read exactly from each country's timed_activities (gamestate.timed_activities): states, factories,
+    who benefits and until when."""
     before = old.get("front", {})
     if a not in before or b not in before:
         return None
@@ -219,8 +220,9 @@ def peace_terms(old: Dict, new: Dict, a: str, b: str, asked: str = "") -> Option
     holders.pop("", None)
     after = front(list(holders) + [win])
     same_country = set()
-    for line in query(" ".join(f'{t} = {{ if = {{ limit = {{ original_tag = {lose} }} log = "OT|{t}" }} }}'
-                               for t in holders if t != lose)):
+    check = " ".join(f'{t} = {{ if = {{ limit = {{ original_tag = {lose} }} log = "OT|{t}" }} }}'
+                     for t in holders if t != lose)
+    for line in query(check) if check else []:
         if line.startswith("OT|"):
             same_country.add(line[3:].strip())
 
@@ -258,15 +260,31 @@ def peace_terms(old: Dict, new: Dict, a: str, b: str, asked: str = "") -> Option
             continue
         fa = after[owner]
         mine = [x for x in holders[owner] if x in fa["states"]]
-        dmz = [x for x in mine if fa["states"][x]["dmz"] and not lb["states"][x]["dmz"]]
-        if dmz:
-            out.append(f"made {', '.join(sname(x) for x in dmz)} a demilitarized zone")
-        civ_gap = sum(st["civ"] for st in fa["states"].values()) - fa["civ"]
-        mil_gap = sum(st["arms"] for st in fa["states"].values()) - fa["mil"]
-        if civ_gap >= 1:
-            out.append(f"exacted war reparations from {name(owner)} (about {int(civ_gap)} civilian factories)")
-        if mil_gap >= 1:
-            out.append(f"dismantled {name(owner)}'s military industry (about {int(mil_gap)} military factories)")
+        dismantled = {x: lb["states"][x]["arms"] - fa["states"][x]["arms"] for x in mine}
+        dismantled = {x: v for x, v in dismantled.items() if v >= 1}
+        if dismantled:
+            out.append(f"dismantled {int(sum(dismantled.values()))} military factories in "
+                       f"{', '.join(sname(x) for x in dismantled)}")
+        try:
+            terms = timed_activities(owner)
+        except (StateError, RuntimeError):
+            terms = []
+        for t in terms:
+            if t["target"] != win or save_key(t["start"])[:10] < old["date"][:10]:
+                continue                               # imposed by someone else, or by an earlier peace
+            until = f" until {save_date(t['end'])}" if t["end"] else ""
+            where = ", ".join(sname(x) for x in t["states"])
+            if t["kind"] == "demilitarized_zone":
+                out.append(f"demilitarized {where if len(t['states']) < len(fa['states']) else 'all of ' + name(owner)}"
+                           f"{until}")
+            elif t["kind"] == "war_reparation":
+                out.append(f"imposed war reparations on {name(owner)}: {int(t['civilian_factories'])} civilian "
+                           f"factories{until}")
+            elif t["kind"] == "resource_rights":
+                out.append(f"took the resource rights in {name(owner)}'s {where}{until}")
+            else:
+                out.append(f"imposed {t['kind'].replace('_', ' ')} on {name(owner)}"
+                           + (f" in {where}" if where else "") + until)
 
     who = f" ({name(asked)} had sued for peace)" if asked else ""
     text = (f"Peace between {name(a)} and {name(b)}{who}: "

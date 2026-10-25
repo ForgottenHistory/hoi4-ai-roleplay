@@ -328,6 +328,28 @@ def _surrender(s: CountryState) -> None:
     s.surrender_limit = vals.get("limit")
 
 
+def timed_activities(tag: str) -> List[Dict]:
+    """Peace terms that run for a while, from the country's save-format block (timed_activities): what a peace
+    conference imposed on it. Each: {"kind": "demilitarized_zone" | "war_reparation" | "resource_rights" | ...,
+    "target": tag that benefits, "states": [ids], "start": save date, "end": save date, "civilian_factories": n}."""
+    from .gamefiles import parse
+    block = bridge.country_block(tag)
+    m = re.search(r"\n\t\t\ttimed_activities=\{", block)
+    if not m:
+        return []
+    out = []
+    for kind, _, body in parse(block[m.end():_walk(block, m.end()) - 1]):
+        if not isinstance(body, list):
+            continue
+        get = lambda k: next((v for key, _, v in body if key == k), None)
+        states = get("states")
+        out.append({"kind": kind, "target": (get("target") or "").strip('"'),
+                    "states": [k for k, _, _ in states] if isinstance(states, list) else [],
+                    "start": (get("start_date") or "").strip('"'), "end": (get("end_date") or "").strip('"'),
+                    "civilian_factories": _float(get("civilian_factories") or "") or 0})
+    return out
+
+
 def _diplomacy_level(s: CountryState) -> None:
     rel = _relations(bridge.country_block(s.overlord)).get(s.tag, "")
     pup = re.search(r"\bpuppet=\{", rel)

@@ -12,6 +12,7 @@ Standalone project. It needs only:
     python -m hoi4_rp write-mod   # (re)generate the mod in Documents/Paradox Interactive/Hearts of Iron IV/mod/airoleplay
     python -m hoi4_rp test        # fire a test event in the running game and apply the option you pick
     python -m hoi4_rp run         # answer letters + keep the world chronicle (keep it running while you play)
+    python -m hoi4_rp story       # write a story event about your latest deal or deed now (stop `run` first)
     python -m hoi4_rp state [TAG] # print a country's live game state
     python -m hoi4_rp llm "hi"    # send one message to the LLM and print the reply
     python -m hoi4_rp subjects [TAG]  # subject levels from the game and mod files, or one subject's level and progress
@@ -30,6 +31,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/gamestate.py   live game state (names, parties, factions, wars, states, ideas, focuses)
     hoi4_rp/chronicle.py   one-query world snapshots; their differences become dated events
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; offers
+    hoi4_rp/story.py       story events: your country reacts to your letter deals and deeds
     hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
@@ -76,6 +78,21 @@ news, red bad) and the agreements are remembered in the chronicle.
 - Territory: `[[state N]]` in a reply (they cede a state you asked for), `[[offer state N]]` and
   `[[ask state N]]` in proposals. Only states bordering the other country, never a capital, only in
   peace; the AI sees each candidate with cores and claims and is told territory is a grave matter.
+
+## Story events
+
+Your own country reacts to what you did through this mod (`hoi4_rp/story.py`): the deals you made by letter
+(land, factories, subjects, governments, peace, guarantees) and your deeds as the reputation game master judged
+them (wars you started, guarantees you kept or dropped, peaces you made). Other mods and the base game already
+have events for their own story, so these only cover what nothing else knows about.
+
+At most one event every `gap_days` (config `[story]`, default 60 game days), about the most telling moment of the
+last 45 days. The LLM writes it from the game state, your letters with that country, your promises and threats
+to it and your reputation, and offers 2-3 responses. Each response carries at most two small effects that every
+mod has: political power (up to 50), stability, war support or a party's popularity (up to 5%), or the other
+country's opinion of you (up to 10). Some change nothing. The tooltip is written from the effects, so it always
+says what happens. What you chose goes into the chronicle, so the other country knows it when it next writes.
+`events = no` turns them off.
 
 ## Policies and offers
 

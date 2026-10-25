@@ -121,6 +121,8 @@ class Campaign:
                 rep["threats"] = [x for x in rep.get("threats", []) if x["date"] < key]
             self.data["surrender"] = {t: [x for x in h if x[0] < key]
                                       for t, h in self.data.get("surrender", {}).items()}
+            from . import story
+            story.drop_after(self, key)
             offer = self.data.get("pending_offer")
             if offer and offer["date"] >= key:
                 self.data["pending_offer"] = None

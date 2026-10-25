@@ -3,6 +3,8 @@
    python -m hoi4_rp state [TAG] print the live game state of a country (default: the player's)
    python -m hoi4_rp run         answer letters and keep the world chronicle (keep running while playing;
                                  `letters` is the same)
+   python -m hoi4_rp story       write a story event about the campaign's latest deal or deed now, show it and
+                                 apply the pick (for trying events out; stop `run` first)
    python -m hoi4_rp llm "text"  send one message to the LLM (NanoGPT) and print the reply
    python -m hoi4_rp usage [DAYS]  LLM calls and tokens of the last DAYS days (default 1), by kind and country
    python -m hoi4_rp subjects [TAG]  list the subject levels the game and mods define, or one subject's
@@ -74,6 +76,9 @@ if __name__ == "__main__":
             sys.exit(letters.run())
         except KeyboardInterrupt:
             sys.exit(0)
+    if cmd == "story":
+        from . import letters
+        sys.exit(letters.story_now())
     if cmd == "usage":
         from . import llm
         print(llm.usage_report(float(sys.argv[2]) if len(sys.argv) > 2 else 1.0))

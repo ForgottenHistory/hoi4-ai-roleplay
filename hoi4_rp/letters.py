@@ -32,7 +32,8 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import actions, bridge, campaign, chronicle, gamestate, leaders, llm, peace, policy, reputation, style, subjects, war, world
+from . import (actions, bridge, campaign, chronicle, game, gamestate, leaders, llm, peace, policy, reputation, story,
+               style, subjects, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -715,6 +716,9 @@ class _Session:
         self.policy_job: Optional[tuple] = None   # (tag, future, date key, Relation, campaign id, basis, war baseline)
         self.gm_pool = ThreadPoolExecutor(max_workers=1)   # the reputation game master's LLM calls
         self.gm_job: Optional[tuple] = None       # (kind, item, future, campaign id)
+        self.story_pool = ThreadPoolExecutor(max_workers=1)   # story events are written here
+        self.story_job: Optional[tuple] = None    # (future, campaign id, other country, its name, party names)
+        self.story_draft: Optional[tuple] = None  # a written event waiting to be shown: (draft, campaign id, ...)
         self.date_seen = ""                       # the game date at the last snapshot
         self.active_at = time.monotonic()         # when the date last moved or the player last wrote
         self.retry_at = 0.0                       # no background LLM call before this (after a failure)
@@ -742,6 +746,7 @@ class _Session:
             self.pending.clear()          # letters queued for the previous game
             self.policy_job = None        # a refresh still running belongs to the previous game: drop it
             self.gm_job = None
+            self.story_job = self.story_draft = None
             print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
                   f"{sum(len(v) for v in self.camp.data['letters'].values())} letters remembered")
         return self.camp
@@ -777,7 +782,71 @@ class _Session:
         if not self.idle() and time.monotonic() >= self.retry_at:
             self.policies(camp, player, snap)
             self.game_master(camp, player, snap)
+            self.story(camp, player)
         return camp
+
+    # ---- story events: the player's country reacts to its letter deals and deeds (written in the background)
+    def story(self, camp: campaign.Campaign, player: str) -> None:
+        if self.story_job:
+            fut, cid, other, other_name, parties = self.story_job
+            if not fut.done():
+                return
+            self.story_job = None
+            if cid != camp.id:
+                return
+            try:
+                text = fut.result()
+            except llm.LLMError as e:
+                print(f"  story event failed: {e}")
+                self.failed()
+                return
+            draft = story.parse(text, list(parties))
+            if not draft:
+                print(f"  story event: answer not readable, skipped:\n{text[:500]}")
+                return
+            self.story_draft = (draft, cid, other, other_name, parties)
+            return
+        if self.story_draft:
+            return
+        moment = story.due(camp, player)
+        if not moment:
+            return
+        try:
+            me = gamestate.country(player)
+            them = gamestate.country(moment.other) if active(camp.snapshot, moment.other) else None
+        except gamestate.StateError:
+            return
+        story._story(camp)["last_moment"] = moment.date      # this moment is told, whatever comes of it
+        camp.save()
+        print(f"  story event: writing one about: {moment.text[:200]}")
+        msgs = story.messages(camp, me, them, moment, _relation(them, me) if them else "")
+        parties = {p.ideology: p.long_name or p.name for p in me.parties}
+        self.story_job = (self.story_pool.submit(llm.chat, msgs, None, None, None, "story", moment.other), camp.id,
+                          them.tag if them else "", them.name if them else "", parties)
+
+    def story_tick(self, player: str, block: str) -> None:
+        """Every poll: apply the pick of an open story event, or open a written one when no letter window is up."""
+        camp = self.camp
+        if not camp:
+            return
+        pending = story._story(camp)["pending"]
+        if pending:
+            n = story.read_pick(block, pending["slot"])
+            if n:
+                me_name = (camp.snapshot or {}).get("countries", {}).get(player, {}).get("name", player)
+                story.resolve(camp, player, n, me_name)
+            return
+        if not self.story_draft or re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
+            return
+        draft, cid, other, other_name, parties = self.story_draft
+        self.story_draft = None
+        if cid != camp.id:
+            return
+        try:
+            story.show(camp, draft, player, other, other_name, parties, _clean_for_game)
+            print(f"  story event shown: {draft.title}")
+        except (game.BridgeError, ValueError) as e:
+            print(f"  could not show the story event: {e}")
 
     # ---- the reputation game master: reads promises in the player's letters and judges deeds, in the background
     def game_master(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:
@@ -951,6 +1020,33 @@ class _Session:
         write_first(self.camp, player, tag, reason)
 
 
+def story_now() -> int:
+    """`python -m hoi4_rp story`: write a story event about the latest telling moment now (ignoring the gap and
+    how fresh it is), show it, wait for the pick and apply it. For trying events out."""
+    player = bridge.player_tag()
+    camp = campaign.Campaign(campaign.read_id(player), player)
+    found = sorted([m for m in story.moments(camp, player) if m.weight >= 2], key=lambda m: m.date)
+    if not found:
+        print("nothing in this campaign to write a story event about yet (letter deals or judged deeds)")
+        return 1
+    moment = found[-1]
+    me = gamestate.country(player)
+    them = gamestate.country(moment.other) if active(camp.snapshot, moment.other) else None
+    parties = {p.ideology: p.long_name or p.name for p in me.parties}
+    print(f"writing a story event about ({moment.when}): {moment.text[:300]}")
+    raw = llm.chat(story.messages(camp, me, them, moment, _relation(them, me) if them else ""),
+                   kind="story", about=moment.other)
+    draft = story.parse(raw, list(parties))
+    if not draft:
+        print(f"answer not readable:\n{raw}")
+        return 1
+    story.show(camp, draft, player, them.tag if them else "", them.name if them else "", parties, _clean_for_game)
+    print(f"\"{draft.title}\" is open in the game; pick an option...")
+    n = game.wait_for_pick(story._story(camp)["pending"]["slot"])
+    story.resolve(camp, player, n, me.name)
+    return 0
+
+
 def run() -> int:
     print(f"watching for letters and world events (model {llm.model()}). Ctrl+C to stop.")
     session = _Session()
@@ -985,6 +1081,7 @@ def run() -> int:
                 if answer and session.camp:
                     resolve_offer(session.camp, player, int(answer.group(1)))
                 else:
+                    session.story_tick(player, block)
                     session.deliver(player, block)
         except bridge.BridgeUnavailable:
             print("waiting for HOI4 / the bridge...")

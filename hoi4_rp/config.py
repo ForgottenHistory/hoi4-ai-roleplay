@@ -40,6 +40,10 @@ DEFAULTS = {
         "style": "serious",
         "diplomacy": "balanced",
     },
+    "story": {
+        "events": "yes",
+        "gap_days": "60",
+    },
     "world": {
         "setting": "auto",
         "lore_file": "",
@@ -73,6 +77,12 @@ class LetterSettings:
 
 
 @dataclass(frozen=True)
+class StorySettings:
+    events: bool          # story events: the player's country reacts to letter deals and judged deeds (story.py)
+    gap_days: int         # game days at least between two story events
+
+
+@dataclass(frozen=True)
 class WorldSettings:
     setting: str          # auto | vanilla | kaiserreich
     lore_file: str        # optional text file with extra setting notes
@@ -83,6 +93,7 @@ class WorldSettings:
 class Settings:
     llm: LLMSettings
     letters: LetterSettings
+    story: StorySettings
     world: WorldSettings
 
 
@@ -94,7 +105,7 @@ def settings() -> Settings:
     cp = configparser.ConfigParser()
     cp.read_dict(DEFAULTS)
     cp.read(CONFIG_PATH, encoding="utf-8")   # silently skipped if the file is missing
-    s, lt, w = cp["llm"], cp["letters"], cp["world"]
+    s, lt, st, w = cp["llm"], cp["letters"], cp["story"], cp["world"]
     return Settings(
         llm=LLMSettings(
             base_url=s.get("base_url").rstrip("/"),
@@ -115,6 +126,10 @@ def settings() -> Settings:
             letter_gap_days=lt.getint("letter_gap_days"),
             style=(lt.get("style") or "serious").strip().lower(),
             diplomacy=(lt.get("diplomacy") or "balanced").strip().lower(),
+        ),
+        story=StorySettings(
+            events=st.getboolean("events"),
+            gap_days=st.getint("gap_days"),
         ),
         world=WorldSettings(
             setting=(w.get("setting") or "auto").strip().lower(),

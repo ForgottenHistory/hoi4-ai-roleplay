@@ -74,6 +74,8 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
     # A subject at war or peace together with its overlord in the same moment: one deed, the overlord's.
     with_lord = lambda kind, t: bool(lord_of(t)) and (kind, lord_of(t)) in batch
 
+    attacked: List[str] = []                      # countries the player went to war with as the attacker
+    defended: Dict[str, List[str]] = {}           # a ward it guaranteed -> the countries it fights for it
     for e in events:
         if player not in e["tags"]:
             continue
@@ -82,36 +84,24 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
             continue
         if e["type"] == "war" and other:
             if bridge.trigger(f"{player} = {{ has_offensive_war_with = {other} }}"):
-                # One war may hold an overlord and its subjects: attacking either brings in the other, so the deed
-                # names them all without guessing which was the target.
-                drawn = [t for (kind, t) in batch if kind == "war" and lord_of(t) == other]
-                party = [other] + drawn
-                ties = [TIE_WORDS[k].format(p=p, o=name(t)) for t in party for k in old_ties.get(t, [])
-                        if k in TIE_WORDS]
-                deals = [x["text"] for x in camp.data["events"]
-                         if any(t in x["tags"] for t in party) and player in x["tags"]
-                         and x.get("type", "").startswith(_DEAL_TYPES) and campaign.shift(new["date"], -730) <= x["date"]]
-                facts = (f"{p} went to war, as the attacker, against {name(other)}"
-                         + (f" and its subjects {', '.join(name(t) for t in drawn)}, in one war (an attack on "
-                            f"either brings in the other)" if drawn else "") + "."
-                         + (f" Just before, there was {'; '.join(ties)}." if ties else
-                            " Nothing bound them by treaty just before.")
-                         + (f" Deals between them in the last two years: {' '.join(deals)}" if deals else "")
-                         + " " + _war_goals(player, p, party, old_ties, name)
-                         + _focuses(player))
-                deeds.append(_deed(new, [player] + party, facts))
+                attacked.append(other)
             else:
                 # Called to defend a country it guaranteed?
                 for ward, kinds in old_ties.items():
                     if "my_guarantee" in kinds and "|".join(sorted([ward, other])) in new.get("wars", []):
-                        deeds.append(_deed(new, [player, ward, other],
-                                           f"{p} went to war against {name(other)} in defence of {name(ward)}, "
-                                           f"whose independence it had guaranteed."))
+                        defended.setdefault(ward, []).append(other)
                         break
         elif e["type"] == "peace" and e["text"].startswith("Peace between"):
             subs = [x["text"] for x in events if x["type"] == "peace" and x["text"].startswith("Peace between")
                     and player in x["tags"] and any(lord_of(t) == other for t in x["tags"] if t != player)]
             deeds.append(_deed(new, [player, other], " ".join([e["text"]] + subs)))
+
+    if attacked:
+        deeds.append(_war_deed(camp, player, p, new, attacked, batch, lord_of, old_ties, name))
+    for ward, enemies in defended.items():
+        deeds.append(_deed(new, [player, ward] + enemies,
+                           f"{p} went to war against {', '.join(name(t) for t in enemies)} in defence of "
+                           f"{name(ward)}, whose independence it had guaranteed."))
 
     at_war = lambda t: "|".join(sorted([player, t])) in new.get("wars", [])
     for other, kinds in old_ties.items():
@@ -127,6 +117,35 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
     rep["deeds"].extend(deeds)
     _settle_threats(camp, player, new, events, name)
     return deeds
+
+
+def _war_deed(camp: campaign.Campaign, player: str, p: str, new: Dict, attacked: List[str], batch, lord_of,
+              old_ties: Dict[str, List[str]], name) -> Dict:
+    """One deed for every war the player started at one moment: a declaration on one country brings in its
+    subjects, faction and guarantors, all of whom are listed, and the war is judged once, not once per country."""
+    drawn = [t for (kind, t) in batch if kind == "war" and lord_of(t) in attacked and t not in attacked]
+    party = attacked + drawn
+    countries = (camp.snapshot or {}).get("countries", {})
+    ties = [TIE_WORDS[k].format(p=p, o=name(t)) for t in party for k in old_ties.get(t, []) if k in TIE_WORDS]
+    deals = [x["text"] for x in camp.data["events"]
+             if any(t in x["tags"] for t in party) and player in x["tags"]
+             and x.get("type", "").startswith(_DEAL_TYPES) and campaign.shift(new["date"], -730) <= x["date"]]
+    if len(attacked) == 1:
+        who = name(attacked[0]) + (f" and its subjects {', '.join(name(t) for t in drawn)}, in one war (an attack "
+                                   f"on either brings in the other)" if drawn else "")
+    else:
+        factions = {t: (new["countries"].get(t) or countries.get(t) or {}).get("faction", "") for t in attacked}
+        who = (", ".join(name(t) + (f" ({factions[t]})" if factions[t] else "") for t in attacked)
+               + (f", with their subjects {', '.join(name(t) for t in drawn)}" if drawn else "")
+               + ", all at the same moment: one declaration brings in the target's faction, guarantors and "
+                 "subjects, so most of these were drawn in rather than chosen. Judge it as one war, by whom "
+                 f"{p} meant to attack and why")
+    facts = (f"{p} went to war, as the attacker, against {who}."
+             + (f" Just before, there was {'; '.join(ties)}." if ties else " Nothing bound them by treaty just before.")
+             + (f" Deals between them in the last two years: {' '.join(deals)}" if deals else "")
+             + " " + _war_goals(player, p, party, old_ties, name)
+             + _focuses(player))
+    return _deed(new, [player] + party, facts)
 
 
 # ---------------------------------------------------------------- the game master (background LLM work)
@@ -184,8 +203,13 @@ def promise_messages(player_name: str, to_name: str, letter: Dict) -> List[Dict[
             {"role": "user", "content": letter["text"]}]
 
 
+def _none(s: str) -> bool:
+    return s.strip(" .*()[]").lower() in ("", "none", "nothing", "n/a", "no promises", "no threats")
+
+
 def read_promises(text: str) -> List[str]:
-    return [m.strip(" .*") for m in re.findall(r"^[\W_]*promise[*_\s]*[:\-–]\s*(.+)$", text, re.I | re.M)]
+    found = [m.strip(" .*") for m in re.findall(r"^[\W_]*promise[*_\s]*[:\-–]\s*(.+)$", text, re.I | re.M)]
+    return [m for m in found if not _none(m)]
 
 
 def read_threats(text: str) -> List[Tuple[Optional[int], str]]:
@@ -198,7 +222,7 @@ def read_threats(text: str) -> List[Tuple[Optional[int], str]]:
             out.append((months, d.group(3).strip(" .*")))
         else:
             out.append((None, m.strip(" .*")))
-    return out
+    return [(months, what) for months, what in out if not _none(what)]
 
 
 def add_threats(camp: campaign.Campaign, letter: Dict, threats: List[Tuple[Optional[int], str]],
@@ -209,25 +233,35 @@ def add_threats(camp: campaign.Campaign, letter: Dict, threats: List[Tuple[Optio
             "deadline": campaign.shift(letter["date"], months * 30) if months else "", "status": "open", "how": ""})
 
 
+_YIELDS = ("give:submit", "give:annex", "give:state", "give:subject", "give:govt", "cede:")
+
+
 def _settle_threats(camp: campaign.Campaign, player: str, new: Dict, events: List[Dict], name) -> None:
-    """Open threats come true when the player attacks the country or takes its land, and turn empty when their
-    deadline (else THREAT_DAYS) passes with nothing done."""
+    """A threat comes true when the player attacks the country or takes its land ("kept"), or the country gives
+    in by a deal: cedes land, submits, hands over a subject, changes government ("yielded"). It turns "empty" when
+    its deadline (else THREAT_DAYS) passes with nothing done; carried out later, within THREAT_DAYS, it is kept
+    late. Every event since the threat counts (the threat is read in the background, after the letter, and the
+    country may have given in at once)."""
+    p = name(player)
     for t in _rep(camp)["threats"]:
-        if t["status"] != "open":
+        last = campaign.shift(t["date"], THREAT_DAYS)
+        if t["status"] not in ("open", "empty") or (t["status"] == "empty" and new["date"] > last):
             continue
-        for e in events:
-            if player not in e["tags"] or t["to"] not in e["tags"]:
+        for e in camp.data["events"]:
+            if e["date"] < t["date"] or player not in e["tags"] or t["to"] not in e["tags"]:
                 continue
-            took = e["type"] in ("territory", "ask:state", "give:annex", "give:submit", "subject") or \
-                e["type"].startswith(("give:state", "cede:"))
-            if (e["type"] == "war" and bridge.trigger(f"{player} = {{ has_offensive_war_with = {t['to']} }}")) or \
-                    (took and e["text"].startswith(name(player))):
-                t["status"], t["how"] = "kept", f"{e['text']} ({e['when']})"
-                break
-        if t["status"] == "open":
-            due = t["deadline"] or campaign.shift(t["date"], THREAT_DAYS)
-            if new["date"] > due:
-                t["status"] = "empty"
+            kind = e["type"]
+            if kind.startswith(_YIELDS) and e["tags"][0] == t["to"]:
+                status = "yielded"
+            elif kind == "territory" and e["text"].startswith(p) or                     kind == "subject" and e["text"].endswith(f"subject of {p}.") or                     kind == "war" and e in events and                     bridge.trigger(f"{player} = {{ has_offensive_war_with = {t['to']} }}"):
+                status = "kept"
+            else:
+                continue
+            late = " (after the deadline)" if t["status"] == "empty" else ""
+            t["status"], t["how"] = status, f"{e['text']} ({e['when']}){late}"
+            break
+        if t["status"] == "open" and new["date"] > (t["deadline"] or last):
+            t["status"] = "empty"
 
 
 def credibility(camp: campaign.Campaign, player_name: str, viewer: str) -> str:
@@ -238,11 +272,14 @@ def credibility(camp: campaign.Campaign, player_name: str, viewer: str) -> str:
     known = lambda t: (camp.snapshot or {}).get("countries", {}).get(t, {}).get("name", t)
     name = lambda t: next((x.get("to_name") for x in threats if x["to"] == t and x.get("to_name")), None) or known(t)
     kept = [t for t in threats if t["status"] == "kept"]
+    yielded = [t for t in threats if t["status"] == "yielded"]
     empty = [t for t in threats if t["status"] == "empty"]
     open_ = [t for t in threats if t["status"] == "open"]
-    lines = [f"{player_name} has made {len(threats)} threats: {len(kept)} carried out, {len(empty)} came to nothing, "
-             f"{len(open_)} still open."]
+    lines = [f"{player_name} has made {len(threats)} threats: {len(kept)} carried out, {len(yielded)} got their way "
+             f"(the country gave in), {len(empty)} came to nothing, {len(open_)} still open."]
     lines += [f"- carried out: to {name(t['to'])}, {t['when']}: \"{t['text']}\" -> {t['how']}" for t in kept[-4:]]
+    lines += [f"- the country gave in: {name(t['to'])}, {t['when']}: \"{t['text']}\" -> {t['how']}"
+              for t in yielded[-3:]]
     lines += [f"- came to nothing: to {name(t['to'])}, {t['when']}: \"{t['text']}\"" for t in empty[-2:]]
     mine = [t for t in open_ if t["to"] == viewer]
     lines += [f"- STILL OPEN, AGAINST YOU: {t['when']}: \"{t['text']}\""

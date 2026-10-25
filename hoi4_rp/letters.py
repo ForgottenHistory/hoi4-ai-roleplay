@@ -601,6 +601,24 @@ def active(snap: Optional[Dict], tag: str) -> bool:
     return bool(c) and not c.get("capitulated")
 
 
+_CESSIONS = ("give:state", "ask:state", "cede:", "give:annex")
+
+
+def _agreed(camp: campaign.Campaign, snap: Dict, events: List[Dict]) -> List[Dict]:
+    """A land transfer that a letter deal agreed reads as such: third countries otherwise see only "X took Y from
+    Z" (a seizure), and the state may carry another name under its new owner."""
+    since = campaign.shift(snap["date"], -30)
+    for e in events:
+        if e["type"] != "territory":
+            continue
+        deals = [x for x in camp.data["events"] if x["date"] >= since and x.get("type", "").startswith(_CESSIONS)
+                 and all(t in x["tags"] for t in e["tags"])]
+        if deals:
+            e["text"] += (f" This was the cession agreed by treaty on {deals[-1]['when']}: "
+                          + " ".join(x["text"] for x in deals))
+    return events
+
+
 def _with_peace_terms(camp: campaign.Campaign, player: str, old: Dict, snap: Dict, events: List[Dict]) -> List[Dict]:
     """When a war with the player ended, replace the bare 'no longer at war' and 'took ...' lines between the two
     with one account of what the peace did (chronicle.peace_terms)."""
@@ -703,7 +721,7 @@ class _Session:
         old = camp.snapshot
         if old is None or snap["date"] > old["date"]:
             if old is not None:
-                events = _with_peace_terms(camp, player, old, snap, chronicle.diff(old, snap))
+                events = _agreed(camp, snap, _with_peace_terms(camp, player, old, snap, chronicle.diff(old, snap)))
                 for e in events:
                     print(f"  [{e['when']}] {e['text']}")
                 camp.add_events(events)

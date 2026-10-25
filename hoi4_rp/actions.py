@@ -892,7 +892,7 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
     for key, value in commands:
         if key.startswith(("cede:", "free:", "transfer:")):
             continue                                   # apply_cedes(), apply_subjects()
-        if key in done or (allowed is not None and factory_base(key) not in allowed):
+        if key in done or (allowed is not None and key not in allowed and factory_base(key) not in allowed):
             if key not in done:
                 print(f"  [[{key}]] not allowed here, ignored")
             continue

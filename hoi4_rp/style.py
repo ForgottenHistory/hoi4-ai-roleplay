@@ -86,7 +86,8 @@ def diplomacy() -> str:
 
 
 ONE_LETTER = (" Write exactly one letter: no drafts, alternatives or notes about it. Don't repeat stock phrases or "
-              "arguments from your earlier letters; say what is new.")
+              "arguments from your earlier letters; say what is new. Write in English (a greeting or phrase in your "
+              "own language is fine).")
 
 
 def current() -> Style:

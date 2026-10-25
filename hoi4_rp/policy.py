@@ -82,6 +82,7 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
         f"it means to deal with them"
         + (f"\n\nStates are listed with their number (state N). {actions.TERRITORY_NOTE}"
            if rel.them_border or rel.me_border else "")
+        + (f"\n\n{actions.bound_note(them_name, me_name, rel.bound)}" if rel.bound else "")
         + war_part
     )
 

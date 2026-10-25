@@ -435,6 +435,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
                 and bool(offers or asks or [s for s in steps if s != "end:embargo"]))
     task = (_initiative_task(them, me, reason) + "\n\n"
             + actions.letter_help(them.name, me.name, offers, asks, steps, expected)
+            + ("\n\n" + actions.bound_note(them.name, me.name, rel.bound) if rel.bound else "")
             + ("\n\n" + _peace_note(them, me, camp, offers, reply=False) if rel.at_war else ""))
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
               + _conversation(camp, them, me)

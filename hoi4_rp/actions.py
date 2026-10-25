@@ -100,7 +100,25 @@ class Relation:
     them_border: Dict[str, BorderState] = None   # them's non-capital states bordering me (flags: my cores/claims)
     me_border: Dict[str, BorderState] = None     # my non-capital states bordering them (flags: their cores/claims)
     peace_ok: bool = False                       # at war, and peace can be made now (peace.possible)
+    bound: str = ""          # "subject" (them is my subject), "overlord" (them is my overlord), "faction", or ""
 
+
+# Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
+# market, protection) or make no sense (a pact, an embargo): none can be agreed, ended or imposed by letter. Only
+# lifting an embargo from before stays possible.
+BOUND_ALLOWED = ("end:embargo",)
+
+
+def bound_note(them_name: str, me_name: str, bound: str) -> str:
+    """Why no agreements are offered between the two (empty if they aren't bound)."""
+    why = {"subject": f"{them_name} is {me_name}'s subject",
+           "overlord": f"{them_name} is {me_name}'s overlord",
+           "faction": f"{them_name} and {me_name} are in the same faction"}.get(bound)
+    if not why:
+        return ""
+    return (f"{why}: military access, docking rights, market access and protection already come with that "
+            f"relationship, and a pact or an embargo between you makes no sense, so none of them are offered, asked "
+            f"for or promised in letters.")
 
 _STATE_NAMES: Dict[str, str] = {}      # state id -> name, filled as border states are read
 
@@ -130,10 +148,13 @@ def border_states(owner: str, other: str) -> Dict[str, BorderState]:
 def relation(them: str, me: str) -> Relation:
     from . import peace
     at_war = bridge.trigger(f"{me} = {{ has_war_with = {them} }}")
+    bound = ("subject" if bridge.trigger(f"{them} = {{ is_subject_of = {me} }}") else
+             "overlord" if bridge.trigger(f"{me} = {{ is_subject_of = {them} }}") else
+             "faction" if bridge.trigger(f"{me} = {{ is_in_faction_with = {them} }}") else "")
     return Relation(at_war=at_war,
                     exists={name: check(them, me) for name, check in _CHECKS.items()},
                     them_border=border_states(them, me), me_border=border_states(me, them),
-                    peace_ok=at_war and peace.possible(me, them))
+                    peace_ok=at_war and peace.possible(me, them), bound=bound)
 
 
 # ---------------------------------------------------------------- deals
@@ -268,6 +289,8 @@ def possible(rel: Relation, key: str) -> bool:
         return not rel.at_war and sid in (border or {})
     if key == "give:peace":
         return rel.at_war and rel.peace_ok
+    if rel.bound and key not in BOUND_ALLOWED:
+        return False
     d = BY_KEY[key]
     if d.peace and rel.at_war:
         return False
@@ -330,6 +353,8 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
                  "opinion of them; refusing is fine. Whatever you do, also say so in the letter.")
     if rel.at_war:
         lines.append(f"You are at war with {me_name}, so no agreements are possible.")
+    if rel.bound:
+        lines.append(bound_note(them_name, me_name, rel.bound))
     return "\n".join(lines)
 
 

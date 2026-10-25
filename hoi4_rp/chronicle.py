@@ -192,9 +192,15 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
     return events
 
 
-def peace_terms(old: Dict, new: Dict, a: str, b: str, after: Dict[str, Dict], asked: str = "") -> Optional[Dict]:
-    """What the peace between a and b did, as one event (None if the snapshot before has no front detail).
-    `after` is front([a, b]) right after the peace; `asked` the tag that sued for peace, if known."""
+def peace_terms(old: Dict, new: Dict, a: str, b: str, asked: str = "") -> Optional[Dict]:
+    """What the peace between a and b did, as one event (None if the snapshot before has no front detail for both).
+    `asked` is the tag that sued for peace, if known. Reads the front of everyone who got the loser's land, now.
+
+    Only the loser's losses are described: the loser is the side that capitulated, else the one further along in
+    surrender. Forcing a government on part of a country creates a new country with the loser's original tag; a
+    puppet is a new or existing country that is now the winner's subject. War reparations and dismantled military
+    industry show as factories a country's states hold but it can't use (its count is lower than its states'
+    total). Resource rights aren't detected: they don't show in the state or country numbers."""
     before = old.get("front", {})
     if a not in before or b not in before:
         return None
@@ -202,64 +208,68 @@ def peace_terms(old: Dict, new: Dict, a: str, b: str, after: Dict[str, Dict], as
     name = lambda t: (nc.get(t) or oc.get(t) or {}).get("name") or t
     sname = lambda sid: (new["states"].get(sid) or old["states"].get(sid) or [sid])[0]
     owner_now = lambda sid: (new["states"].get(sid) or ["", ""])[1]
-    empty = {"ships": 0, "civ": 0, "mil": 0, "states": {}}
+    beaten = lambda t: (2 if oc.get(t, {}).get("capitulated") else 0) + oc.get(t, {}).get("surrender", 0)
+    lose, win = (a, b) if beaten(a) > beaten(b) else (b, a)
+    lb = before[lose]
 
-    def terms(win: str, lose: str) -> List[str]:
-        out: List[str] = []
-        lb, la = before[lose], after.get(lose, empty)
-        wb, wa = before[win], after.get(win, empty)
-        taken = [sid for sid in lb["states"] if owner_now(sid) == win]
-        if taken:
-            out.append(f"took {', '.join(sname(x) for x in taken)}")
-        others: Dict[str, List[str]] = defaultdict(list)
-        for sid in lb["states"]:
-            owner = owner_now(sid)
-            if owner and owner not in (win, lose):
-                others[owner].append(sname(sid))
-        for owner, names in others.items():
-            if owner not in oc:
-                out.append(f"liberated {', '.join(names)} as {name(owner)}")
-            else:
-                out.append(f"handed {', '.join(names)} to {name(owner)}")
-        returned = [sid for sid, st in lb["states"].items()
-                    if st["controller"] not in (lose, "") and sid in la["states"]
-                    and la["states"][sid]["controller"] == lose]
-        if returned:
-            out.append(f"returned the occupied {', '.join(sname(x) for x in returned)} to {name(lose)}")
-        if nc.get(lose, {}).get("overlord") == win and oc.get(lose, {}).get("overlord") != win:
-            out.append(f"made {name(lose)} its puppet")
-        was, now = oc.get(lose, {}), nc.get(lose, {})
-        if now and (was.get("party"), was.get("ideology")) != (now.get("party"), now.get("ideology")):
-            out.append(f"forced a new government on {name(lose)} ({now.get('party')}, {now.get('ideology')})")
-        ships = lb["ships"] - la["ships"]
-        if ships >= 1 and wa["ships"] > wb["ships"]:
-            out.append(f"took {int(min(ships, wa['ships'] - wb['ships']))} ships of {name(lose)}'s navy")
-        kept = [sid for sid in la["states"] if sid in lb["states"]]
-        dmz = [sid for sid in kept if la["states"][sid]["dmz"] and not lb["states"][sid]["dmz"]]
+    # Everyone who holds the loser's land now, and what kind of country they are.
+    holders: Dict[str, List[str]] = defaultdict(list)
+    for sid in lb["states"]:
+        holders[owner_now(sid)].append(sid)
+    holders.pop("", None)
+    after = front(list(holders) + [win])
+    same_country = set()
+    for line in query(" ".join(f'{t} = {{ if = {{ limit = {{ original_tag = {lose} }} log = "OT|{t}" }} }}'
+                               for t in holders if t != lose)):
+        if line.startswith("OT|"):
+            same_country.add(line[3:].strip())
+
+    out: List[str] = []
+    for owner, sids in holders.items():
+        names = ", ".join(sname(x) for x in sids)
+        c = nc.get(owner, {})
+        if owner == lose:
+            returned = [x for x in sids if lb["states"][x]["controller"] not in (lose, "")]
+            if returned:
+                out.append(f"returned the occupied {', '.join(sname(x) for x in returned)} to {name(lose)}")
+        elif owner == win:
+            out.append(f"took {names}")
+        elif owner in same_country:
+            out.append(f"installed a new {c.get('ideology', '')} government of {name(lose)} in {names}, as "
+                       f"{name(owner)} ({c.get('party', '')})")
+        elif c.get("overlord") == win:
+            out.append(f"made {names} into its puppet {name(owner)}")
+        elif owner not in oc:
+            out.append(f"liberated {names} as {name(owner)}")
+        else:
+            out.append(f"handed {names} to {name(owner)}")
+    if nc.get(lose, {}).get("overlord") == win and oc.get(lose, {}).get("overlord") != win:
+        out.append(f"made {name(lose)} its puppet")
+    was, now = oc.get(lose, {}), nc.get(lose, {})
+    if now and (was.get("party"), was.get("ideology")) != (now.get("party"), now.get("ideology")):
+        out.append(f"forced a new government on {name(lose)} ({now.get('party')}, {now.get('ideology')})")
+
+    la, wb, wa = after.get(lose, {"ships": 0}), before[win], after.get(win, {"ships": 0})
+    ships = lb["ships"] - la["ships"]
+    if ships >= 1 and wa["ships"] > wb["ships"]:
+        out.append(f"took {int(min(ships, wa['ships'] - wb['ships']))} ships of {name(lose)}'s navy")
+    for owner in holders:
+        if owner == win or owner not in after:
+            continue
+        fa = after[owner]
+        mine = [x for x in holders[owner] if x in fa["states"]]
+        dmz = [x for x in mine if fa["states"][x]["dmz"] and not lb["states"][x]["dmz"]]
         if dmz:
             out.append(f"made {', '.join(sname(x) for x in dmz)} a demilitarized zone")
-        dismantled = {sid: lb["states"][sid]["arms"] - la["states"][sid]["arms"] for sid in kept}
-        dismantled = {k: v for k, v in dismantled.items() if v >= 1}
-        if dismantled:
-            out.append(f"dismantled {int(sum(dismantled.values()))} military factories in "
-                       f"{', '.join(sname(x) for x in dismantled)}")
-        reparations = (wa["civ"] - wb["civ"]) - sum(lb["states"][sid]["civ"] for sid in taken)
-        if reparations >= 1:
-            out.append(f"exacted war reparations (about {int(reparations)} civilian factories)")
-        lost_res = [sum(lb["states"][sid]["res"][i] - la["states"][sid]["res"][i] for sid in kept)
-                    for i in range(len(RESOURCES))]
-        res = [f"{int(v)} {r}" for r, v in zip(RESOURCES, lost_res) if v >= 1]
-        if res:
-            out.append(f"took resource rights ({', '.join(res)})")
-        return out
+        civ_gap = sum(st["civ"] for st in fa["states"].values()) - fa["civ"]
+        mil_gap = sum(st["arms"] for st in fa["states"].values()) - fa["mil"]
+        if civ_gap >= 1:
+            out.append(f"exacted war reparations from {name(owner)} (about {int(civ_gap)} civilian factories)")
+        if mil_gap >= 1:
+            out.append(f"dismantled {name(owner)}'s military industry (about {int(mil_gap)} military factories)")
 
-    parts = []
-    for win, lose in ((a, b), (b, a)):
-        t = terms(win, lose)
-        if t:
-            parts.append(f"{name(win)} " + "; ".join(t))
     who = f" ({name(asked)} had sued for peace)" if asked else ""
     text = (f"Peace between {name(a)} and {name(b)}{who}: "
-            + (". ".join(parts) if parts else "a white peace, nothing changed hands") + ".")
+            + (f"{name(win)} " + "; ".join(out) if out else "a white peace, nothing changed hands") + ".")
     return {"date": new["date"], "when": date_words(new["date"]), "type": "peace", "tags": [a, b], "text": text,
             "major": any((nc.get(t) or oc.get(t) or {}).get("major") for t in (a, b))}

@@ -541,7 +541,7 @@ def _with_peace_terms(camp: campaign.Campaign, player: str, old: Dict, snap: Dic
         asked = other if any(x.get("type") == "give:peace" and other in x["tags"] and player in x["tags"]
                              and x["date"] >= old["date"] for x in camp.data["events"]) else ""
         try:
-            terms = chronicle.peace_terms(old, snap, player, other, chronicle.front([player, other]), asked)
+            terms = chronicle.peace_terms(old, snap, player, other, asked)
         except gamestate.StateError as err:
             print(f"  peace terms with {other} unavailable: {err}")
             terms = None

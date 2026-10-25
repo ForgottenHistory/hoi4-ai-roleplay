@@ -69,6 +69,36 @@ def _read_front(lines: List[str]) -> Dict[str, Dict]:
     return out
 
 
+# The player's ties to other countries, kept in each snapshot so they are still known after a war ends them
+# (reputation.py: what the player had with a country it attacked). Inside every_country, PREV in a nested
+# `TAG = { ... }` is the country looped over.
+TIES = {
+    "pact": "has_non_aggression_pact_with = {p}",
+    "my_guarantee": "{p} = {{ has_guaranteed = PREV }}",          # the player guarantees it
+    "their_guarantee": "has_guaranteed = {p}",                     # it guarantees the player
+    "their_access": "gives_military_access_to = {p}",              # it lets the player's troops through
+    "my_access": "{p} = {{ gives_military_access_to = PREV }}",
+    "faction": "is_in_faction_with = {p}",
+    "subject": "is_subject_of = {p}",
+}
+
+
+def _ties(player: str) -> str:
+    checks = " ".join(f'if = {{ limit = {{ {cond.format(p=player)} }} log = "T|[THIS.GetTag]|{kind}" }}'
+                      for kind, cond in TIES.items())
+    return f"every_country = {{ limit = {{ NOT = {{ tag = {player} }} }} {checks} }}"
+
+
+def _read_ties(lines: List[str], player: str) -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = defaultdict(list)
+    for line in lines:
+        if line.startswith("T|"):
+            tag, _, kind = line[2:].partition("|")
+            if tag.strip() != player:
+                out[tag.strip()].append(kind.strip())
+    return dict(out)
+
+
 def front(tags: List[str]) -> Dict[str, Dict]:
     """The front detail of these countries, now."""
     tags = [t for t in dict.fromkeys(tags) if t]
@@ -86,7 +116,8 @@ def snapshot(player: str) -> Dict:
     front: {tag: ...} (the player and their enemies, see _read_front)}"""
     snap: Dict = {"campaign": 0, "date": "", "date_text": "", "countries": {}, "wars": [], "states": {}}
     wars: Set[str] = set()
-    lines = query(f"{player} = {{ {_EFFECT} {_FRONT} every_enemy_country = {{ {_FRONT} }} }}")
+    lines = query(f"{player} = {{ {_EFFECT} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} }}")
+    snap["ties"] = _read_ties(lines, player)
     snap["front"] = _read_front(lines)
     for line in lines:
         kind, _, rest = line.partition("|")

@@ -32,7 +32,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import actions, bridge, campaign, chronicle, gamestate, leaders, llm, peace, policy, style, subjects, war, world
+from . import actions, bridge, campaign, chronicle, gamestate, leaders, llm, peace, policy, reputation, style, subjects, war, world
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -172,6 +172,7 @@ def _initiative_task(them: gamestate.CountryState, me: gamestate.CountryState, r
 def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign) -> str:
     """Everything `them` knows when dealing with `me`."""
     pol = policy.describe(policy.current(camp, them.tag), them.name, me.name)
+    rep = reputation.describe(camp, me.tag, me.name, them.tag)
     return (
         f"You are the government of {them.name} in the grand strategy game Hearts of Iron IV. "
         f"The date is {them.date.strip()}.\n\n"
@@ -181,6 +182,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
         + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")
         + (f"{pol}\n\n" if pol else "")
+        + (f"{rep}\n\n" if rep else "")
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
         f"{me.name}, or the major powers):\n{_memory(camp, them, me)}"
     )
@@ -568,6 +570,8 @@ class _Session:
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
         self.pool = ThreadPoolExecutor(max_workers=1)  # policy refreshes: the slow LLM part runs here
         self.policy_job: Optional[tuple] = None   # (tag, future, date key, Relation, campaign id, basis, war baseline)
+        self.gm_pool = ThreadPoolExecutor(max_workers=1)   # the reputation game master's LLM calls
+        self.gm_job: Optional[tuple] = None       # (kind, item, future, campaign id)
 
     def campaign_for(self, player: str, cid: int) -> campaign.Campaign:
         if not cid:
@@ -577,6 +581,7 @@ class _Session:
             self.camp = campaign.Campaign(cid, player)
             self.pending.clear()          # letters queued for the previous game
             self.policy_job = None        # a refresh still running belongs to the previous game: drop it
+            self.gm_job = None
             print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
                   f"{sum(len(v) for v in self.camp.data['letters'].values())} letters remembered")
         return self.camp
@@ -600,13 +605,60 @@ class _Session:
                 for e in events:
                     print(f"  [{e['when']}] {e['text']}")
                 camp.add_events(events)
+                for d in reputation.detect(camp, player, old, snap, events):
+                    print(f"  reputation: deed to judge: {d['facts']}")
             camp.snapshot = snap
             camp.record_surrender(snap)
             camp.save()
             if old is not None:
                 self.plan_letters(camp, player, snap, events)
         self.policies(camp, player, snap)
+        self.game_master(camp, player, snap)
         return camp
+
+    # ---- the reputation game master: reads promises in the player's letters and judges deeds, in the background
+    def game_master(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:
+        names = snap.get("countries", {})
+        name = lambda t: names.get(t, {}).get("name", t)
+        if self.gm_job:
+            kind, item, fut, cid = self.gm_job
+            if not fut.done():
+                return
+            self.gm_job = None
+            if cid != camp.id:
+                return
+            try:
+                text = fut.result()
+            except llm.LLMError as e:
+                print(f"  game master failed: {e}")
+                return
+            if kind == "promises":
+                found = reputation.read_promises(text)
+                for x in camp.letters_with(item["to"]):
+                    if x["date"] == item["date"] and x["from"] == player and x["text"] == item["text"]:
+                        x["promises_read"] = True
+                reputation._rep(camp)["promises"].extend(
+                    {"date": item["date"], "when": item["when"], "to": item["to"], "text": p} for p in found)
+                if found:
+                    print(f"  game master: promises to {name(item['to'])}: {'; '.join(found)}")
+            else:
+                item["weight"], item["verdict"] = reputation.read_verdict(text)
+                print(f"  game master: {item['weight']:+d} {item['verdict']}")
+            camp.save()
+            return
+        job = reputation.next_job(camp, player)
+        if not job:
+            return
+        kind, item = job
+        if kind == "promises":
+            msgs = reputation.promise_messages(name(player), name(item["to"]), item)
+        else:
+            try:                                   # the setting text (vanilla or Kaiserreich) is told by the ideologies
+                ideologies = [p.ideology for p in gamestate.country(player).parties]
+            except gamestate.StateError:
+                ideologies = []
+            msgs = reputation.judge_messages(camp, player, item, world.text(ideologies))
+        self.gm_job = (kind, item, self.gm_pool.submit(llm.chat, msgs, None, 0.3), camp.id)
 
     # ---- neighbours' policies toward the player, refreshed one at a time in the background
     def policies(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:

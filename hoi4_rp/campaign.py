@@ -113,6 +113,10 @@ class Campaign:
                 self.data["letters"][tag] = [x for x in letters if x["date"] <= key]
             self.data["policies"] = {t: p for t, p in self.data.get("policies", {}).items() if p["date"] <= key}
             self.data["refusals"] = [r for r in self.data.get("refusals", []) if r["date"] <= key]
+            rep = self.data.get("reputation")
+            if rep:                                    # deeds and promises after the loaded save never happened
+                rep["deeds"] = [d for d in rep.get("deeds", []) if d["date"] <= key]
+                rep["promises"] = [x for x in rep.get("promises", []) if x["date"] <= key]
             self.data["surrender"] = {t: [x for x in h if x[0] <= key]
                                       for t, h in self.data.get("surrender", {}).items()}
             offer = self.data.get("pending_offer")

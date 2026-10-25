@@ -59,14 +59,15 @@ def pressure(them: gamestate.CountryState, me: gamestate.CountryState,
         p += (0.5 - st) * 0.2
         if st < 0.35:
             why.append(f"stability {round(st * 100)}%")
-    esr = them.enemy_strength
+    esr = gamestate.odds(them)            # its whole side against the enemy's, when it has allies
+    allied = bool(them.side_strength) and gamestate.has_allies(them)
     if esr:
         if esr > 1.5:
             p += min(0.15, (esr - 1) * 0.05)
-            why.append(f"enemy armies {esr:.1f} times its own")
+            why.append(f"enemy armies {esr:.1f} times {'its side' + chr(39) + 's' if allied else 'its own'}")
         elif esr < 0.8:
             p -= 0.1
-            why.append("its armies are the stronger")
+            why.append("its side's armies are the stronger" if allied else "its armies are the stronger")
     if (me.surrender or 0) > (them.surrender or 0) + 0.2:
         p -= 0.2
         why.append(f"{me.name} is the one losing ({round((me.surrender or 0) * 100)}%)")

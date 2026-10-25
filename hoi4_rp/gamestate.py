@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from . import bridge, leaders
 
@@ -151,12 +151,14 @@ class CountryState:
     autonomy: Dict[str, str] = field(default_factory=dict)    # subject or overlord tag -> subject level id
     opinion: Dict[str, float] = field(default_factory=dict)   # this country's opinion of others (cached_sum)
     names: Dict[str, str] = field(default_factory=dict)       # display name of every tag above
+    fallen: Set[str] = field(default_factory=set)             # faction members and enemies that have capitulated
     strength: Dict[str, float] = field(default_factory=dict)  # STRENGTH_FIELDS -> value (industry, army, manpower)
     # At war only:
     surrender: Optional[float] = None       # surrender progress 0..1: occupation / limit (1 = capitulation)
     occupation: Optional[float] = None      # share of its victory points others control (bridge.surrender)
     surrender_limit: Optional[float] = None # occupation at which it capitulates (bridge.surrender)
     enemy_strength: Optional[float] = None  # its enemies' army strength relative to its own
+    side_strength: Optional[float] = None   # the same, relative to its own and its allies' together
     core_states: int = 0                    # core states it owns
     occupied: List[Occupied] = field(default_factory=list)   # its states someone else controls
     holds: List[Occupied] = field(default_factory=list)      # others' states it controls
@@ -209,15 +211,17 @@ def _effect(tag: str) -> str:
     lines += [
         f'if = {{ limit = {{ is_in_faction = yes }} '
         f'log = "{p}faction|[THIS.GetFactionName]|[THIS.FactionLeader.GetTag]|[THIS.FactionLeader.GetName]" '
-        f'every_faction_member = {{ log = "{p}faction_member|{tn}" }} }}',
+        f'every_faction_member = {{ log = "{p}faction_member|{tn}" '
+        f'if = {{ limit = {{ has_capitulated = yes }} log = "{p}fallen|[THIS.GetTag]" }} }} }}',
         f'if = {{ limit = {{ is_subject = yes }} log = "{p}overlord|[THIS.Overlord.GetTag]|[THIS.Overlord.GetName]" }}',
         f'every_subject_country = {{ log = "{p}subject|{tn}" }}',
-        f'every_enemy_country = {{ log = "{p}enemy|{tn}" }}',
+        f'every_enemy_country = {{ log = "{p}enemy|{tn}" '
+        f'if = {{ limit = {{ has_capitulated = yes }} log = "{p}fallen|[THIS.GetTag]" }} }}',
         f'every_neighbor_country = {{ log = "{p}neighbor|{tn}" }}',
         f'every_owned_state = {{ log = "{p}state|[THIS.GetID]|[THIS.GetName]" }}',
         # The front (PREV inside a state loop is the country): surrender progress, enemy strength, occupation.
         f'if = {{ limit = {{ has_war = yes }} '
-        f'log = "{p}war|[?THIS.surrender_progress]|[?THIS.enemies_strength_ratio]" '
+        f'log = "{p}war|[?THIS.surrender_progress]|[?THIS.enemies_strength_ratio]|[?THIS.alliance_strength_ratio]" '
         f'set_temp_variable = {{ airp_cores = 0 }} '
         f'every_owned_state = {{ limit = {{ is_core_of = PREV }} add_to_temp_variable = {{ airp_cores = 1 }} }} '
         f'log = "{p}cores|[?airp_cores]" '
@@ -439,8 +443,10 @@ def country(tag: str) -> CountryState:
                 except ValueError:
                     pass
         elif key == "war":
-            sp, _, esr = rest.partition("|")
-            s.surrender, s.enemy_strength = _float(sp), _float(esr)
+            sp, esr, asr = (rest.split("|") + ["", ""])[:3]
+            s.surrender, s.enemy_strength, s.side_strength = _float(sp), _float(esr), _float(asr)
+        elif key == "fallen":
+            s.fallen.add(rest.strip())
         elif key == "cores":
             s.core_states = int(_float(rest) or 0)
         elif key in ("occupied", "holds"):
@@ -588,6 +594,17 @@ def _by_other(states: List[Occupied]) -> Dict[str, List[Occupied]]:
     return out
 
 
+def has_allies(s: CountryState) -> bool:
+    """Fights beside others: a faction member, an overlord or a subject."""
+    return len(s.faction_members) > 1 or bool(s.overlord) or bool(s.subjects)
+
+
+def odds(s: CountryState) -> Optional[float]:
+    """The enemy's army strength against its own side's: its allies' too when it has any (the game's
+    alliance_strength_ratio), else its own alone."""
+    return s.side_strength if s.side_strength and has_allies(s) else s.enemy_strength
+
+
 def front_text(s: CountryState) -> str:
     """How the country's wars stand for it: surrender progress, enemy strength, occupied land, the capital."""
     if s.surrender is None:
@@ -598,7 +615,9 @@ def front_text(s: CountryState) -> str:
                    f"it capitulates once it controls {round((1 - s.surrender_limit) * 100)}% or less of them, that is "
                    f"after losing {round(s.surrender_limit * 100)}%.")
     if s.enemy_strength:
-        out.append(f"Its enemies' armies together are {s.enemy_strength:.1f} times as strong as its own.")
+        out.append(f"Its enemies' armies together are {s.enemy_strength:.1f} times as strong as its own"
+                   + (f"; counting its allies' armies too, the enemy side is {s.side_strength:.1f} times as strong "
+                      f"as its side (1.0 is an even match)" if s.side_strength and has_allies(s) else "") + ".")
     if s.capital_held_by:
         out.append(f"ITS CAPITAL {s.capital} IS OCCUPIED by {s.name_of(s.capital_held_by)}.")
     if s.occupied:
@@ -709,8 +728,10 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
     if ruling and details:
         lines.append(f"About the ruling party, {ruling.name}: {ruling.description}")
     if s.faction:
+        fallen = [t for t in s.faction_members if t in s.fallen]
         lines.append(f"Member of the faction {s.faction} (leader {s.name_of(s.faction_leader)}; "
-                     f"members {s.names_of(s.faction_members)}).")
+                     f"members {s.names_of(s.faction_members)})."
+                     + (f" CAPITULATED and out of the fight: {s.names_of(fallen)}." if fallen else ""))
     else:
         lines.append("Not in any faction.")
     from . import subjects
@@ -732,7 +753,8 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
             since = f", since {save_date(w.start_date)}" if w.start_date else ""
             cas = (f"; casualties {w.our_casualties:,} suffered, {w.their_casualties:,} inflicted"
                    if w.our_casualties or w.their_casualties else "")
-            wars.append(f"{s.name_of(w.enemy)} ({how}{since}{cas})")
+            wars.append(f"{s.name_of(w.enemy)} ({how}{since}{cas}"
+                        + ("; it has CAPITULATED" if w.enemy in s.fallen else "") + ")")
         lines.append("At war with: " + "; ".join(wars) + ".")
         front = front_text(s)
         if front:

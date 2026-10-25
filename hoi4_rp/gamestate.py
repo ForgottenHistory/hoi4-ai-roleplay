@@ -686,6 +686,61 @@ def war_balance(a: CountryState, b: CountryState) -> str:
     return f"Verdict for {a.name}: {verdict} " + " ".join(facts)
 
 
+# ---------------------------------------------------------------- the war as a whole
+# The war overview's bar ("War is going 66% in favor of AGGRESSORS", waroverview tooltip, hoi4 1.19.3
+# FUN_141987420): each side scores the average of 100% - surrender progress over its major powers (over all its
+# countries if it has no major power), and the bar is the attackers' score minus the defenders'. Checked live:
+# Germany and Italy 100% against the UK 0%, France 0% and the USA 100% (33%) gave the game's 66%.
+
+def war_side(x: CountryState, other: CountryState) -> List[str]:
+    """x and those fighting beside it against `other`: its faction members, overlord and subjects at war with
+    `other`."""
+    allies = x.faction_members + x.subjects + ([x.overlord] if x.overlord else [])
+    return list(dict.fromkeys([x.tag] + [t for t in allies if t and t in other.enemies]))
+
+
+def _majors() -> Set[str]:
+    return {line.split("|", 1)[1].strip() for line in
+            query('every_country = { limit = { is_major = yes } log = "M|[THIS.GetTag]" }') if line.startswith("M|")}
+
+
+def whole_war(a: CountryState, b: CountryState) -> Optional[Dict]:
+    """The game's measure of a war between two sides (None if neither side has allies in it):
+    {"mine": 0..1, "theirs": 0..1, "favour": mine - theirs, "text": the facts from a's side}."""
+    sa, sb = war_side(a, b), war_side(b, a)
+    if len(sa) == 1 and len(sb) == 1:
+        return None
+    majors = _majors()
+
+    def score(side: List[str]):
+        counted = [t for t in side if t in majors] or side
+        parts = []
+        for t in counted:
+            try:
+                progress = bridge.surrender(t).get("progress", 0.0)
+            except bridge.BridgeError:
+                return None, []
+            parts.append((t, max(0.0, 1.0 - progress)))
+        return sum(v for _, v in parts) / len(parts), parts
+
+    mine, mp = score(sa)
+    theirs, tp = score(sb)
+    if mine is None or theirs is None:
+        return None
+    name = lambda t: a.name_of(t) if t != a.tag else a.name
+    side_name = lambda x: f"the {x.faction}" if x.faction else f"{x.name}'s side"
+    favour = mine - theirs
+    who = (f"in favour of your side ({side_name(a)})" if favour > 0 else
+           f"in favour of the enemy side ({side_name(b)})" if favour < 0 else "evenly")
+    detail = lambda parts: ", ".join(f"{name(t)} {round(v * 100)}%" + (" (capitulated)" if v == 0 else "")
+                                     for t, v in parts)
+    text = (f"THE WAR AS A WHOLE ({len(sa)} countries on your side, {len(sb)} on theirs): the game scores it as "
+            f"going {round(abs(favour) * 100)}% {who}. Each side scores the average standing (100% minus surrender "
+            f"progress) of its major powers: your side {round(mine * 100)}% ({detail(mp)}); theirs "
+            f"{round(theirs * 100)}% ({detail(tp)}).")
+    return {"mine": mine, "theirs": theirs, "favour": favour, "text": text}
+
+
 def strength_comparison(a: CountryState, b: CountryState) -> str:
     """One line comparing two countries' factories, divisions and deployed soldiers."""
     if not a.strength or not b.strength:

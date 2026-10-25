@@ -149,6 +149,9 @@ def _war(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.Co
                 past.append(f"{label} {round(v * 100)}%")
         if past:
             lines.append(f"{x.name}'s surrender progress {', '.join(past)}; now {round((x.surrender or 0) * 100)}%.")
+    whole = gamestate.whole_war(them, me)
+    if whole:
+        lines.append(whole["text"])
     lines.append("Your government knows all this. Whatever your tone, don't pretend the war stands otherwise.")
     return "THE WAR BETWEEN YOU:\n" + "\n".join(lines)
 

@@ -68,6 +68,13 @@ def pressure(them: gamestate.CountryState, me: gamestate.CountryState,
         elif esr < 0.8:
             p -= 0.1
             why.append("its side's armies are the stronger" if allied else "its armies are the stronger")
+    whole = gamestate.whole_war(them, me)     # its side's war, as the game scores it
+    if whole and whole["favour"] <= -0.5:
+        p += 0.1
+        why.append(f"the war as a whole is going {round(-whole['favour'] * 100)}% against its side")
+    elif whole and whole["favour"] >= 0.5:
+        p -= 0.1
+        why.append(f"the war as a whole is going {round(whole['favour'] * 100)}% its side's way")
     if (me.surrender or 0) > (them.surrender or 0) + 0.2:
         p -= 0.2
         why.append(f"{me.name} is the one losing ({round((me.surrender or 0) * 100)}%)")

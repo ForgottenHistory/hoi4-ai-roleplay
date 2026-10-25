@@ -11,7 +11,8 @@ Standalone project. It needs only:
 
     python -m hoi4_rp write-mod   # (re)generate the mod in Documents/Paradox Interactive/Hearts of Iron IV/mod/airoleplay
     python -m hoi4_rp test        # fire a test event in the running game and apply the option you pick
-    python -m hoi4_rp run         # answer letters + keep the world chronicle (keep it running while you play)
+    python -m hoi4_rp run         # answer letters + keep the world chronicle (keep it running while you play;
+                                  # its output is also kept in data/logs/run-YYYY-MM-DD.log)
     python -m hoi4_rp story       # write a story event about your latest deal or deed now (stop `run` first)
     python -m hoi4_rp state [TAG] # print a country's live game state
     python -m hoi4_rp llm "hi"    # send one message to the LLM and print the reply
@@ -87,8 +88,10 @@ them (wars you started, guarantees you kept or dropped, peaces you made). Other 
 have events for their own story, so these only cover what nothing else knows about.
 
 At most one event every `gap_days` (config `[story]`, default 60 game days), about the most telling moment of the
-last 45 days. The LLM writes it from the game state, your letters with that country, your promises and threats
-to it and your reputation, and offers 2-3 responses. Each response carries at most two small effects that every
+last 45 days (plain agreements like pacts, guarantees and market access don't count). Each event is a decision,
+not news: someone at home wants something because of what you did, someone else wants the opposite. The LLM
+writes it from the game state, your letters with that country, your promises and threats to it and your
+reputation, and offers 2-3 responses. Each response carries at most two small effects that every
 mod has: political power (up to 50), stability, war support or a party's popularity (up to 5%), or the other
 country's opinion of you (up to 10). Some change nothing. The tooltip is written from the effects, so it always
 says what happens. What you chose goes into the chronicle, so the other country knows it when it next writes.

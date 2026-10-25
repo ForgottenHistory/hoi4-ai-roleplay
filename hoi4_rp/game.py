@@ -84,11 +84,13 @@ def show(event: RPEvent) -> int:
             opt = event.options[n - 1] if n <= len(event.options) else None
             if opt:
                 cmds.append(f"bridge.setloc {loc_key(slot, f'o{n}')} {_one_line(opt.text)}")
-                cmds.append(f"bridge.setloc {loc_key(slot, f'o{n}.tt')} {_one_line(opt.tooltip)}")
+                # bridge.setloc refuses empty text: a non-breaking space shows nothing
+                cmds.append(f"bridge.setloc {loc_key(slot, f'o{n}.tt')} {_one_line(opt.tooltip) or chr(160)}")
             flags.append(f"{'set' if opt else 'clr'}_country_flag = {option_flag(slot, n)}")
         cmds.append(f"eval_effect {tag} = {{ {' '.join(flags)} }}")
-        cmds.append(f"event {event_id(slot, event.picture)}")
+        # Open the popup only once its text and options are in place, so a failure never shows a half-made event.
         _check(bridge.send(*cmds), "show")
+        _check(bridge.send(f"event {event_id(slot, event.picture)}"), "show")
     return slot
 
 

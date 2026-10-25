@@ -24,7 +24,9 @@ letter it starts can carry one offer, shown with Accept/Decline (airp_offer / ai
 
 from __future__ import annotations
 
+import os
 import random
+import sys
 import threading
 import re
 import time
@@ -1047,8 +1049,43 @@ def story_now() -> int:
     return 0
 
 
+class _Tee:
+    """Writes to the console and to the day's run log, each line stamped with the time."""
+
+    def __init__(self, console, path: str):
+        self.console, self.path, self.fresh = console, path, True
+
+    def write(self, text: str) -> int:
+        self.console.write(text)
+        try:
+            with open(self.path, "a", encoding="utf-8") as f:
+                for part in text.splitlines(keepends=True):
+                    if self.fresh:
+                        f.write(time.strftime("[%H:%M:%S] "))
+                    f.write(part)
+                    self.fresh = part.endswith("\n")
+        except OSError:
+            pass
+        return len(text)
+
+    def flush(self) -> None:
+        self.console.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.console, name)
+
+
+def _log_to_file() -> str:
+    """Copy everything `run` prints to data/logs/run-YYYY-MM-DD.log (real date)."""
+    os.makedirs(llm.LOG_DIR, exist_ok=True)
+    path = os.path.join(llm.LOG_DIR, time.strftime("run-%Y-%m-%d.log"))
+    sys.stdout, sys.stderr = _Tee(sys.stdout, path), _Tee(sys.stderr, path)
+    return path
+
+
 def run() -> int:
-    print(f"watching for letters and world events (model {llm.model()}). Ctrl+C to stop.")
+    path = _log_to_file()
+    print(f"watching for letters and world events (model {llm.model()}). Ctrl+C to stop. Log: {path}")
     session = _Session()
     # Leader biographies are indexed from the game and mod files (several seconds for big mods): do it now.
     threading.Thread(target=leaders.warm, daemon=True).start()

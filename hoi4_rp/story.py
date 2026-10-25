@@ -48,8 +48,9 @@ _DEAL_WEIGHTS = [
     (3, ("give:state", "ask:state", "cede:", "give:annex", "give:submit", "ask:submit", "give:subject",
          "ask:subject", "subject:", "give:govt", "ask:govt", "give:peace")),
     (2, ("give:civ", "ask:civ", "give:mil", "ask:mil", "give:dismantle", "ask:dismantle", "give:dmz", "ask:dmz",
-         "give:rights", "ask:rights", "give:guarantee", "ask:guarantee", "end:guarantee", "embargo")),
+         "give:rights", "ask:rights", "embargo")),
 ]
+# Plain agreements (pacts, guarantees, access, docking, market) count 1: no event of their own, they make dull news.
 _DEALS = ("give:", "ask:", "end:", "cede:", "subject:", "embargo")
 
 
@@ -185,7 +186,7 @@ def tooltip(option: Option, other_name: str, party_names: Dict[str, str]) -> str
             parts.append(f"{party_names.get(e.ideology, e.ideology)} popularity: {e.value:+d}%")
         elif e.kind == "opinion":
             parts.append(f"{other_name}'s opinion of us: {e.value:+d}")
-    return "\n".join(parts)
+    return "\n".join(parts) or "No direct effect, but it will be remembered."
 
 
 def apply(option: Option, player: str, other: str) -> List[str]:
@@ -236,8 +237,8 @@ def _effects_help(other_name: str, parties: List[Tuple[str, str]]) -> str:
         f"  [[popularity IDEOLOGY N]]   a party's popularity in percent, -5 to +5; IDEOLOGY is one of: {party_list}\n"
         + (f"  [[opinion N]]         {other_name}'s opinion of us: -10, -5, +5 or +10\n" if other_name else "")
         + "Make the choice a real one: an option that gains something usually costs something else, and options "
-          "pull different ways (order against freedom, prestige against money, friendship against pride). One "
-          "option may carry no effect at all: a quiet choice that only the story remembers. Nothing else changes in "
+          "pull different ways (order against freedom, prestige against money, friendship against pride). Give every "
+          "option at least one effect. Nothing else changes in "
           "the game, so don't promise more in the option text than its effects do: an option is how the government "
           "handles it at home (a speech, a crackdown, a reward, a quiet word, letting it pass), never a deal, a "
           "treaty, a transfer of land or factories, or moving troops. Those happen only through letters."
@@ -276,19 +277,27 @@ def messages(camp: campaign.Campaign, me, them, moment: Moment, relation: str) -
     )
     task = (
         f"You are the game master of a Hearts of Iron IV game. Write one national event for {me.name}, the player's "
-        f"country, about this moment ({moment.when}):\n{moment.text}\n\n"
-        f"The event shows how it lands at home in {me.name}: the people, the press, ministers, generals, "
-        f"industrialists, party members, or the people of the land concerned. Base it on the facts above and keep "
-        f"to what is plausible for {me.name} under its current government; invent only the small human details "
-        f"(a name, a place, a quote). Then offer {me.name}'s government two or three ways to respond. "
+        f"country, growing out of this moment ({moment.when}):\n{moment.text}\n\n"
+        f"The event is a DECISION, not a news report. The player already knows what happened; don't retell it. "
+        f"Find the conflict it causes at home in {me.name}: someone specific (a named minister, general, party, "
+        f"union, the industrialists, the church, the officer corps, the people of a region or town) wants something "
+        f"from the government because of it, and someone else wants the opposite or will pay the price. Two examples, "
+        f"only to show the shape (don't reuse them; find the conflict this moment would really cause): officers "
+        f"resent a treaty that may drag them into war and demand the fall of the minister who signed it; the old "
+        f"inhabitants of newly gained land riot against the officials sent to run it. Keep to what is plausible for "
+        f"{me.name} under its current government; invent the small human details (names, places, a quote).\n"
+        f"The text sets the scene in a sentence or two, then puts the conflict and the demand plainly, and ends on "
+        f"the question the government must answer. Each option is a concrete act that takes a side (\"Dismiss the "
+        f"minister\", \"Arrest the ringleaders\", \"Buy them off from the treasury\"), not a mood or a statement, and "
+        f"each has its price. \"Do nothing\" is only an option if doing nothing is itself a gamble. "
         f"{_VOICE.get(settings().letters.style, _VOICE['serious'])}\n\n"
         f"{_effects_help(other_name, parties)}\n\n"
         f"PICTURES (pick the one that fits best):\n{pictures}\n\n"
         "Answer in exactly this form, plain text, no markdown:\n"
         "TITLE: a short event title, at most 6 words\n"
         "PICTURE: one picture key from the list\n"
-        "TEXT: the event text, 60 to 110 words\n"
-        f"SUMMARY: one sentence saying what happened in {me.name}, for the history books (without the choice)\n"
+        "TEXT: the event text, 50 to 100 words\n"
+        f"SUMMARY: one sentence for the history books: the conflict in {me.name} and who wanted what (without the choice)\n"
         "OPTION: the first response, at most 12 words, then its effects\n"
         "OPTION: the second response, then its effects\n"
         "OPTION: (optional) a third response"
@@ -338,7 +347,10 @@ def parse(text: str, ideologies: List[str]) -> Optional[Draft]:
             opts.append(Option(words, _effects(raw, ideologies)))
     if not title or not body or len(opts) < 2:
         return None
-    return Draft(title, picture, body, " ".join(fields.get("summary", [])).strip(" *"), opts)
+    summary = " ".join(fields.get("summary", [])).strip(" *")
+    if not summary:                                   # the chronicle still needs a line about it
+        summary = f"{title}: " + re.split(r"(?<=[.!?])\s", body.replace("\n", " "), maxsplit=1)[0]
+    return Draft(title, picture, body, summary, opts)
 
 
 # ---------------------------------------------------------------- in the game

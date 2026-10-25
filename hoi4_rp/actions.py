@@ -13,6 +13,7 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
     [[ask X]]                 a proposal: them asks me to grant X to them (access, docking, guarantee)
     [[offer submit]]          a proposal: them becomes my subject (puppet)
     [[ask submit]]            a proposal: them demands that I become its subject
+    [[offer annex]] / [[annex]]   them joins me entirely (annexed by agreement, like the Anschluss)
 
 Each deal checks the game first: it must be possible right now (agreements need peace and must not exist
 yet; ending one needs it to exist). Effect directions were checked in game:
@@ -226,6 +227,13 @@ DEALS: List[Deal] = [
          "{them} = {{ puppet = {me} }}",
          "We submitted to {them_name} and became its subject.", "{me_name} submitted to {them_name} and became its "
          "subject.", True),
+    # Annexation by agreement (peace only; them may be my own subject, not anyone else's; SUBMIT_NOTE)
+    Deal("give:annex", "annex", False, True,
+         "join {me_name} entirely: your country is annexed, and its land, army and people become part of "
+         "{me_name} (the end of your state)", "to be annexed into our country",
+         "{me} = {{ annex_country = {{ target = {them} transfer_troops = yes }} }}",
+         "{them_name} has joined us: its land, army and people are now ours.",
+         "{them_name} was annexed into {me_name} by agreement."),
     # them acts alone
     Deal("end:pact", "pact", True, False, "end your non-aggression pact with {me_name}", "the non-aggression pact",
          _rel("me", "them", "non_aggression_pact", "no"),
@@ -262,8 +270,10 @@ _BORDER_INFO: Dict[str, BorderState] = {}       # territory key -> state info, f
 
 SUBMIT_NOTE = ("Submission is the gravest step of all. A government offers it only when it cannot survive alone, "
                "or its people and rulers truly want the other's protection; it demands it only of a country far "
-               "weaker than itself that it could crush, and knows a proud nation may sooner fight. Never offer or "
-               "demand it lightly, or in the same breath as small favours.")
+               "weaker than itself that it could crush, and knows a proud nation may sooner fight. Annexation goes "
+               "further still: it ends the state for ever, so a government agrees to it only when its people and "
+               "rulers truly want union, or it has no other way out. Never offer, demand or grant either lightly, "
+               "or in the same breath as small favours.")
 
 TERRITORY_NOTE = ("Territory is a grave matter. A government cedes its own land only under real pressure, for "
                   "something substantial in return, or where the other side holds a core; it demands land only "
@@ -310,6 +320,11 @@ def possible(rel: Relation, key: str) -> bool:
         return not rel.at_war and sid in (border or {})
     if key == "give:peace":
         return rel.at_war and rel.peace_ok
+    if key == "give:annex":
+        # Peace only. Them may be my subject (a puppet integrated by agreement), not anyone else's; I must be
+        # independent.
+        return (not rel.at_war and rel.bound in ("", "faction", "subject")
+                and (not rel.them_subject or rel.bound == "subject") and not rel.me_subject)
     if key in ("give:submit", "ask:submit"):
         # Never at war or between a subject and its overlord; both sides must be independent (a subject can't
         # take subjects of its own). Fellow faction members may.
@@ -341,6 +356,8 @@ def described(key: str) -> str:
         return "submit (become their subject)"
     if key == "ask:submit":
         return "submit (they become your subject)"
+    if key == "give:annex":
+        return "annex (join them entirely, ending your state)"
     return word(key)
 
 
@@ -377,6 +394,8 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
         lines += [f"- [[{word(k)}]]: {get_deal(k).prompt.format(**f)}" for k in gives]
         if any(is_state(k) for k in gives):
             lines.append(TERRITORY_NOTE)
+        if "give:submit" in gives or "give:annex" in gives:
+            lines.append(SUBMIT_NOTE)
     lines += _unilateral_lines(them_name, me_name, possible_keys(rel, UNILATERAL),
                                "only when your policy calls for it or their letter gives serious cause")
     lines.append("Decide as your government would, considering your interests, ideology, alliances and your "
@@ -407,7 +426,7 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
     lines += [f"- [[ask {word(k)}]]: {get_deal(k).prompt.format(**f)}" for k in asks]
     if any(is_state(k) for k in offers + asks):
         lines.append(TERRITORY_NOTE)
-    if "give:submit" in offers or "ask:submit" in asks:
+    if any(k in offers + asks for k in ("give:submit", "ask:submit", "give:annex")):
         lines.append(SUBMIT_NOTE)
     return "\n".join(lines)
 
@@ -596,7 +615,7 @@ MAX_PACKAGE = 3
 def package(proposals: List[str], allowed: List[str]) -> List[str]:
     """The proposal items to keep: allowed ones, each once, at most MAX_PACKAGE."""
     kept = list(dict.fromkeys(p for p in proposals if p in allowed))[:MAX_PACKAGE]
-    for alone in ("give:peace", "give:submit", "ask:submit"):         # offered on their own, never bundled
+    for alone in ("give:peace", "give:submit", "ask:submit", "give:annex"):         # offered on their own, never bundled
         if alone in kept:
             return [alone]
     return kept
@@ -617,6 +636,9 @@ def package_text(keys: List[str], who: str = "they") -> str:
                          f"{'their' if plural else 'its'} subject")
         elif k == "give:submit":
             parts.append(f"{who} {'offer' if plural else 'offers'} to submit and become our subject")
+        elif k == "give:annex":
+            parts.append(f"{who} {'offer' if plural else 'offers'} to join us entirely, to be annexed into our "
+                         f"country")
         elif k.startswith("ask:"):
             label = BY_KEY[k].label if plural else BY_KEY[f"give:{word(k)}"].label
             parts.append(f"{who} {'ask' if plural else 'asks'} for {label}")

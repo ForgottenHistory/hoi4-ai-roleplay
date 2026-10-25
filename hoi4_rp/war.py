@@ -91,12 +91,14 @@ def pressure(them: gamestate.CountryState, me: gamestate.CountryState,
 
 def separate_peace_note(them: gamestate.CountryState) -> str:
     """A subject or faction member can't make peace on its own: its overlord or faction leader decides."""
+    if them.faction and them.faction_leader and them.faction_leader != them.tag:
+        return (f"{them.name} is a member of the {them.faction}, not its leader: it cannot make a separate peace "
+                f"while {them.name_of(them.faction_leader)} fights on, only urge it or ask for terms through it. "
+                f"A peace {them.name_of(them.faction_leader)} makes ends the war for the whole faction, "
+                f"{them.name} included.")
     if them.overlord:
         return (f"{them.name} is a subject of {them.name_of(them.overlord)}: it cannot make peace on its own; "
                 f"{them.name_of(them.overlord)} decides, and {them.name} can only plead or ask for terms through it.")
-    if them.faction and them.faction_leader and them.faction_leader != them.tag:
-        return (f"{them.name} is a member of the {them.faction}, not its leader: it cannot make a separate peace "
-                f"while {them.name_of(them.faction_leader)} fights on, only urge it or ask for terms through it.")
     return ""
 
 

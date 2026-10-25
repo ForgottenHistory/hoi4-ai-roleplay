@@ -152,8 +152,31 @@ def _war(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.Co
     whole = gamestate.whole_war(them, me)
     if whole:
         lines.append(whole["text"])
+        allies = _allies_stances(camp, them, me)
+        if allies:
+            lines.append(allies)
     lines.append("Your government knows all this. Whatever your tone, don't pretend the war stands otherwise.")
     return "THE WAR BETWEEN YOU:\n" + "\n".join(lines)
+
+
+def _allies_stances(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    """For a faction leader (the only one who can make peace for its side): where its allies in this war stand,
+    from their own war stances. Empty for anyone else."""
+    if them.faction_leader != them.tag and them.faction:
+        return ""
+    side = [t for t in gamestate.war_side(them, me) if t != them.tag]
+    if not side:
+        return ""
+    groups: Dict[str, List[str]] = {}
+    for t in side:
+        pol = camp.data.get("policies", {}).get(t) or {}
+        stance = "capitulated" if t in them.fallen else pol.get("war") or "unknown"
+        groups.setdefault(stance, []).append(them.name_of(t))
+    order = ["capitulated"] + list(reversed(war.STANCES)) + ["unknown"]
+    parts = [f"{s}: {', '.join(groups[s][:8])}" + (f" and {len(groups[s]) - 8} more" if len(groups[s]) > 8 else "")
+             for s in order if s in groups]
+    return (f"Your allies in this war, by their own war stance (only you, as {'faction leader' if them.faction else 'overlord'}, "
+            f"can make peace for your side; they look to you): " + "; ".join(parts) + ".")
 
 
 def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
@@ -433,14 +456,16 @@ def _peace_help(them: gamestate.CountryState, me: gamestate.CountryState, camp: 
     margin, _ = peace.estimate(me, them)
     pct = round(abs(margin) * 100)
     outcome = ("a white peace: neither side gains anything" if pct == 0 else
-               f"{me.name} would receive about {pct}% of the war score, to take from you" if margin > 0 else
-               f"you would receive about {pct}% of the war score, to take from {me.name}")
+               f"{me.name}'s side would receive about {pct}% of the war score, to take from your side" if margin > 0
+               else f"your side would receive about {pct}% of the war score, to take from {me.name}'s side")
     pol = policy.current(camp, them.tag) or {}
     when = (f"if {me.name} asked for peace or terms and your war stance accepts it, or if your stance is to seek "
             f"peace" if reply else "your war stance is to seek peace, so this is the moment to offer it")
+    sides = peace.table(me, them)
     return (f"PEACE. You may offer {me.name} peace with [[offer peace]], on its own (no other items): "
             f"{when}. If {me.name} accepts, a peace conference settles the terms by how the war stands; right now "
-            f"that would be {outcome}. {_TERMS_NOTE} Your war stance: {pol.get('war', 'unknown')}. Never offer "
+            f"that would be {outcome}. {sides + ' ' if sides else ''}{_TERMS_NOTE} Your war stance: "
+            f"{pol.get('war', 'unknown')}. Never offer "
             f"peace while your stance is to fight on, and don't offer it if you refuse their request; say in the "
             f"letter what you offer or refuse.")
 

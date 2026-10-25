@@ -2,9 +2,16 @@
 accepting starts a peace conference through the game's own start_peace_conference. Our own take on the Simple Peace
 Deals mod (Workshop 3711217109), which isn't needed.
 
-Who gets how much: the Simple Peace Deals measure (gamestate._war_score): each side's surrender progress, scaled by
-the share of its occupied core land the other side and its allies hold. The side beaten more wins, and the margin
-is its share of the conference score (0 = white peace). The offer shows that number, and accepting uses it.
+Who gets how much: between two countries alone, the Simple Peace Deals measure (gamestate._war_score): each side's
+surrender progress, scaled by the share of its occupied core land the other side and its allies hold. The side
+beaten more wins, and the margin is its share of the conference score (0 = white peace). In a war of factions (either
+side has allies in it), the game's own measure of the whole war instead (gamestate.whole_war, the war overview bar):
+two faction leaders at 0% surrender still carry their allies' gains and losses to the table. The offer shows that
+number, and accepting uses it.
+
+Who comes to the table: start_peace_conference's default scope (LIMITED_FACTION) brings a faction leader's whole
+faction and its subjects, on both sides (checked in game: a peace with the USA brought every Allied member), and only
+faction leaders may make peace, so a letter peace ends the war between the two factions.
 
 When peace can be made (possible()):
     at war with each other (for any length of time: how long it has lasted is in the war context, letters._war)
@@ -103,12 +110,13 @@ def blocker(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
     if me.tag not in them.enemies:
         return ""
     for x in (them, me):
-        if x.overlord:
-            return (f"{x.name} is a subject of {x.name_of(x.overlord)}, so peace between you can only come through "
-                    f"{x.name_of(x.overlord)}")
+        # In a faction, its leader makes peace for all (a subject's overlord may itself be a mere member, or beaten)
         if x.faction and x.faction_leader and x.faction_leader != x.tag:
             return (f"{x.name} fights as a member of the {x.faction}, so peace can only come through its leader, "
                     f"{x.name_of(x.faction_leader)}")
+        if x.overlord:
+            return (f"{x.name} is a subject of {x.name_of(x.overlord)}, so peace between you can only come through "
+                    f"{x.name_of(x.overlord)}")
     if bridge.trigger(f"{me.tag} = {{ OR = {{ civilwar_target = {them.tag} {them.tag} = {{ civilwar_target = {me.tag} }} }} }}"):
         return "this is a civil war: it ends only when one side is gone"
     return ""
@@ -116,14 +124,34 @@ def blocker(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
 
 def estimate(me: gamestate.CountryState, them: gamestate.CountryState) -> Tuple[float, str]:
     """(the player's share of the conference score, negative = the other side's; the line for the offer)."""
-    margin = gamestate._war_score(them, me) - gamestate._war_score(me, them)
+    whole = gamestate.whole_war(me, them)
+    if whole:                                   # factions at war: the whole war counts, not the two leaders alone
+        margin = whole["favour"]
+        sides = " (both sides' allies come to the conference)"
+    else:
+        margin = gamestate._war_score(them, me) - gamestate._war_score(me, them)
+        sides = ""
     margin = max(-1.0, min(1.0, margin))
     pct = round(abs(margin) * 100)
     if pct == 0:
-        return 0.0, "Outcome: a white peace (neither side gains anything)."
+        return 0.0, f"Outcome: a white peace (neither side gains anything){sides}."
     if margin > 0:
-        return margin, f"Outcome: we receive {pct}% of the war score at the peace conference."
-    return margin, f"Outcome: {them.name} receives {pct}% of the war score at the peace conference."
+        return margin, f"Outcome: our side receives {pct}% of the war score at the peace conference{sides}."
+    return margin, f"Outcome: {them.name}'s side receives {pct}% of the war score at the peace conference{sides}."
+
+
+def table(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
+    """Who a peace between the two brings to the conference, in words for `them` (empty between two countries
+    alone)."""
+    mine, theirs = gamestate.war_side(them, me), gamestate.war_side(me, them)
+    if len(mine) == 1 and len(theirs) == 1:
+        return ""
+    name = lambda t: them.name if t == them.tag else me.name if t == me.tag else them.name_of(t)
+    fallen = lambda side: [name(t) for t in side if t in them.fallen]
+    out = (f"A peace between you ends the war for both sides at once: your {len(mine)} countries and their "
+           f"{len(theirs)} all come to the one peace conference, the capitulated among them too")
+    lost = fallen(mine) + fallen(theirs)
+    return out + (f" ({', '.join(lost)} capitulated: their fate is decided there)" if lost else "") + "."
 
 
 def make(me: str, other: str) -> Optional[str]:

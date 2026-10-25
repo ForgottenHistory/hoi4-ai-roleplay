@@ -740,8 +740,12 @@ class _Session:
                         x["promises_read"] = True
                 reputation._rep(camp)["promises"].extend(
                     {"date": item["date"], "when": item["when"], "to": item["to"], "text": p} for p in found)
+                threats = reputation.read_threats(text)
+                reputation.add_threats(camp, item, threats, name(item["to"]))
                 if found:
                     print(f"  game master: promises to {name(item['to'])}: {'; '.join(found)}")
+                if threats:
+                    print(f"  game master: threats to {name(item['to'])}: {'; '.join(w for _, w in threats)}")
             else:
                 item["weight"], item["verdict"] = reputation.read_verdict(text)
                 print(f"  game master: {item['weight']:+d} {item['verdict']}")

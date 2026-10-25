@@ -7,7 +7,10 @@ Deeds are found by rules (detect(), from the chronicle each time the world moves
     a guarantee or non-aggression pact of the player's ended in peacetime
     a peace the player made (the chronicle's peace summary)
 Promises are read from the player's own letters (most roleplay happens in letters): a background LLM call lists any
-promise or assurance in each letter the player sends, kept per recipient.
+promise or assurance in each letter the player sends, kept per recipient. The same call lists threats: each is
+"open" until the player carries it out (attacks the country, or takes its land by war, focus or deal) or it turns
+"empty" (its deadline passes, else after THREAT_DAYS). credibility() tells every country how often the player's
+threats came true, so a threat from a power that follows through carries weight, and empty ones lose it.
 
 Each deed is then judged in the background by the LLM acting as an impartial game master (not any country): the
 facts, the ties, the letters and promises between the two, and the player's record so far ->
@@ -28,6 +31,7 @@ from typing import Dict, List, Optional, Tuple
 from . import bridge, campaign
 
 HALF_LIFE_YEARS = 3.0
+THREAT_DAYS = 365             # a threat without a deadline is empty if nothing came of it within this
 TIE_WORDS = {
     "pact": "a non-aggression pact between them",
     "my_guarantee": "{p}'s guarantee of {o}'s independence",
@@ -45,6 +49,7 @@ def _rep(camp: campaign.Campaign) -> Dict:
     rep.setdefault("since", camp.data.get("last_date") or "")
     rep.setdefault("deeds", [])
     rep.setdefault("promises", [])
+    rep.setdefault("threats", [])
     return rep
 
 
@@ -120,6 +125,7 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
             what = TIE_WORDS["my_guarantee"].format(p=p, o=name(other))
             deeds.append(_deed(new, [player, other], f"In peacetime, {what} came to an end."))
     rep["deeds"].extend(deeds)
+    _settle_threats(camp, player, new, events, name)
     return deeds
 
 
@@ -170,13 +176,80 @@ def promise_messages(player_name: str, to_name: str, letter: Dict) -> List[Dict[
              f"You keep an impartial record of what governments promise in Hearts of Iron IV. Below is a letter "
              f"{player_name}'s government sent to {to_name}. List every concrete promise, assurance or commitment "
              f"{player_name} makes in it (about war and peace, borders, aid, agreements, how it will treat "
-             f"{to_name}). Answer with one line per promise, each starting PROMISE:, in your own short words. If it "
-             f"promises nothing, answer NONE. Threats and demands are not promises."},
+             f"{to_name}), one line each starting PROMISE:, in your own short words. Then list every threat it makes "
+             f"against {to_name} (war, invasion, destruction, taking land, or worse if a demand is refused), one line "
+             f"each starting THREAT:, and if the threat names a deadline, put it first in brackets in months, like "
+             f"THREAT: [24 months] war unless Danzig is returned. If there is nothing of either, answer NONE. Demands "
+             f"alone are neither."},
             {"role": "user", "content": letter["text"]}]
 
 
 def read_promises(text: str) -> List[str]:
     return [m.strip(" .*") for m in re.findall(r"^[\W_]*promise[*_\s]*[:\-–]\s*(.+)$", text, re.I | re.M)]
+
+
+def read_threats(text: str) -> List[Tuple[Optional[int], str]]:
+    """[(deadline in months or None, what)]"""
+    out = []
+    for m in re.findall(r"^[\W_]*threat[*_\s]*[:\-–]\s*(.+)$", text, re.I | re.M):
+        d = re.match(r"\[\s*(\d+)\s*(month|year)s?\s*\]\s*(.*)", m.strip(), re.I)
+        if d:
+            months = int(d.group(1)) * (12 if d.group(2).lower() == "year" else 1)
+            out.append((months, d.group(3).strip(" .*")))
+        else:
+            out.append((None, m.strip(" .*")))
+    return out
+
+
+def add_threats(camp: campaign.Campaign, letter: Dict, threats: List[Tuple[Optional[int], str]],
+                to_name: str = "") -> None:
+    for months, what in threats:
+        _rep(camp)["threats"].append({
+            "date": letter["date"], "when": letter["when"], "to": letter["to"], "to_name": to_name, "text": what,
+            "deadline": campaign.shift(letter["date"], months * 30) if months else "", "status": "open", "how": ""})
+
+
+def _settle_threats(camp: campaign.Campaign, player: str, new: Dict, events: List[Dict], name) -> None:
+    """Open threats come true when the player attacks the country or takes its land, and turn empty when their
+    deadline (else THREAT_DAYS) passes with nothing done."""
+    for t in _rep(camp)["threats"]:
+        if t["status"] != "open":
+            continue
+        for e in events:
+            if player not in e["tags"] or t["to"] not in e["tags"]:
+                continue
+            took = e["type"] in ("territory", "ask:state", "give:annex", "give:submit", "subject") or \
+                e["type"].startswith(("give:state", "cede:"))
+            if (e["type"] == "war" and bridge.trigger(f"{player} = {{ has_offensive_war_with = {t['to']} }}")) or \
+                    (took and e["text"].startswith(name(player))):
+                t["status"], t["how"] = "kept", f"{e['text']} ({e['when']})"
+                break
+        if t["status"] == "open":
+            due = t["deadline"] or campaign.shift(t["date"], THREAT_DAYS)
+            if new["date"] > due:
+                t["status"] = "empty"
+
+
+def credibility(camp: campaign.Campaign, player_name: str, viewer: str) -> str:
+    """How often the player's threats came true, for a prompt."""
+    threats = _rep(camp)["threats"]
+    if not threats:
+        return ""
+    known = lambda t: (camp.snapshot or {}).get("countries", {}).get(t, {}).get("name", t)
+    name = lambda t: next((x.get("to_name") for x in threats if x["to"] == t and x.get("to_name")), None) or known(t)
+    kept = [t for t in threats if t["status"] == "kept"]
+    empty = [t for t in threats if t["status"] == "empty"]
+    open_ = [t for t in threats if t["status"] == "open"]
+    lines = [f"{player_name} has made {len(threats)} threats: {len(kept)} carried out, {len(empty)} came to nothing, "
+             f"{len(open_)} still open."]
+    lines += [f"- carried out: to {name(t['to'])}, {t['when']}: \"{t['text']}\" -> {t['how']}" for t in kept[-4:]]
+    lines += [f"- came to nothing: to {name(t['to'])}, {t['when']}: \"{t['text']}\"" for t in empty[-2:]]
+    mine = [t for t in open_ if t["to"] == viewer]
+    lines += [f"- STILL OPEN, AGAINST YOU: {t['when']}: \"{t['text']}\""
+              + (f" (deadline {campaign.date_words(t['deadline'])})" if t["deadline"] else "") for t in mine]
+    return (f"{player_name.upper()}'S THREATS (do they come true?):\n" + "\n".join(lines)
+            + f"\nWhen {player_name} threatens you, weigh it by this record and by your security: a power that "
+              f"carries out its threats must be taken seriously; one whose threats come to nothing need not be.")
 
 
 def judge_messages(camp: campaign.Campaign, player: str, deed: Dict, world_text: str) -> List[Dict[str, str]]:
@@ -247,13 +320,15 @@ def record(camp: campaign.Campaign, player: str, player_name: str, viewer: str =
 def describe(camp: campaign.Campaign, player: str, player_name: str, viewer: str) -> str:
     """The reputation section of a country's prompt (empty while there is nothing on record)."""
     text = record(camp, player, player_name, viewer)
-    if not text:
-        return ""
-    return (f"{player_name.upper()}'S REPUTATION (the impartial record of how it keeps faith, known to every "
-            f"government):\n{text}\nWeigh it as your government would: deeds against you count most, against your "
-            f"friends and neighbours next; a country that breaks its word earns distrust, one that keeps it earns "
-            f"credit. Let it shape how far you trust them and what terms you want, not your tone: governments rarely "
-            f"lecture a power about its record.")
+    threats = credibility(camp, player_name, viewer)
+    out = ""
+    if text:
+        out = (f"{player_name.upper()}'S REPUTATION (the impartial record of how it keeps faith, known to every "
+               f"government):\n{text}\nWeigh it as your government would: deeds against you count most, against "
+               f"your friends and neighbours next; a country that breaks its word earns distrust, one that keeps it "
+               f"earns credit. Let it shape how far you trust them and what terms you want, not your tone: "
+               f"governments rarely lecture a power about its record.")
+    return "\n\n".join(x for x in (out, threats) if x)
 
 
 def drop_after(camp: campaign.Campaign, key: str) -> None:
@@ -262,6 +337,7 @@ def drop_after(camp: campaign.Campaign, key: str) -> None:
     if rep:
         rep["deeds"] = [d for d in rep["deeds"] if d["date"] <= key]
         rep["promises"] = [x for x in rep["promises"] if x["date"] <= key]
+        rep["threats"] = [x for x in rep.get("threats", []) if x["date"] <= key]
 
 
 def _days(key: str) -> int:

@@ -118,6 +118,7 @@ class Campaign:
             if rep:                                    # deeds and promises after the loaded save never happened
                 rep["deeds"] = [d for d in rep.get("deeds", []) if d["date"] < key]
                 rep["promises"] = [x for x in rep.get("promises", []) if x["date"] < key]
+                rep["threats"] = [x for x in rep.get("threats", []) if x["date"] < key]
             self.data["surrender"] = {t: [x for x in h if x[0] < key]
                                       for t, h in self.data.get("surrender", {}).items()}
             offer = self.data.get("pending_offer")

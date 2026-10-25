@@ -80,6 +80,18 @@ TIES = {
     "my_access": "{p} = {{ gives_military_access_to = PREV }}",
     "faction": "is_in_faction_with = {p}",
     "subject": "is_subject_of = {p}",
+    "my_justifying": "{p} = {{ is_justifying_wargoal_against = PREV }}",   # the player prepares a war goal on it
+    "their_justifying": "is_justifying_wargoal_against = {p}",
+    "my_wargoal": "{p} = {{ has_wargoal_against = PREV }}",
+    "their_wargoal": "has_wargoal_against = {p}",
+}
+
+# Ties whose start is news (diff() turns them into events): "{a}" begins it against "{b}".
+TIE_EVENTS = {
+    "my_justifying": ("justification", "{p} began justifying a war goal against {o}."),
+    "their_justifying": ("justification", "{o} began justifying a war goal against {p}."),
+    "my_wargoal": ("wargoal", "{p} now holds a war goal against {o}."),
+    "their_wargoal": ("wargoal", "{o} now holds a war goal against {p}."),
 }
 
 
@@ -108,7 +120,8 @@ def front(tags: List[str]) -> Dict[str, Dict]:
 # Event types diff() produces: things that happened in the world, as opposed to letter outcomes
 # (agreements granted, proposals answered). Only these refresh policies or lift a refusal.
 WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_left", "faction_founded",
-               "faction_joined", "independence", "subject", "capitulation", "war", "peace", "territory"}
+               "faction_joined", "independence", "subject", "capitulation", "war", "peace", "territory",
+               "justification", "wargoal"}
 
 
 def snapshot(player: str) -> Dict:
@@ -118,6 +131,7 @@ def snapshot(player: str) -> Dict:
     wars: Set[str] = set()
     lines = query(f"{player} = {{ {_EFFECT} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} }}")
     snap["ties"] = _read_ties(lines, player)
+    snap["player"] = player
     snap["front"] = _read_front(lines)
     for line in lines:
         kind, _, rest = line.partition("|")
@@ -212,6 +226,16 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
             lost = y if x in nc else x
             add([x, y], f"The war between {name(x)} and {name(y)} ended: {name(lost)} was defeated and "
                         f"ceased to exist.", "peace")
+
+    # The player's war goals and justifications, both ways (older snapshots have no ties: nothing to compare)
+    player = new.get("player")
+    if player and "ties" in old:
+        for tag, kinds in new.get("ties", {}).items():
+            for kind in set(kinds) - set(old["ties"].get(tag, [])):
+                if kind in TIE_EVENTS and tag in nc:
+                    kind_name, text = TIE_EVENTS[kind]
+                    # its overlord hears of it too (a threat to a colony is a threat to its master)
+                    add([player, tag, nc[tag].get("overlord", "")], text.format(p=name(player), o=name(tag)), kind_name)
 
     moved: Dict[Tuple[str, str], List[str]] = defaultdict(list)
     for sid, (sname, owner) in new["states"].items():

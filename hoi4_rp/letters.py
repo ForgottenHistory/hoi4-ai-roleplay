@@ -104,6 +104,13 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         facts.append(f"{them.name} holds a war goal against {me.name}.")
     if any(w.other == them.tag for w in me.wargoals):
         facts.append(f"{me.name} holds a war goal against {them.name}.")
+    for j in me.justifying:
+        if j["target"] == them.tag:
+            facts.append(f"{me.name} is justifying {gamestate.justification_text(j, me.name_of)}: preparing a "
+                         f"pretext for war, which {them.name} knows.")
+    for j in them.justifying:
+        if j["target"] == me.tag:
+            facts.append(f"{them.name} is justifying {gamestate.justification_text(j, them.name_of)}.")
     if me.tag in them.opinion:
         facts.append(f"{them.name}'s opinion of {me.name}: {them.opinion[me.tag]:+g} (range -100 to +100).")
     if them.tag in me.opinion:

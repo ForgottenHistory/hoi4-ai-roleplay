@@ -162,6 +162,8 @@ class CountryState:
     holds: List[Occupied] = field(default_factory=list)      # others' states it controls
     capital_held_by: str = ""               # tag holding its capital, if not itself
     leader_info: Optional["leaders.Leader"] = None   # the leader as a person (leaders.py)
+    justifying: List[Dict] = field(default_factory=list)  # war goals it is justifying: {target, wargoal, states}
+    justified_by: List[str] = field(default_factory=list)  # countries justifying a war goal against it
 
     def name_of(self, tag: Optional[str]) -> str:
         return self.names.get(tag, tag) if tag else ""
@@ -228,6 +230,7 @@ def _effect(tag: str) -> str:
         f'log = "{p}capital_held|[THIS.Controller.GetTag]|[THIS.Controller.GetName]" }} }} }}',
         # PREV inside the loop is the country being described.
         f'every_other_country = {{ limit = {{ has_wargoal_against = PREV }} log = "{p}wargoal_against|{tn}" }}',
+        f'every_other_country = {{ limit = {{ is_justifying_wargoal_against = PREV }} log = "{p}justified_by|{tn}" }}',
     ]
     return f"{tag} = {{ {' '.join(lines)} }}"
 
@@ -316,6 +319,27 @@ def _diplomacy(s: CountryState, block: str) -> None:
         s.wars.append(war or War(enemy=enemy, we_attacked=False, start_date=""))
 
 
+def _justifications(s: CountryState, block: str) -> None:
+    """War goals the country is justifying (timed_wargoal in its timed_activities), with state names."""
+    goals = [t for t in timed_activities(s.tag, block) if t["kind"] == "timed_wargoal"]
+    if not goals:
+        return
+    sids = sorted({sid for t in goals for sid in t["states"]})
+    names = query(" ".join(f'{sid} = {{ log = "AIRPSN|{sid}|[THIS.GetName]" }}' for sid in sids)) if sids else []
+    state = {x.split("|")[1]: x.split("|", 2)[2] for x in names if x.startswith("AIRPSN|")}
+    s.names.update(names_for([t["target"] for t in goals if t["target"] not in s.names]))
+    for t in goals:
+        s.justifying.append({"target": t["target"], "wargoal": t["wargoal"],
+                             "states": [state.get(x, x) for x in t["states"]]})
+
+
+def justification_text(j: Dict, name_of) -> str:
+    """'a war goal against Dutch East Indies (take state: Atjeh)'"""
+    kind = j["wargoal"].replace("_", " ")
+    where = f": {', '.join(j['states'])}" if j["states"] else ""
+    return f"a war goal against {name_of(j['target'])}" + (f" ({kind}{where})" if kind else "")
+
+
 def _surrender(s: CountryState) -> None:
     """The game's own surrender numbers, as the war overview tooltip shows them (needs a bridge with
     bridge.surrender; older bridges leave occupation and limit unknown)."""
@@ -328,12 +352,12 @@ def _surrender(s: CountryState) -> None:
     s.surrender_limit = vals.get("limit")
 
 
-def timed_activities(tag: str) -> List[Dict]:
+def timed_activities(tag: str, block: Optional[str] = None) -> List[Dict]:
     """Peace terms that run for a while, from the country's save-format block (timed_activities): what a peace
     conference imposed on it. Each: {"kind": "demilitarized_zone" | "war_reparation" | "resource_rights" | ...,
     "target": tag that benefits, "states": [ids], "start": save date, "end": save date, "civilian_factories": n}."""
     from .gamefiles import parse
-    block = bridge.country_block(tag)
+    block = bridge.country_block(tag) if block is None else block
     m = re.search(r"\n\t\t\ttimed_activities=\{", block)
     if not m:
         return []
@@ -346,7 +370,8 @@ def timed_activities(tag: str) -> List[Dict]:
         out.append({"kind": kind, "target": (get("target") or "").strip('"'),
                     "states": [k for k, _, _ in states] if isinstance(states, list) else [],
                     "start": (get("start_date") or "").strip('"'), "end": (get("end_date") or "").strip('"'),
-                    "civilian_factories": _float(get("civilian_factories") or "") or 0})
+                    "civilian_factories": _float(get("civilian_factories") or "") or 0,
+                    "wargoal": (get("wargoal") or "").strip('"')})
     return out
 
 
@@ -426,6 +451,10 @@ def country(tag: str) -> CountryState:
             ctag, _, cname = rest.partition("|")
             s.capital_held_by = ctag.strip()
             s.names[s.capital_held_by] = cname.strip() or s.capital_held_by
+        elif key == "justified_by":
+            ctag, _, cname = rest.partition("|")
+            s.names[ctag] = cname or ctag
+            s.justified_by.append(ctag)
         elif key == "wargoal_against":
             ctag, _, cname = rest.partition("|")
             s.names[ctag] = cname or ctag
@@ -450,6 +479,7 @@ def country(tag: str) -> CountryState:
     focus_block = _sub_block(block, "focus", 2) or ""
     s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
     _diplomacy(s, block)
+    _justifications(s, block)
     if s.surrender is not None:
         _surrender(s)
     if s.overlord and s.overlord not in s.autonomy:      # the relation is kept in the overlord's block
@@ -709,6 +739,11 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
     if s.wargoals:
         lines.append("Holds war goals against: " + ", ".join(
             f"{s.name_of(w.other)} ({w.type.replace('_', ' ')})" for w in s.wargoals) + ".")
+    if s.justifying:
+        lines.append("Justifying (preparing a pretext for war): "
+                     + "; ".join(justification_text(j, s.name_of) for j in s.justifying) + ".")
+    if s.justified_by:
+        lines.append("Countries justifying a war goal against it: " + s.names_of(s.justified_by) + ".")
     if s.wargoals_against:
         lines.append("Countries with war goals against it: " + s.names_of([w.other for w in s.wargoals_against]) + ".")
     if s.neighbors:

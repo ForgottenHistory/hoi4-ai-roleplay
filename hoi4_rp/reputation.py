@@ -77,25 +77,24 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
             continue
         if e["type"] == "war" and other:
             if bridge.trigger(f"{player} = {{ has_offensive_war_with = {other} }}"):
-                ties = [TIE_WORDS[k].format(p=p, o=name(other)) for k in old_ties.get(other, []) if k in TIE_WORDS]
+                # One war may hold an overlord and its subjects: attacking either brings in the other, so the deed
+                # names them all without guessing which was the target.
+                drawn = [t for (kind, t) in batch if kind == "war" and lord_of(t) == other]
+                party = [other] + drawn
+                ties = [TIE_WORDS[k].format(p=p, o=name(t)) for t in party for k in old_ties.get(t, [])
+                        if k in TIE_WORDS]
                 deals = [x["text"] for x in camp.data["events"]
-                         if other in x["tags"] and player in x["tags"] and x.get("type", "").startswith(_DEAL_TYPES)
-                         and campaign.shift(new["date"], -730) <= x["date"]]
-                # The war goal as it stood before the war (declaring may use it up), else as it stands now.
-                before = old_ties.get(other, [])
-                goal = ("my_wargoal" in before or "my_justifying" in before
-                        or bridge.trigger(f"{player} = {{ has_wargoal_against = {other} }}"))
-                drawn = [name(t) for (kind, t) in batch if kind == "war" and lord_of(t) == other]
-                facts = (f"{p} declared war on {name(other)}."
-                         + (f" Its subjects {', '.join(drawn)} were drawn in with it." if drawn else "")
+                         if any(t in x["tags"] for t in party) and player in x["tags"]
+                         and x.get("type", "").startswith(_DEAL_TYPES) and campaign.shift(new["date"], -730) <= x["date"]]
+                facts = (f"{p} went to war, as the attacker, against {name(other)}"
+                         + (f" and its subjects {', '.join(name(t) for t in drawn)}, in one war (an attack on "
+                            f"either brings in the other)" if drawn else "") + "."
                          + (f" Just before, there was {'; '.join(ties)}." if ties else
-                            " Nothing bound the two by treaty just before.")
+                            " Nothing bound them by treaty just before.")
                          + (f" Deals between them in the last two years: {' '.join(deals)}" if deals else "")
-                         + ((f" {p} was still justifying a war goal against {name(other)}, not yet complete."
-                             if "my_justifying" in before and "my_wargoal" not in before else
-                             f" {p} held a war goal against {name(other)}.") if goal else
-                            f" {p} held no war goal against {name(other)}."))
-                deeds.append(_deed(new, [player, other], facts))
+                         + " " + _war_goals(player, p, party, old_ties, name)
+                         + _focuses(player))
+                deeds.append(_deed(new, [player] + party, facts))
             else:
                 # Called to defend a country it guaranteed?
                 for ward, kinds in old_ties.items():
@@ -115,19 +114,45 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
             continue
         if {"faction", "subject"} & set(new_ties.get(other, [])):
             continue                     # joined the player's faction or became its subject: nothing was broken
-        for kind in ("my_guarantee", "pact"):
-            if kind in kinds and kind not in new_ties.get(other, []):
-                # A pact the other side ended by letter isn't the player's doing; a guarantee only the player ends.
-                ended_by_them = kind == "pact" and any(x["date"] > old["date"] and x.get("type") == "end:pact"
-                                                       and other in x["tags"] for x in camp.data["events"])
-                if not ended_by_them:
-                    what = TIE_WORDS[kind].format(p=p, o=name(other))
-                    deeds.append(_deed(new, [player, other], f"In peacetime, {what} came to an end."))
+        # A guarantee only the player ends. (A non-aggression pact either side, or the game, can end, and which
+        # can't be told: not held against the player.)
+        if "my_guarantee" in kinds and "my_guarantee" not in new_ties.get(other, []):
+            what = TIE_WORDS["my_guarantee"].format(p=p, o=name(other))
+            deeds.append(_deed(new, [player, other], f"In peacetime, {what} came to an end."))
     rep["deeds"].extend(deeds)
     return deeds
 
 
 # ---------------------------------------------------------------- the game master (background LLM work)
+
+def _war_goals(player: str, p: str, party: List[str], old_ties: Dict[str, List[str]], name) -> str:
+    """What pretext the player had against the countries it attacked: war goals held, or still being justified,
+    before the war (declaring may use them up), else as they stand now."""
+    held, justifying = [], []
+    for t in party:
+        before = old_ties.get(t, [])
+        if "my_wargoal" in before or bridge.trigger(f"{player} = {{ has_wargoal_against = {t} }}"):
+            held.append(name(t))
+        elif "my_justifying" in before:
+            justifying.append(name(t))
+    out = []
+    if held:
+        out.append(f"{p} held a war goal against {', '.join(held)}.")
+    if justifying:
+        out.append(f"{p} was still justifying a war goal against {', '.join(justifying)}, not yet complete.")
+    return " ".join(out) or f"{p} held no war goal against {', '.join(name(t) for t in party)}."
+
+
+def _focuses(player: str) -> str:
+    """The player's latest national focuses: a war its focus tree declared may have no war goal at all."""
+    from .gamestate import StateError, country
+    try:
+        latest = [f.name for f in country(player).focuses][-4:]
+    except (StateError, RuntimeError):
+        return ""
+    return (f" Its latest national focuses (a focus can lead to or declare a war by itself): {', '.join(latest)}."
+            if latest else "")
+
 
 def next_job(camp: campaign.Campaign, player: str) -> Optional[Tuple[str, Dict]]:
     """The next piece of judging to do: ("promises", letter) or ("deed", deed), oldest first; None if done."""

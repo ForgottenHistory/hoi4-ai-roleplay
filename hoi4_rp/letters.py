@@ -39,6 +39,7 @@ from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 POLL_SECONDS = 0.5
 CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded when the date moved)
 IDLE_SECONDS = 600        # game date still this long (paused, player away): no background LLM work, no letters
+EVENT_LETTERS = 2          # countries that may write about one batch of events
 RETRY_SECONDS = 60        # after a failed background LLM call, wait this long before the next one
 
 
@@ -653,7 +654,7 @@ class _Session:
             camp.record_surrender(snap)
             camp.save()
             if old is not None:
-                self.plan_letters(camp, player, snap, events)
+                self.plan_letters(camp, player, snap, events, old)
         if not self.idle() and time.monotonic() >= self.retry_at:
             self.policies(camp, player, snap)
             self.game_master(camp, player, snap)
@@ -762,17 +763,26 @@ class _Session:
         own = [x for x in camp.letters_with(tag) if x.get("initiated")]
         return bool(own) and today - _days(own[-1]["date"]) < settings().letters.cooldown_days
 
-    def plan_letters(self, camp: campaign.Campaign, player: str, snap: Dict, events: List[Dict]) -> None:
+    def plan_letters(self, camp: campaign.Campaign, player: str, snap: Dict, events: List[Dict],
+                     old: Optional[Dict] = None) -> None:
         cfg = settings().letters
         if not cfg.incoming:
             return
         today = _days(snap["date"])
+        # Countries an event concerns may write about it, but at most EVENT_LETTERS per batch: a peace that carves
+        # out five new puppets shouldn't bring five thank-you letters. Major powers and countries that existed
+        # before come first; new countries (just liberated or puppeted) last.
+        reasons: Dict[str, str] = {}
         for e in events:
             if player not in e["tags"]:
                 continue
             for other in e["tags"]:
                 if other != player and active(snap, other) and not self._cooling(camp, other, today):
-                    self.pending[other] = (self.pending.get(other, "") + " " + e["text"]).strip()
+                    reasons[other] = (reasons.get(other, "") + " " + e["text"]).strip()
+        before = (old or {}).get("countries", {})
+        rank = lambda t: (snap["countries"][t].get("major", False), t in before, len(reasons[t]))
+        for tag in sorted(reasons, key=rank, reverse=True)[:EVENT_LETTERS]:
+            self.pending[tag] = (self.pending.get(tag, "") + " " + reasons[tag]).strip()
         if self.pending:
             return
         # Letters countries start without an event (policy or quiet spell) keep letter_gap_days apart.

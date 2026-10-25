@@ -104,23 +104,24 @@ class Campaign:
     # ------------------------------------------------------------ timeline
     def at(self, key: str) -> bool:
         """Move to game date `key`. Returns True if time went backwards (an earlier save was loaded):
-        later memories are dropped and the next snapshot starts a fresh baseline."""
+        memories from that moment on are dropped and the next snapshot starts a fresh baseline. Dated in hours,
+        so what happened in the save's own hour is dropped too: it is mostly what a replay of that hour redoes."""
         last = self.data.get("last_date") or ""
         rewound = bool(last and key and key < last)
         if rewound:
-            self.data["events"] = [e for e in self.data["events"] if e["date"] <= key]
+            self.data["events"] = [e for e in self.data["events"] if e["date"] < key]
             for tag, letters in self.data["letters"].items():
-                self.data["letters"][tag] = [x for x in letters if x["date"] <= key]
-            self.data["policies"] = {t: p for t, p in self.data.get("policies", {}).items() if p["date"] <= key}
-            self.data["refusals"] = [r for r in self.data.get("refusals", []) if r["date"] <= key]
+                self.data["letters"][tag] = [x for x in letters if x["date"] < key]
+            self.data["policies"] = {t: p for t, p in self.data.get("policies", {}).items() if p["date"] < key}
+            self.data["refusals"] = [r for r in self.data.get("refusals", []) if r["date"] < key]
             rep = self.data.get("reputation")
             if rep:                                    # deeds and promises after the loaded save never happened
-                rep["deeds"] = [d for d in rep.get("deeds", []) if d["date"] <= key]
-                rep["promises"] = [x for x in rep.get("promises", []) if x["date"] <= key]
-            self.data["surrender"] = {t: [x for x in h if x[0] <= key]
+                rep["deeds"] = [d for d in rep.get("deeds", []) if d["date"] < key]
+                rep["promises"] = [x for x in rep.get("promises", []) if x["date"] < key]
+            self.data["surrender"] = {t: [x for x in h if x[0] < key]
                                       for t, h in self.data.get("surrender", {}).items()}
             offer = self.data.get("pending_offer")
-            if offer and offer["date"] > key:
+            if offer and offer["date"] >= key:
                 self.data["pending_offer"] = None
             self.data["snapshot"] = None
         if key:

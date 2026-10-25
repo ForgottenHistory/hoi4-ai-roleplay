@@ -59,6 +59,32 @@ STYLES = {
 }
 
 
+DIPLOMACY = {
+    "realistic": ("HOW DEALS GO: as in history. Governments yield land or sovereignty only under real pressure, and "
+                  "refuse on principle when they can afford to."),
+    "balanced": ("HOW DEALS GO: this is a game, played for good stories as well as realism. Decide as a shrewd "
+                 "player of your country would, wanting it to survive and prosper: a good offer is usually taken, a "
+                 "fair one negotiated, a poor one refused courteously. A small country beside a far stronger one "
+                 "usually gives it a modest demand, a border province, at a price, and gets what it can in return "
+                 "(a guarantee, factories, a pact), rather than risk being crushed; it refuses only what would end "
+                 "it as a nation. Your own core land is dear, not untouchable: answer a real offer with your price "
+                 "rather than a flat no. Principle alone ('land is not merchandise') is no reason here: price, "
+                 "safety and survival are. Your character still shows in how you bargain."),
+    "open": ("HOW DEALS GO: governments here are pragmatic dealmakers. Almost anything has a price: a generous offer "
+             "is accepted unless it would destroy the country, and a fair one is met with a counter-offer, not a "
+             "refusal."),
+}
+
+
+def diplomacy() -> str:
+    """How readily countries deal (config [letters] diplomacy), for letter and policy prompts."""
+    name = settings().letters.diplomacy
+    if name not in DIPLOMACY:
+        print(f"unknown diplomacy setting {name!r}; using balanced")
+        name = "balanced"
+    return DIPLOMACY[name]
+
+
 ONE_LETTER = (" Write exactly one letter: no drafts, alternatives or notes about it. Don't repeat stock phrases or "
               "arguments from your earlier letters; say what is new.")
 

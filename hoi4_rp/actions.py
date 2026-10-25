@@ -309,8 +309,8 @@ SUBMIT_NOTE = ("Submission is the gravest step of all. A government offers it on
                "rulers truly want union, or it has no other way out. Never offer, demand or grant either lightly, "
                "or in the same breath as small favours.")
 
-TERRITORY_NOTE = ("Land differs. A country's own core land, its heartland, is a grave matter: ceded only under "
-                  "real pressure, for something substantial in return, or where the other side holds a core. A "
+TERRITORY_NOTE = ("Land differs. A country's own core land is dear: ceded at a high price, under real pressure, "
+                  "or where the other side holds a core, and its capital and heart hardly at all. A "
                   "colony or other non-core holding can be sold or traded at a fair price, as states have always done "
                   "(weigh its factories, people and resources against what is offered, and what is offered against "
                   "your own economy). If an offer is substantial but not enough, haggle: ask for more, or for "

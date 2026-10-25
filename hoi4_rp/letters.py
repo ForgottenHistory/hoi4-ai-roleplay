@@ -245,7 +245,7 @@ def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState, cam
         f"{_context(them, me, camp)}\n\n"
         f"{_history_note(camp, them, me)}\n\n"
         f"{task or _reply_task(them, me)}\n\n"
-        f"{style.current().rules.format(name=them.name, other=me.name)}\n\n{consequences}"
+        f"{style.current().rules.format(name=them.name, other=me.name)}\n\n{style.diplomacy()}\n\n{consequences}"
     )
 
 
@@ -378,9 +378,11 @@ def _security(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         shield += f"; {me.name} itself has guaranteed its independence, and can be held to its word"
     if ratio >= 3:
         return (f"YOUR SECURITY: {them.name} is far weaker than {me.name} (about {ratio:.0f} to 1 in industry or "
-                f"soldiers), and {shield}. A government this exposed is careful: it refuses what it must, but "
-                f"courteously and without taunts, lectures or moralising; it takes no hostile step (an embargo, "
-                f"ending agreements) it cannot back up; and it weighs whether a concession now saves more later. "
+                f"soldiers), and {shield}. A government this exposed is careful: it usually yields a modest demand "
+                f"of so strong a neighbour, getting what it can in return (a guarantee, factories, a pact), rather "
+                f"than invite war; it refuses only what would end it as a nation, and then courteously, without "
+                f"taunts, lectures or moralising; and it takes no hostile step (an embargo, ending agreements) it "
+                f"cannot back up. "
                 + ("Its protectors may stiffen its back, but their help is never certain. " if guards else "")
                 + "Only a leader reckless by nature would act otherwise.")
     if ratio >= 1.5 and guards:

@@ -37,6 +37,7 @@ DEFAULTS = {
         "proposal_gap_days": "30",
         "letter_gap_days": "20",
         "style": "serious",
+        "diplomacy": "balanced",
     },
     "world": {
         "setting": "auto",
@@ -66,6 +67,7 @@ class LetterSettings:
     proposal_gap_days: int  # game days between formal proposals from anyone
     letter_gap_days: int  # game days between letters countries start without an event (policy or quiet)
     style: str            # how letters are written: serious | dramatic | players (style.py)
+    diplomacy: str        # how readily countries deal: realistic | balanced | open (style.DIPLOMACY)
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,7 @@ def settings() -> Settings:
             proposal_gap_days=lt.getint("proposal_gap_days"),
             letter_gap_days=lt.getint("letter_gap_days"),
             style=(lt.get("style") or "serious").strip().lower(),
+            diplomacy=(lt.get("diplomacy") or "balanced").strip().lower(),
         ),
         world=WorldSettings(
             setting=(w.get("setting") or "auto").strip().lower(),

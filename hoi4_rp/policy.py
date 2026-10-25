@@ -30,12 +30,12 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
-from . import actions, war
+from . import actions, style, war
 from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
 REFRESH_DAYS = 90
-VERSION = 2                   # policies written before the current context (security position) are rewritten once
+VERSION = 3                   # policies written before the current context (security position) are rewritten once
 FAR_REFRESH_DAYS = 360        # a distant country with nothing to say (indifferent, urgency 0) thinks again rarely
 POLICY_WORDS = 40
 TERRITORY_REFRESH_DAYS = 30   # states changing hands between the two refresh a policy at most this often
@@ -71,7 +71,7 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
     return (
         f"Decide {them_name}'s current foreign policy toward {me_name}, as {them_name}'s government would "
         f"see it today: its interests, fears, ideology, alliances, the situation above and what you remember. "
-        f"This is internal policy, not a letter.\n\n"
+        f"This is internal policy, not a letter. {style.diplomacy()}\n\n"
         f"Answer with exactly these lines and nothing else:\n"
         f"STANCE: one of {', '.join(STANCES)}\n"
         f"URGENCY: 0 to 3, how pressing it is for {them_name} to contact {me_name} now "

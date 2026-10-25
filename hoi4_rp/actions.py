@@ -316,6 +316,10 @@ def get_deal(key: str) -> Optional[Deal]:
 def possible(rel: Relation, key: str) -> bool:
     if is_state(key):
         sid = key.rsplit(":", 1)[1]
+        if key.startswith("give:") and rel.them_subject and rel.bound != "subject":
+            return False                               # a subject's land is its overlord's to give
+        if key.startswith("ask:") and rel.me_subject and rel.bound != "overlord":
+            return False
         border = rel.them_border if key.startswith("give:") else rel.me_border
         return not rel.at_war and sid in (border or {})
     if key == "give:peace":
@@ -444,6 +448,7 @@ def letter_help(them_name: str, me_name: str, offers: List[str], asks: List[str]
 
 _COMMAND = re.compile(r"\[\[\s*(?:(offer|ask|end)\s+)?([a-z_]+)\s*([+-]?\d+)?\s*\]\]", re.I)
 _CEDE = re.compile(r"\[\[\s*state\s+(\d+)\s+to\s+([^\]]+?)\s*\]\]", re.I)   # [[state 35 to Lithuania]]
+_SUBJECT = re.compile(r"\[\[\s*(free|transfer)\s+([^\]]+?)\s*\]\]", re.I)        # [[free Slovakia]]
 
 
 # ---------------------------------------------------------------- land for a third country
@@ -490,6 +495,62 @@ def _recipient(name: str, countries: Dict[str, Dict]) -> Optional[str]:
     return max(inside)[1] if inside else None
 
 
+def subjects_of(them: str) -> Dict[str, str]:
+    """them's subjects: tag -> name."""
+    out = {}
+    for line in gamestate.query(f'{them} = {{ every_subject_country = {{ log = "AIRPSJ|[THIS.GetTag]|[THIS.GetName]" }} }}'):
+        if line.startswith("AIRPSJ|"):
+            tag, _, name = line[7:].partition("|")
+            out[tag.strip()] = name.strip()
+    return out
+
+
+def subject_help(them_name: str, me_name: str, subjects: Dict[str, str]) -> str:
+    if not subjects:
+        return ""
+    return (f"Your subjects: {', '.join(subjects.values())}. ONLY if {me_name} asked you to give one up and you "
+            f"agree: [[free COUNTRY]] releases it to full independence; [[transfer COUNTRY]] hands it to {me_name} "
+            f"as {me_name}'s subject. Giving up a subject is a grave loss of power and prestige: do it only under "
+            f"real pressure or for something substantial.")
+
+
+def subject_note(them_name: str, overlord_name: str) -> str:
+    """For a subject: it can't give away land or make such deals on its own."""
+    return (f"{them_name} is a subject of {overlord_name}: its land is not its own to give. It cannot cede states, "
+            f"submit or be annexed by its own decision; only {overlord_name} can. Say so if asked.")
+
+
+def apply_subjects(them: str, me: str, them_name: str, me_name: str,
+                   commands: List[Tuple[str, int]]) -> Tuple[List[Tuple[str, bool]], List[Dict]]:
+    """Carry out [[free COUNTRY]] and [[transfer COUNTRY]] for them's subjects."""
+    shown: List[Tuple[str, bool]] = []
+    events: List[Dict] = []
+    wanted = [k for k, _ in commands if k.startswith(("free:", "transfer:"))]
+    if not wanted:
+        return shown, events
+    subs = subjects_of(them)
+    lookup = {t: {"name": n} for t, n in subs.items()}
+    for key in dict.fromkeys(wanted):
+        verb, _, who = key.partition(":")
+        sub = _recipient(who, lookup)
+        if not sub:
+            print(f"  [[{verb} {who}]]: not one of {them}'s subjects, ignored")
+            continue
+        sname = subs[sub]
+        if verb == "free":
+            script = f"{them} = {{ end_puppet = {sub} }}"
+            line, text = (f"{them_name} released {sname}, now independent.",
+                          f"At {me_name}'s request, {them_name} released its subject {sname} to independence.")
+        else:
+            script = f"{them} = {{ end_puppet = {sub} }} {me} = {{ puppet = {sub} }}"
+            line, text = (f"{them_name} handed {sname} over to us: it is now our subject.",
+                          f"{them_name} handed its subject {sname} over to {me_name}.")
+        if _effect(script):
+            shown.append((line, False))
+            events.append({"type": f"subject:{verb}", "tags": [them, sub, me], "text": text})
+    return shown, events
+
+
 def apply_cedes(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple[str, int]],
                 countries: Dict[str, Dict]) -> Tuple[List[Tuple[str, bool]], List[Dict]]:
     """Carry out [[state N to COUNTRY]] commands. `countries`: the chronicle snapshot's countries (tag -> info)."""
@@ -497,6 +558,9 @@ def apply_cedes(them: str, me: str, them_name: str, me_name: str, commands: List
     events: List[Dict] = []
     cedes = [k for k, _ in commands if k.startswith("cede:")]
     if not cedes:
+        return shown, events
+    if bridge.trigger(f"{them} = {{ is_subject = yes }}"):
+        print(f"  {them} is a subject: its land is its overlord's to give, cessions ignored")
         return shown, events
     mine = own_states(them)
     for key in dict.fromkeys(cedes):
@@ -523,8 +587,9 @@ def apply_cedes(them: str, me: str, them_name: str, me_name: str, commands: List
 def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     """Strip all commands. Returns (clean text, immediate [(key or 'opinion', number)], proposals [key])."""
     immediate: List[Tuple[str, int]] = [(f"cede:{m.group(1)}:{m.group(2)}", 0) for m in _CEDE.finditer(text)]
+    immediate += [(f"{m.group(1).lower()}:{m.group(2)}", 0) for m in _SUBJECT.finditer(text)]
     proposals: List[str] = []
-    text = _CEDE.sub("", text)
+    text = _SUBJECT.sub("", _CEDE.sub("", text))
     for m in _COMMAND.finditer(text):
         verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
         what = f"state:{num}" if what == "state" else what
@@ -566,8 +631,8 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
     rel = relation(them, me)
     done = set()
     for key, value in commands:
-        if key.startswith("cede:"):
-            continue                                   # land for a third country: apply_cedes()
+        if key.startswith(("cede:", "free:", "transfer:")):
+            continue                                   # apply_cedes(), apply_subjects()
         if key in done or (allowed is not None and key not in allowed):
             if key not in done:
                 print(f"  [[{key}]] not allowed here, ignored")

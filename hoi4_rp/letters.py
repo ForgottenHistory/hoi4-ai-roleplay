@@ -528,6 +528,30 @@ def active(snap: Optional[Dict], tag: str) -> bool:
     return bool(c) and not c.get("capitulated")
 
 
+def _with_peace_terms(camp: campaign.Campaign, player: str, old: Dict, snap: Dict, events: List[Dict]) -> List[Dict]:
+    """When a war with the player ended, replace the bare 'no longer at war' and 'took ...' lines between the two
+    with one account of what the peace did (chronicle.peace_terms)."""
+    out = list(events)
+    for e in events:
+        if e["type"] != "peace" or player not in e["tags"]:
+            continue
+        other = next((t for t in e["tags"] if t != player), "")
+        if other not in snap["countries"]:
+            continue                                   # annexed: "ceased to exist" says it
+        asked = other if any(x.get("type") == "give:peace" and other in x["tags"] and player in x["tags"]
+                             and x["date"] >= old["date"] for x in camp.data["events"]) else ""
+        try:
+            terms = chronicle.peace_terms(old, snap, player, other, chronicle.front([player, other]), asked)
+        except gamestate.StateError as err:
+            print(f"  peace terms with {other} unavailable: {err}")
+            terms = None
+        if terms:
+            pair = {player, other}
+            out = [x for x in out if x is not e and not (x["type"] == "territory" and set(x["tags"]) == pair)]
+            out.append(terms)
+    return out
+
+
 def policy_countries(me: gamestate.CountryState, snap: Dict) -> List[str]:
     """Countries that keep a policy toward the player, most important first (refreshes go in this order):
     neighbours, overlord and subjects, enemies, faction members, then the major powers."""
@@ -584,7 +608,7 @@ class _Session:
         old = camp.snapshot
         if old is None or snap["date"] > old["date"]:
             if old is not None:
-                events = chronicle.diff(old, snap)
+                events = _with_peace_terms(camp, player, old, snap, chronicle.diff(old, snap))
                 for e in events:
                     print(f"  [{e['when']}] {e['text']}")
                 camp.add_events(events)

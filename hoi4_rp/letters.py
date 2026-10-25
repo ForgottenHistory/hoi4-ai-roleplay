@@ -287,7 +287,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     offers, asks = _proposals(camp, to, rel, key, reply=True)
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
                  + actions.proposal_help(them.name, me.name, offers, asks, expected=False)
-                 + ("\n\n" + _peace_help(them, me, camp, reply=True) if "give:peace" in offers else ""))
+                 + ("\n\n" + _peace_note(them, me, camp, offers, reply=True) if rel.at_war else ""))
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
                   + _conversation(camp, them, me))
@@ -361,9 +361,33 @@ def _peace_help(them: gamestate.CountryState, me: gamestate.CountryState, camp: 
             f"peace" if reply else "your war stance is to seek peace, so this is the moment to offer it")
     return (f"PEACE. You may offer {me.name} peace with [[offer peace]], on its own (no other items): "
             f"{when}. If {me.name} accepts, a peace conference settles the terms by how the war stands; right now "
-            f"that would be {outcome}. Your war stance: {pol.get('war', 'unknown')}. Never offer peace while your "
-            f"stance is to fight on, and don't offer it if you refuse their request; say in the letter what you "
-            f"offer or refuse.")
+            f"that would be {outcome}. {_TERMS_NOTE} Your war stance: {pol.get('war', 'unknown')}. Never offer "
+            f"peace while your stance is to fight on, and don't offer it if you refuse their request; say in the "
+            f"letter what you offer or refuse.")
+
+
+_TERMS_NOTE = ("A letter can offer or accept peace, but cannot fix its terms: the peace conference decides who gets "
+               "what. You may say what you hope for, but don't bargain over or promise specific provinces, payments "
+               "or guarantees as if the letter could settle them.")
+
+
+def _peace_note(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign,
+                offers: List[str], reply: bool) -> str:
+    """Peace instructions for a letter between enemies: how to offer it, or why it can't be offered now."""
+    if me.tag not in them.enemies:
+        return ""
+    if "give:peace" in offers:
+        return _peace_help(them, me, camp, reply)
+    pol = policy.current(camp, them.tag) or {}
+    stance = pol.get("war", "")
+    why_not = peace.blocker(me, them)
+    if why_not:
+        return (f"PEACE. No peace can be concluded now: {why_not}. Don't offer or promise peace or terms in this "
+                f"letter; if {me.name} asks for peace, answer in character and say why it cannot be yet. {_TERMS_NOTE}")
+    if stance == "fight on":
+        return (f"PEACE. Your war stance is to fight on: you don't offer peace now, and if {me.name} asks for it, "
+                f"you refuse. {_TERMS_NOTE}")
+    return f"PEACE. Make no peace offer in this letter. {_TERMS_NOTE}"
 
 
 def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: str, reply: bool = False):
@@ -416,7 +440,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
                 and bool(offers or asks or [s for s in steps if s != "end:embargo"]))
     task = (_initiative_task(them, me, reason) + "\n\n"
             + actions.letter_help(them.name, me.name, offers, asks, steps, expected)
-            + ("\n\n" + _peace_help(them, me, camp, reply=False) if "give:peace" in offers else ""))
+            + ("\n\n" + _peace_note(them, me, camp, offers, reply=False) if rel.at_war else ""))
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
               + _conversation(camp, them, me)
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "

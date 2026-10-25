@@ -42,6 +42,27 @@ def possible(me: str, other: str) -> bool:
                     f"{side(other)} {other} = {{ {side(me)} }} }}")
 
 
+def blocker(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
+    """Why the two can't make peace right now, in words for the other side (empty if they can, or aren't at war)."""
+    if me.tag not in them.enemies:
+        return ""
+    for x, y in ((them, me), (me, them)):
+        if x.overlord:
+            return (f"{x.name} is a subject of {x.name_of(x.overlord)}, so peace between you can only come through "
+                    f"{x.name_of(x.overlord)}")
+        if x.faction and x.faction_leader and x.faction_leader != x.tag:
+            return (f"{x.name} fights as a member of the {x.faction}, so peace can only come through its leader, "
+                    f"{x.name_of(x.faction_leader)}")
+    if _trigger(f"{me.tag} = {{ OR = {{ civilwar_target = {them.tag} {them.tag} = {{ civilwar_target = {me.tag} }} }} }}"):
+        return "this is a civil war: it ends only when one side is gone"
+    n = min_months(me.tag, them.tag)
+    if not _trigger(f"{me.tag} = {{ war_length_with = {{ tag = {them.tag} months > {n - 1} }} }}"):
+        war = next((w for w in them.wars if w.enemy == me.tag), None)
+        since = f" (it began {gamestate.save_date(war.start_date)})" if war and war.start_date else ""
+        return f"this war is too young: peace can be made only once it has lasted {n} months{since}"
+    return ""
+
+
 def estimate(me: gamestate.CountryState, them: gamestate.CountryState) -> Tuple[float, str]:
     """(the player's share of the conference score, negative = the other side's; the line for the offer)."""
     margin = gamestate._war_score(them, me) - gamestate._war_score(me, them)

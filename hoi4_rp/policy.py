@@ -66,9 +66,9 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
     def words(keys: List[str]) -> str:
         return ", ".join(actions.described(k) for k in keys) or "(none possible right now)"
     gives = (actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)
-             + actions.possible_keys(rel, actions.rights_gives(rel)))
+             + actions.possible_keys(rel, actions.rights_gives(rel) + actions.dmz_gives(rel)))
     asks = (actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)
-            + actions.possible_keys(rel, actions.rights_asks(rel)))
+            + actions.possible_keys(rel, actions.rights_asks(rel) + actions.dmz_asks(rel)))
     breaks = actions.possible_keys(rel, actions.UNILATERAL)
     return (
         f"Decide {them_name}'s current foreign policy toward {me_name}, as {them_name}'s government would "
@@ -105,6 +105,10 @@ def _keys(value: str, allowed: List[str]) -> List[str]:
     """Map a comma-separated line of policy words to deal keys, keeping only `allowed` ones."""
     out = []
     for part in re.split(r"[,;/]|\band\b", value.lower()):
+        dz = re.search(r"dmz\s*(\d+)", part)
+        if dz:                                  # "dmz 57 (a demilitarized Ostpreussen)"
+            out += [c for c in (f"give:dmz:{dz.group(1)}", f"ask:dmz:{dz.group(1)}") if c in allowed][:1]
+            continue
         rt = re.search(r"rights\s*(\d+)", part)
         if rt:                                  # "rights 43 (the resource rights in Northern Hungary ...)"
             out += [c for c in (f"give:rights:{rt.group(1)}", f"ask:rights:{rt.group(1)}") if c in allowed][:1]
@@ -156,9 +160,9 @@ def parse(text: str, rel: "actions.Relation", war_baseline: Optional[int] = None
         **out_war, "v": VERSION,
         "stance": stance, "urgency": urgency, "policy": policy,
         "offers": _keys(line("offers"), actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)
-                         + actions.rights_gives(rel)),
+                         + actions.rights_gives(rel) + actions.dmz_gives(rel)),
         "asks": _keys(line("asks"), actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)
-                       + actions.rights_asks(rel)),
+                       + actions.rights_asks(rel) + actions.dmz_asks(rel)),
         "breaks": _keys(line("breaks"), actions.possible_keys(rel, actions.UNILATERAL)),
     }
 

@@ -104,6 +104,7 @@ class BorderState:
     pop_k: int = 0
     resources: str = ""       # e.g. "oil 12, steel 4"
     capital: bool = False
+    dmz: bool = False         # already a demilitarized zone
 
     def note(self, other_name: str) -> str:
         worth = [f"{self.civ} civilian / {self.mil} military factories", f"{self.pop_k:,}k people"]
@@ -159,7 +160,8 @@ _STATE_NAMES: Dict[str, str] = {}      # state id -> name, filled as border stat
 
 
 _RESOURCES = ["oil", "aluminium", "rubber", "tungsten", "steel", "chromium"]
-_STATE_FLAGS = {"AIRPC": "core", "AIRPK": "claim", "AIRPO": "own_core", "AIRPN": "border", "AIRPX": "capital"}
+_STATE_FLAGS = {"AIRPC": "core", "AIRPK": "claim", "AIRPO": "own_core", "AIRPN": "border", "AIRPX": "capital",
+                "AIRPZ": "dmz"}
 
 
 def border_states(owner: str, other: str) -> Dict[str, BorderState]:
@@ -171,6 +173,7 @@ def border_states(owner: str, other: str) -> Dict[str, BorderState]:
            f'log = "AIRPB|[THIS.GetID]|[THIS.GetName]|[?THIS.industrial_complex_level]|[?THIS.arms_factory_level]|'
            f'[?THIS.state_population_k]|{res}" '
            f'if = {{ limit = {{ is_capital = yes }} log = "AIRPX|[THIS.GetID]" }} '
+           f'if = {{ limit = {{ is_demilitarized_zone = yes }} log = "AIRPZ|[THIS.GetID]" }} '
            f'if = {{ limit = {{ is_core_of = {other} }} log = "AIRPC|[THIS.GetID]" }} '
            f'if = {{ limit = {{ is_claimed_by = {other} }} log = "AIRPK|[THIS.GetID]" }} '
            f'if = {{ limit = {{ is_core_of = {owner} }} log = "AIRPO|[THIS.GetID]" }} '
@@ -336,6 +339,55 @@ def is_state(key: str) -> bool:
     return key.startswith(("give:state:", "ask:state:"))
 
 
+# ---------------------------------------------------------------- disarmament
+# "give:dmz:57": them demilitarizes its state 57 on the border with me; "ask:dmz:64": them asks me to demilitarize
+# mine. "give:dismantle:5": them dismantles 5 of its military factories (destroyed, not handed over);
+# "ask:dismantle:5": them asks me to. As in a peace conference, but agreed by letter, and without an end date.
+#     STATE = { set_demilitarized_zone = yes }     (checked in game; = no undoes it)
+#     STATE = { remove_building = { type = arms_factory level = N } }
+
+DISARM_NOTE = ("Demilitarizing a border state or dismantling military factories is disarmament at another power's "
+               "wish: a humiliation and a lasting weakness, accepted under real pressure or for something substantial "
+               "(a guarantee, land, peace), and demanded of a country you fear or could compel. A demilitarized state "
+               "can hold no troops, fortifications or working airbases, for good; dismantled factories are destroyed, not "
+               "handed over.")
+
+
+def is_dmz(key: str) -> bool:
+    return key.startswith(("give:dmz:", "ask:dmz:"))
+
+
+def dmz_gives(rel: "Relation") -> List[str]:
+    keys = [f"give:dmz:{sid}" for sid, s in (rel.them_border or {}).items() if s.border and not s.dmz and not s.capital]
+    _BORDER_INFO.update({k: rel.them_border[k.rsplit(":", 1)[1]] for k in keys})
+    return keys
+
+
+def dmz_asks(rel: "Relation") -> List[str]:
+    keys = [f"ask:dmz:{sid}" for sid, s in (rel.me_border or {}).items() if s.border and not s.dmz and not s.capital]
+    _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
+    return keys
+
+
+def dismantle_factories(tag: str, n: int) -> Optional[Tuple[int, List[str]]]:
+    """Destroy n of `tag`'s military factories, from its states at random. Returns (destroyed, state names)."""
+    import random
+    have = []
+    for line in gamestate.query(f'{tag} = {{ every_owned_state = {{ '
+                                f'log = "AIRPG|[THIS.GetID]|[THIS.GetName]|[?THIS.arms_factory_level]" }} }}'):
+        f = line.split("|")
+        if f[0] == "AIRPG" and len(f) >= 4:
+            have += [(f[1], f[2])] * int(float(f[3] or 0))
+    if not have:
+        return None
+    taken = random.sample(have, min(n, len(have)))
+    script = " ".join(f"{sid} = {{ remove_building = {{ type = arms_factory level = "
+                      f"{sum(1 for s, _ in taken if s == sid)} }} }}" for sid in dict.fromkeys(s for s, _ in taken))
+    if not _effect(script):
+        return None
+    return len(taken), list(dict.fromkeys(name for _, name in taken))
+
+
 # ---------------------------------------------------------------- resource rights
 # "give:rights:46": them gives me the rights to the resources of its state 46 (the output ships to me, the land
 # stays theirs); "ask:rights:12": them asks me for mine. Any tradeable state with resources, in peace, without end.
@@ -432,7 +484,9 @@ def _govt_script(tag: str, ideology: str) -> str:
             f"add_popularity = {{ ideology = {ideology} popularity = 0.3 }} }}")
 
 
-FACTORY_KEYS = ("give:civ", "give:mil", "ask:civ", "ask:mil")   # amount chosen in the command
+FACTORY_KEYS = ("give:civ", "give:mil", "ask:civ", "ask:mil",    # amount chosen in the command
+                "give:dismantle", "ask:dismantle")
+AMOUNT_KINDS = ("civ", "mil", "dismantle")
 ECONOMY: Dict[str, str] = {}   # {"text": both sides' industry} for the help of the letter being written (economy())
 
 
@@ -447,7 +501,7 @@ def economy(them_name: str, me_name: str, rel: "Relation") -> str:
 
 def is_factory_key(key: str) -> bool:
     parts = key.split(":")
-    return len(parts) == 3 and parts[0] in ("give", "ask") and parts[1] in FACTORIES and parts[2].isdigit()
+    return len(parts) == 3 and parts[0] in ("give", "ask") and parts[1] in AMOUNT_KINDS and parts[2].isdigit()
 
 
 def factory_base(key: str) -> str:
@@ -539,6 +593,31 @@ def get_deal(key: str) -> Optional[Deal]:
                     f"in power", f"a new government in our country: the {label}", "",
                     f"We changed our government: the {label} now rules.",
                     f"{{me_name}} put its {label} in power at {{them_name}}'s demand.", True)
+    if is_dmz(key):
+        sid = key.rsplit(":", 1)[1]
+        info = _BORDER_INFO.get(key)
+        name = info.name if info else _STATE_NAMES.get(sid, f"state {sid}")
+        label = f"a demilitarized {name}"
+        if key.startswith("give:"):
+            return Deal(key, "dmz", False, True, f"demilitarize your state {name} on the border with {{me_name}}: "
+                        f"no troops or fortifications there, for good", label,
+                        f"{sid} = {{{{ set_demilitarized_zone = yes }}}}",
+                        f"{{them_name}} demilitarized {name}.", f"{{them_name}} demilitarized {name} at "
+                        f"{{me_name}}'s wish.")
+        return Deal(key, "dmz", False, True, f"demand that {{me_name}} demilitarize its state {name} on your "
+                    f"border: no troops or fortifications there, for good", label,
+                    f"{sid} = {{{{ set_demilitarized_zone = yes }}}}",
+                    f"We demilitarized {name}.", f"{{me_name}} demilitarized {name} at {{them_name}}'s demand.", True)
+    if key.startswith(("give:dismantle", "ask:dismantle")):
+        n = (key + ":N").split(":")[2]
+        what = f"{n} military factories"
+        if key.startswith("give:"):
+            return Deal(key, "dismantle", False, True, f"dismantle {what} of yours (destroyed, not handed over)",
+                        f"dismantling {what}", "", f"{{them_name}} dismantled {what}.",
+                        f"{{them_name}} dismantled {what} at {{me_name}}'s wish.")
+        return Deal(key, "dismantle", False, True, f"demand that {{me_name}} dismantle {what} of its own "
+                    f"(destroyed, not handed over)", f"dismantling {what}", "", f"We dismantled {what}.",
+                    f"{{me_name}} dismantled {what} at {{them_name}}'s demand.", True)
     if is_factory_key(key) or key in FACTORY_KEYS:
         verb, kind, n = (key + ":0").split(":")[:3]
         what = f"{n} {FACTORIES[kind][1]}" if n != "0" else f"N {FACTORIES[kind][1]}"
@@ -600,13 +679,22 @@ def possible(rel: Relation, key: str) -> bool:
         subject = rel.them_subject if verb == "give" else rel.me_subject
         allowed_subject = rel.bound == ("subject" if verb == "give" else "overlord")
         return not rel.at_war and ideology in (parties or {}) and (not subject or allowed_subject)
-    if key in ("give:civ", "give:mil", "ask:civ", "ask:mil"):           # the amount comes with the command
+    if is_dmz(key):
+        sid = key.rsplit(":", 1)[1]
+        give = key.startswith("give:")
+        if (rel.them_subject and rel.bound != "subject") if give else (rel.me_subject and rel.bound != "overlord"):
+            return False                               # a subject's land is its overlord's affair
+        state = ((rel.them_border if give else rel.me_border) or {}).get(sid)
+        return not rel.at_war and bool(state and state.border and not state.dmz and not state.capital)
+    if key in FACTORY_KEYS:                                                # the amount comes with the command
         side = rel.them_factories if key.startswith("give:") else rel.me_factories
-        return not rel.at_war and (side or {}).get(key.split(":")[1], 0) > 0
+        kind = key.split(":")[1]
+        return not rel.at_war and (side or {}).get("mil" if kind == "dismantle" else kind, 0) > 0
     if is_factory_key(key):
         verb, kind, n = key.split(":")
         side = rel.them_factories if verb == "give" else rel.me_factories
-        return not rel.at_war and 0 < int(n) <= min(MAX_FACTORIES, (side or {}).get(kind, 0))
+        have = (side or {}).get("mil" if kind == "dismantle" else kind, 0)
+        return not rel.at_war and 0 < int(n) <= min(MAX_FACTORIES, have)
     if is_subject_key(key):
         tag = key.rsplit(":", 1)[1]
         return not rel.at_war and tag in ((rel.them_subjects if key.startswith("give:") else rel.me_subjects) or {})
@@ -658,11 +746,11 @@ def word(key: str) -> str:
 
 def described(key: str) -> str:
     """Policy vocabulary with the state name where there is one: 'state 35 (Brabant)'."""
-    if is_state(key) or is_rights(key):
+    if is_state(key) or is_rights(key) or is_dmz(key):
         return f"{word(key)} ({get_deal(key).label})"
     if is_subject_key(key):
         return f"subject {key.rsplit(':', 1)[1]} ({_SUBJECT_NAMES.get(key.rsplit(':', 1)[1], '')})"
-    if is_factory_key(key) or key in ("give:civ", "give:mil", "ask:civ", "ask:mil"):
+    if is_factory_key(key) or key in FACTORY_KEYS:
         return word(key)
     if is_govt_key(key):
         return f"{word(key)} ({_PARTY_LABELS.get(key, '')})"
@@ -702,7 +790,8 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
         "Use it when the letter was notably friendly or offensive; leave it out for ordinary letters.",
     ]
     gives = (possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
-             + possible_keys(rel, govt_gives(rel)) + possible_keys(rel, rights_gives(rel)))
+             + possible_keys(rel, govt_gives(rel)) + possible_keys(rel, rights_gives(rel))
+             + possible_keys(rel, dmz_gives(rel) + ["give:dismantle"]))
     if gives:
         lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
                      f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
@@ -718,6 +807,8 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
             lines.append(TERRITORY_NOTE)
         if any(is_rights(k) for k in gives):
             lines.append(RIGHTS_NOTE)
+        if any(is_dmz(k) or k == "give:dismantle" for k in gives):
+            lines.append(DISARM_NOTE)
         if "give:submit" in gives or "give:annex" in gives:
             lines.append(SUBMIT_NOTE)
     lines += _unilateral_lines(them_name, me_name, possible_keys(rel, UNILATERAL),
@@ -756,6 +847,8 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
         lines.append(TERRITORY_NOTE)
     if any(is_rights(k) for k in offers + asks):
         lines.append(RIGHTS_NOTE)
+    if any(is_dmz(k) or factory_base(k) in ("give:dismantle", "ask:dismantle") for k in offers + asks):
+        lines.append(DISARM_NOTE)
     if any(is_state(k) or is_rights(k) or k in FACTORY_KEYS for k in offers + asks) and ECONOMY.get("text"):
         lines.append(ECONOMY["text"])
     if any(k in offers + asks for k in ("give:submit", "ask:submit", "give:annex")):
@@ -928,7 +1021,7 @@ def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     text = _GOVT.sub("", _SUBJECT.sub("", _CEDE.sub("", _SUBJECT_DEAL.sub("", text))))
     for m in _COMMAND.finditer(text):
         verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
-        what = f"{what}:{num}" if what in ("state", "rights") or (what in FACTORIES and num) else what
+        what = f"{what}:{num}" if what in ("state", "rights", "dmz") or (what in AMOUNT_KINDS and num) else what
         if verb == "offer":
             proposals.append(f"give:{what}")
         elif verb == "ask":
@@ -981,7 +1074,8 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             continue
         deal = get_deal(key)
         if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)
-                        and not is_factory_key(key) and not is_govt_key(key) and not is_rights(key)):
+                        and not is_factory_key(key) and not is_govt_key(key) and not is_rights(key)
+                        and not is_dmz(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
@@ -994,6 +1088,20 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 shown.append((deal.shown.format(**fmt), deal.hostile))
                 events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
                 (rel.them_parties if verb == "give" else rel.me_parties).pop(ideology, None)
+            continue
+        if is_factory_key(key) and key.split(":")[1] == "dismantle":
+            verb, _, n = key.split(":")
+            done_ = dismantle_factories(them if verb == "give" else me, int(n))
+            if done_:
+                count, where = done_
+                what = f"{count} military factor{'y' if count == 1 else 'ies'}"
+                shown.append(((f"{them_name} dismantled {what}" if verb == "give" else f"We dismantled {what}")
+                              + f" (in {', '.join(where[:4])}).", verb == "ask"))
+                events.append({"type": key, "tags": [them, me], "text": (
+                    f"{them_name} dismantled {what} at {me_name}'s wish." if verb == "give" else
+                    f"{me_name} dismantled {what} at {them_name}'s demand.")})
+                side = rel.them_factories if verb == "give" else rel.me_factories
+                side["mil"] = max(0, side.get("mil", 0) - count)
             continue
         if is_factory_key(key):
             verb, kind, n = key.split(":")
@@ -1021,6 +1129,10 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
         if _effect(deal.effect.format(**fmt)):
             if is_state(key):
                 (rel.them_border if key.startswith("give:") else rel.me_border).pop(key.rsplit(":", 1)[1], None)
+            elif is_dmz(key):
+                state = (rel.them_border if key.startswith("give:") else rel.me_border or {}).get(key.rsplit(":", 1)[1])
+                if state:
+                    state.dmz = True
             elif is_rights(key):
                 held = rel.them_rights if key.startswith("give:") else rel.me_rights
                 if held is not None:
@@ -1062,6 +1174,16 @@ def package_text(keys: List[str], who: str = "they") -> str:
             parts.append(f"{who} {'demand' if plural else 'demands'} that we put our {party} in power"
                          if k.startswith("ask:") else
                          f"{who} {'offer' if plural else 'offers'} to put {'their' if plural else 'its'} {party} in power")
+        elif is_dmz(k):
+            name = get_deal(k).label.replace("a demilitarized ", "")
+            parts.append(f"{who} {'demand' if plural else 'demands'} that we demilitarize {name}"
+                         if k.startswith("ask:") else f"{who} {'offer' if plural else 'offers'} to demilitarize {name}")
+        elif is_factory_key(k) and k.split(":")[1] == "dismantle":
+            n = k.split(":")[2]
+            parts.append(f"{who} {'demand' if plural else 'demands'} that we dismantle {n} of our military factories"
+                         if k.startswith("ask:") else
+                         f"{who} {'offer' if plural else 'offers'} to dismantle {n} of {'their' if plural else 'its'} "
+                         f"military factories")
         elif is_factory_key(k):
             what = get_deal(k).label
             parts.append(f"{who} {'ask' if plural else 'asks'} us for {what}" if k.startswith("ask:") else

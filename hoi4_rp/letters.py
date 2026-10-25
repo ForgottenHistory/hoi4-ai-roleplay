@@ -332,8 +332,8 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.add_letter(to, to, reply, key)
     outcomes, events = actions.apply(to, player, them.name, me.name, commands,
                                      allowed=["opinion"] + actions.GIVES + actions.UNILATERAL + actions.state_gives(rel)
-                                     + ["give:civ", "give:mil"] + actions.govt_gives(rel)
-                                     + actions.rights_gives(rel))
+                                     + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel)
+                                     + actions.rights_gives(rel) + actions.dmz_gives(rel))
     if not rel.at_war:                                  # land for a third country, at the player's request
         more_shown, more_events = actions.apply_cedes(to, player, them.name, me.name, commands,
                                                       (camp.snapshot or {}).get("countries", {}))
@@ -484,10 +484,12 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
         pol = policy.current(camp, tag)
         if not pol and policy.stale(camp, tag):
             return peace_offer, []
-        offers = (actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel) + ["give:civ", "give:mil"]
-                  + actions.govt_gives(rel) + actions.rights_gives(rel))
-        asks = (actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel) + ["ask:civ", "ask:mil"]
-                + actions.govt_asks(rel) + actions.rights_asks(rel))
+        offers = (actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel)
+                  + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel) + actions.rights_gives(rel)
+                  + actions.dmz_gives(rel))
+        asks = (actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel)
+                + ["ask:civ", "ask:mil", "ask:dismantle"] + actions.govt_asks(rel) + actions.rights_asks(rel)
+                + actions.dmz_asks(rel))
         ok = lambda k: k != "give:peace" and actions.possible(rel, k)
         return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
     proposed = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("proposal")]
@@ -505,8 +507,10 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
     pol = policy.current(camp, tag)
     if not pol and policy.stale(camp, tag):
         return [], []                                      # its old aims no longer apply; wait for the new ones
-    offers = pol["offers"] if pol else actions.GIVES + actions.state_gives(rel) + actions.rights_gives(rel)
-    asks = pol["asks"] if pol else actions.ASKS + actions.state_asks(rel) + actions.rights_asks(rel)
+    offers = pol["offers"] if pol else (actions.GIVES + actions.state_gives(rel) + actions.rights_gives(rel)
+                                        + actions.dmz_gives(rel))
+    asks = pol["asks"] if pol else (actions.ASKS + actions.state_asks(rel) + actions.rights_asks(rel)
+                                    + actions.dmz_asks(rel))
     ok = lambda k: k not in refused and k != "give:peace" and actions.possible(rel, k)
     return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
 
@@ -579,6 +583,7 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> None:
     key = camp.data.get("last_date") or offer["date"]
     rel = actions.relation(tag, player)                     # also loads state names for territory items
     actions.state_gives(rel), actions.state_asks(rel), actions.rights_gives(rel), actions.rights_asks(rel)
+    actions.dmz_gives(rel), actions.dmz_asks(rel)
     what = actions.package_text(items, them_name)          # "France offers ...; France asks for ..."
     if answer == 1:
         outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in items], allowed=items)

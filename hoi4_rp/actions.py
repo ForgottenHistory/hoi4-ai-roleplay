@@ -11,6 +11,8 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
                               them embargoes me / lifts its embargo
     [[offer X]]               a proposal: them offers to grant X        (letters them starts; Accept/Decline)
     [[ask X]]                 a proposal: them asks me to grant X to them (access, docking, guarantee)
+    [[offer submit]]          a proposal: them becomes my subject (puppet)
+    [[ask submit]]            a proposal: them demands that I become its subject
 
 Each deal checks the game first: it must be possible right now (agreements need peace and must not exist
 yet; ending one needs it to exist). Effect directions were checked in game:
@@ -101,6 +103,8 @@ class Relation:
     me_border: Dict[str, BorderState] = None     # my non-capital states bordering them (flags: their cores/claims)
     peace_ok: bool = False                       # at war, and peace can be made now (peace.possible)
     bound: str = ""          # "subject" (them is my subject), "overlord" (them is my overlord), "faction", or ""
+    them_subject: bool = False   # them is a subject of anyone
+    me_subject: bool = False     # I am a subject of anyone
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -154,7 +158,9 @@ def relation(them: str, me: str) -> Relation:
     return Relation(at_war=at_war,
                     exists={name: check(them, me) for name, check in _CHECKS.items()},
                     them_border=border_states(them, me), me_border=border_states(me, them),
-                    peace_ok=at_war and peace.possible(me, them), bound=bound)
+                    peace_ok=at_war and peace.possible(me, them), bound=bound,
+                    them_subject=bridge.trigger(f"{them} = {{ is_subject = yes }}"),
+                    me_subject=bridge.trigger(f"{me} = {{ is_subject = yes }}"))
 
 
 # ---------------------------------------------------------------- deals
@@ -210,6 +216,16 @@ DEALS: List[Deal] = [
     Deal("ask:guarantee", "my_guarantee", False, True, "ask {me_name} to guarantee your independence",
          "our guarantee of their independence", "{me} = {{ give_guarantee = {them} }}",
          "We guaranteed the independence of {them_name}.", "{me_name} guaranteed the independence of {them_name}."),
+    # Submission (peace only, never between a subject and its overlord; SUBMIT_NOTE): OVERLORD = { puppet = SUBJECT }
+    Deal("give:submit", "submit", False, True,
+         "submit to {me_name}: become its subject (puppet), giving up an independent foreign policy for its "
+         "protection", "to become our subject", "{me} = {{ puppet = {them} }}",
+         "{them_name} became our subject.", "{them_name} submitted to {me_name} and became its subject."),
+    Deal("ask:submit", "submit", False, True,
+         "demand that {me_name} submit to you and become your subject (puppet)", "our submission as their subject",
+         "{them} = {{ puppet = {me} }}",
+         "We submitted to {them_name} and became its subject.", "{me_name} submitted to {them_name} and became its "
+         "subject.", True),
     # them acts alone
     Deal("end:pact", "pact", True, False, "end your non-aggression pact with {me_name}", "the non-aggression pact",
          _rel("me", "them", "non_aggression_pact", "no"),
@@ -243,6 +259,11 @@ UNILATERAL = [d.key for d in DEALS if d.key.startswith("end:") or d.key == "emba
 #     A = { transfer_state = ID }      A becomes owner and controller of state ID (checked in game)
 
 _BORDER_INFO: Dict[str, BorderState] = {}       # territory key -> state info, from the latest relation()
+
+SUBMIT_NOTE = ("Submission is the gravest step of all. A government offers it only when it cannot survive alone, "
+               "or its people and rulers truly want the other's protection; it demands it only of a country far "
+               "weaker than itself that it could crush, and knows a proud nation may sooner fight. Never offer or "
+               "demand it lightly, or in the same breath as small favours.")
 
 TERRITORY_NOTE = ("Territory is a grave matter. A government cedes its own land only under real pressure, for "
                   "something substantial in return, or where the other side holds a core; it demands land only "
@@ -289,6 +310,11 @@ def possible(rel: Relation, key: str) -> bool:
         return not rel.at_war and sid in (border or {})
     if key == "give:peace":
         return rel.at_war and rel.peace_ok
+    if key in ("give:submit", "ask:submit"):
+        # Never at war or between a subject and its overlord; both sides must be independent (a subject can't
+        # take subjects of its own). Fellow faction members may.
+        return (not rel.at_war and rel.bound in ("", "faction")
+                and not rel.them_subject and not rel.me_subject)
     if rel.bound and key not in BOUND_ALLOWED:
         return False
     d = BY_KEY[key]
@@ -311,6 +337,10 @@ def described(key: str) -> str:
     """Policy vocabulary with the state name where there is one: 'state 35 (Brabant)'."""
     if is_state(key):
         return f"{word(key)} ({get_deal(key).label})"
+    if key == "give:submit":
+        return "submit (become their subject)"
+    if key == "ask:submit":
+        return "submit (they become your subject)"
     return word(key)
 
 
@@ -377,6 +407,8 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
     lines += [f"- [[ask {word(k)}]]: {get_deal(k).prompt.format(**f)}" for k in asks]
     if any(is_state(k) for k in offers + asks):
         lines.append(TERRITORY_NOTE)
+    if "give:submit" in offers or "ask:submit" in asks:
+        lines.append(SUBMIT_NOTE)
     return "\n".join(lines)
 
 
@@ -486,7 +518,10 @@ MAX_PACKAGE = 3
 def package(proposals: List[str], allowed: List[str]) -> List[str]:
     """The proposal items to keep: allowed ones, each once, at most MAX_PACKAGE."""
     kept = list(dict.fromkeys(p for p in proposals if p in allowed))[:MAX_PACKAGE]
-    return ["give:peace"] if "give:peace" in kept else kept      # peace is offered on its own
+    for alone in ("give:peace", "give:submit", "ask:submit"):         # offered on their own, never bundled
+        if alone in kept:
+            return [alone]
+    return kept
 
 
 def package_text(keys: List[str], who: str = "they") -> str:
@@ -499,6 +534,11 @@ def package_text(keys: List[str], who: str = "they") -> str:
             name = get_deal(k).label
             parts.append(f"{who} {'ask' if plural else 'asks'} for {name}" if k.startswith("ask:") else
                          f"{who} {'cede' if plural else 'cedes'} {name}")
+        elif k == "ask:submit":
+            parts.append(f"{who} {'demand' if plural else 'demands'} that we submit and become "
+                         f"{'their' if plural else 'its'} subject")
+        elif k == "give:submit":
+            parts.append(f"{who} {'offer' if plural else 'offers'} to submit and become our subject")
         elif k.startswith("ask:"):
             label = BY_KEY[k].label if plural else BY_KEY[f"give:{word(k)}"].label
             parts.append(f"{who} {'ask' if plural else 'asks'} for {label}")

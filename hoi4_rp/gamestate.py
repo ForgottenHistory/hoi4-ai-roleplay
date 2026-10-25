@@ -683,9 +683,12 @@ def strength_comparison(a: CountryState, b: CountryState) -> str:
             f"{_men(b.strength.get('army_k', 0))} (military factories {ratio('mil')}, soldiers {ratio('army_k')}).")
 
 
-def describe(s: CountryState, max_states: Optional[int] = None, details: bool = True) -> str:
+def describe(s: CountryState, max_states: Optional[int] = None, details: bool = True,
+             focus_details: Optional[int] = None, spirit_details: bool = True) -> str:
     """Readable summary, e.g. for an LLM prompt. Complete by default: every state, and the
-    descriptions of national spirits and completed focuses. max_states/details=False shorten it."""
+    descriptions of national spirits and completed focuses. max_states/details=False shorten it;
+    focus_details=N describes only the N latest focuses (the rest by name), spirit_details=False names the
+    spirits only."""
     pct = lambda v: "?" if v is None else f"{round(v * 100)}%"
     lines = [
         f"{s.name} ({s.tag}){', a major power' if s.is_major else ''}. Adjective: {s.adjective}. Capital: {s.capital}.",
@@ -753,17 +756,20 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
         more = f" and {len(s.states) - len(shown)} more" if len(shown) < len(s.states) else ""
         lines.append(f"Owns {len(s.states)} states: {', '.join(x.name for x in shown)}{more}.")
 
-    def items(title: str, entries: List[Named]) -> None:
+    def items(title: str, entries: List[Named], detailed: Optional[int] = None) -> None:
         if not entries:
             return
-        if not details:
+        if not details or detailed == 0:
             lines.append(f"{title}: " + ", ".join(e.name for e in entries) + ".")
             return
-        lines.append(f"{title}:")
-        for e in entries:
+        older = entries[:-detailed] if detailed else []
+        if older:
+            lines.append(f"{title}, earlier: " + ", ".join(e.name for e in older) + ".")
+        lines.append(f"{title}{', latest' if older else ''}:")
+        for e in entries[len(older):]:
             desc = clean_loc(e.description)
             lines.append(f"- {e.name}" + (f": {desc}" if desc else ""))
 
-    items("National spirits and laws", s.ideas)
-    items("Completed national focuses", s.focuses)
+    items("National spirits and laws", s.ideas, None if spirit_details else 0)
+    items("Completed national focuses", s.focuses, focus_details)
     return "\n".join(lines)

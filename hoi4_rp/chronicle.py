@@ -12,6 +12,7 @@ demilitarized zones, dismantled military industry, war reparations and resource 
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -245,6 +246,183 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
     for (frm, to), names in moved.items():
         add([to, frm], f"{name(to)} took {', '.join(names)} from {name(frm)}.", "territory")
     return events
+
+
+# ---------------------------------------------------------------- compact memory for prompts
+# Wars and peaces are recorded pair by pair: a world war joined by a faction of forty brings hundreds of lines
+# ("War broke out between X and Y."). For a prompt, one moment's pairs read as one or a few lines.
+
+MAX_SIDE = 8                   # names listed per side of a grouped line; the rest are counted
+
+
+def _names_from_events(events: List[Dict]) -> Dict[str, str]:
+    """Names of countries no longer in the snapshot, from one-country events ("X ceased to exist.")."""
+    out = {}
+    for e in events:
+        if len(e.get("tags", [])) == 1 and e.get("type") in ("country_gone", "country_new", "capitulation"):
+            m = re.match(r"(?:In )?(.+?) (?:ceased to exist|appeared as a country|capitulated)\.", e["text"])
+            if m:
+                out[e["tags"][0]] = m.group(1)
+    return out
+
+
+def _pair_kind(e: Dict) -> str:
+    if len(e.get("tags", [])) != 2:
+        return ""
+    if e["type"] == "war" and e["text"].startswith("War broke out between "):
+        return "war"
+    if e["type"] == "peace" and e["text"].endswith(" are no longer at war."):
+        return "peace"
+    if e["type"] == "peace" and e["text"].endswith(" was defeated and ceased to exist."):
+        return "gone"
+    return ""
+
+
+MAX_LIST = 8                   # place names kept from a long list in an event text ("and 23 more")
+_PLACE = r"[A-ZÀ-Þ][\w'’.\-]*(?: (?:[A-ZÀ-Þ][\w'’.\-]*|de|du|des|of|and|al|el|la|le|del|am|an|der))*"
+_LONG_LIST = re.compile(rf"(?:{_PLACE}, ){{{MAX_LIST},}}{_PLACE}")
+
+
+def _shorten_lists(text: str) -> str:
+    """'took A, B, C, ... Z from X' -> 'took A, ..., H and 18 more from X'."""
+    def cut(m: re.Match) -> str:
+        items = m.group(0).split(", ")
+        return ", ".join(items[:MAX_LIST]) + f" and {len(items) - MAX_LIST} more"
+    return _LONG_LIST.sub(cut, text)
+
+
+# Lines told of several countries at once ("A was established..." x 40): (one, many)
+_PLURALS = [(" was established as a country, a subject of ", " were established as countries, subjects of "),
+            (" became a subject of ", " became subjects of "),
+            (" is no longer a subject of ", " are no longer subjects of "),
+            (" appeared as a country.", " appeared as countries."),
+            (" joined the ", " joined the "), (" left the ", " left the "),
+            (" ceased to exist.", " ceased to exist."), (" capitulated.", " capitulated.")]
+
+
+def _merge_alike(lines: List[Tuple[str, str]], events: List[Dict], names: Dict[str, str], listed) -> List[Tuple[str, str]]:
+    """Same-moment lines that differ only in the country they open with become one line."""
+    groups: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+    order: List[Tuple[str, str]] = []
+    first_tag = {e["text"]: e["tags"][0] for e in events if e.get("tags")}
+    for when, text in lines:
+        tag = first_tag.get(text)
+        rest = text[len(names.get(tag, "")):] if tag and text.startswith(names.get(tag, "\0")) else ""
+        if rest and any(rest.startswith(one) for one, _ in _PLURALS):
+            key = (when, rest)
+            if key not in groups:
+                order.append(key)
+            groups[key].append(tag)
+        else:
+            order.append((when, text))
+    out = []
+    for key in order:
+        if key in groups:
+            when, rest = key
+            tags = groups[key]
+            if len(tags) == 1:
+                out.append((when, names[tags[0]] + rest))
+            else:
+                many = next(m for one, m in _PLURALS if rest.startswith(one))
+                one = next(o for o, _ in _PLURALS if rest.startswith(o))
+                out.append((when, listed(tags) + many + rest[len(one):]))
+        else:
+            out.append(key)
+    return out
+
+
+def compact(events: List[Dict], snapshot: Optional[Dict] = None) -> List[Tuple[str, str]]:
+    """[(when, text)] for a prompt, oldest first: each moment's war and peace pairs grouped into a few lines."""
+    countries = (snapshot or {}).get("countries", {})
+    names = {**_names_from_events(events), **{t: c["name"] for t, c in countries.items()}}
+    major = lambda t: bool(countries.get(t, {}).get("major"))
+
+    def listed(tags: List[str]) -> str:
+        tags = sorted(tags, key=lambda t: (not major(t), names[t]))
+        shown = [names[t] for t in tags[:MAX_SIDE]]
+        if len(tags) > MAX_SIDE:
+            shown.append(f"{len(tags) - MAX_SIDE} others")
+        return shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " and " + shown[-1]
+
+    out: List[Tuple[str, str]] = []
+    i = 0
+    while i < len(events):
+        date = events[i]["date"]
+        j = i
+        while j < len(events) and events[j]["date"] == date:
+            j += 1
+        batch = events[i:j]
+        i = j
+        # a peace summary already tells where the loser's land went: its "X took ... from L" lines go
+        settled = {t for e in batch if e["type"] == "peace" and e["text"].startswith("Peace between")
+                   for t in e["tags"]}
+        batch = [e for e in batch if not (e["type"] == "territory" and len(e["tags"]) == 2
+                                          and e["tags"][1] in settled)]
+        if not batch:
+            continue
+        groups: Dict[str, List[Dict]] = defaultdict(list)
+        for e in batch:
+            k = _pair_kind(e)
+            if k and all(t in names for t in e["tags"]):
+                groups[k].append(e)
+            else:
+                out.append((e["when"], e["text"]))
+        when = batch[0]["when"]
+        for kind, evs in groups.items():
+            if len(evs) == 1:
+                out.append((when, evs[0]["text"]))
+                continue
+            if kind == "gone":
+                # "The war between X and L ended: L was defeated and ceased to exist." -> per loser
+                losers: Dict[str, List[str]] = defaultdict(list)
+                for e in evs:
+                    lost = next((t for t in e["tags"] if e["text"].endswith(f"{names[t]} was defeated and ceased "
+                                                                            f"to exist.")), e["tags"][1])
+                    losers[lost] += [t for t in e["tags"] if t != lost]
+                for lost, winners in losers.items():
+                    out.append((when, f"{names[lost]} was defeated and ceased to exist, ending its wars with "
+                                      f"{listed(winners)}."))
+                continue
+            partners: Dict[str, set] = defaultdict(set)
+            for e in evs:
+                a, b = e["tags"]
+                partners[a].add(b)
+                partners[b].add(a)
+            done = set()
+            # Two sides where everyone on one side is at war (or made peace) with everyone on the other
+            by_set: Dict[frozenset, List[str]] = defaultdict(list)
+            for t, ps in partners.items():
+                by_set[frozenset(ps)].append(t)
+            for ps, side in by_set.items():
+                other = sorted(ps)
+                if len(side) < 2 or len(other) < 2 or side[0] in done or \
+                        any(partners[t] != set(side) for t in other):
+                    continue
+                done.update(side + other)
+                out.append((when, f"War broke out between {listed(side)} on one side and {listed(other)} on the "
+                                  f"other." if kind == "war" else
+                                  f"Peace came between {listed(side)} on one side and {listed(other)} on the "
+                                  f"other."))
+            # The rest: around whoever has the most of them
+            left = {t: {p for p in ps if p not in done} for t, ps in partners.items() if t not in done}
+            while any(left.values()):
+                hub = max(left, key=lambda t: (len(left[t]), major(t)))
+                others = sorted(left[hub])
+                side = [t for t in left if left[t] == left[hub]]     # others with just the same partners
+                for t in side:
+                    left[t] = set()
+                for p in others:
+                    left[p].difference_update(side)
+                if len(side) > 1:
+                    out.append((when, f"War broke out between {listed(side)} on one side and {listed(others)} on the "
+                                      f"other." if kind == "war" else
+                                      f"Peace came between {listed(side)} on one side and {listed(others)} on the "
+                                      f"other."))
+                else:
+                    out.append((when, f"War broke out between {names[hub]} and {listed(others)}." if kind == "war"
+                                      else f"{names[hub]} is no longer at war with {listed(others)}."))
+    out = _merge_alike(out, events, names, listed)
+    return [(when, _shorten_lists(text)) for when, text in out]
 
 
 def peace_terms(old: Dict, new: Dict, a: str, b: str, asked: str = "") -> Optional[Dict]:

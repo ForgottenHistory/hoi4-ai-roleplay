@@ -154,11 +154,14 @@ def _war(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.Co
 
 
 def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    # How the player answered someone else's proposal is between those two (the deal itself, if any, has its
+    # own lines, which others do see).
     events = [e for e in camp.data["events"]
-              if them.tag in e["tags"] or me.tag in e["tags"] or e.get("major")]
+              if (them.tag in e["tags"] or me.tag in e["tags"] or e.get("major"))
+              and (e.get("type") != "offer_answer" or them.tag in e["tags"])]
     if not events:
         return "Nothing notable recorded yet."
-    return "\n".join(f"- {e['when']}: {e['text']}" for e in events)
+    return "\n".join(f"- {when}: {text}" for when, text in chronicle.compact(events, camp.snapshot))
 
 
 def _reply_task(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
@@ -179,6 +182,10 @@ def _initiative_task(them: gamestate.CountryState, me: gamestate.CountryState, r
             f"{them.name}'s interests, ideology and situation. {why} {st.manner}")
 
 
+OWN_FOCUSES = 8       # completed focuses told in full in a country's own description (the rest by name)
+OTHER_FOCUSES = 3     # the same for the country it corresponds with, whose spirits are named only
+
+
 def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign) -> str:
     """Everything `them` knows when dealing with `me`."""
     pol = policy.describe(policy.current(camp, them.tag), them.name, me.name)
@@ -187,8 +194,9 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"You are the government of {them.name} in the grand strategy game Hearts of Iron IV. "
         f"The date is {them.date.strip()}.\n\n"
         f"{world.text([p.ideology for p in me.parties + them.parties])}\n\n"
-        f"YOUR COUNTRY:\n{gamestate.describe(them)}\n\n"
-        f"THE COUNTRY YOU CORRESPOND WITH:\n{gamestate.describe(me)}\n\n"
+        f"YOUR COUNTRY:\n{gamestate.describe(them, focus_details=OWN_FOCUSES)}\n\n"
+        f"THE COUNTRY YOU CORRESPOND WITH:\n"
+        f"{gamestate.describe(me, focus_details=OTHER_FOCUSES, spirit_details=False)}\n\n"
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
         + (f"{sec}\n\n" if (sec := _security(them, me)) else "")
         + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")

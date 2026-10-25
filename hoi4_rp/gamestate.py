@@ -163,7 +163,9 @@ class CountryState:
     names: Dict[str, str] = field(default_factory=dict)       # display name of every tag above
     strength: Dict[str, float] = field(default_factory=dict)  # STRENGTH_FIELDS -> value (industry, army, manpower)
     # At war only:
-    surrender: Optional[float] = None       # surrender progress 0..1 (1 = capitulation)
+    surrender: Optional[float] = None       # surrender progress 0..1: occupation / limit (1 = capitulation)
+    occupation: Optional[float] = None      # share of its victory points others control (bridge.surrender)
+    surrender_limit: Optional[float] = None # occupation at which it capitulates (bridge.surrender)
     enemy_strength: Optional[float] = None  # its enemies' army strength relative to its own
     core_states: int = 0                    # core states it owns
     occupied: List[Occupied] = field(default_factory=list)   # its states someone else controls
@@ -323,6 +325,18 @@ def _diplomacy(s: CountryState, block: str) -> None:
         s.wars.append(war or War(enemy=enemy, we_attacked=False, start_date=""))
 
 
+def _surrender(s: CountryState) -> None:
+    """The game's own surrender numbers, as the war overview tooltip shows them (needs a bridge with
+    bridge.surrender; older bridges leave occupation and limit unknown)."""
+    reply = bridge.send(f"bridge.surrender {s.tag}")[0]
+    if not reply.startswith("OK"):
+        return
+    vals = dict(kv.split("=", 1) for kv in reply[3:].split() if "=" in kv)
+    s.surrender = _float(vals.get("progress", "")) if vals.get("progress") else s.surrender
+    s.occupation = _float(vals.get("occupation", ""))
+    s.surrender_limit = _float(vals.get("limit", ""))
+
+
 def _diplomacy_level(s: CountryState) -> None:
     rel = _relations(bridge.country_block(s.overlord)).get(s.tag, "")
     pup = re.search(r"\bpuppet=\{", rel)
@@ -419,6 +433,8 @@ def country(tag: str) -> CountryState:
     focus_block = _sub_block(block, "focus", 2) or ""
     s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
     _diplomacy(s, block)
+    if s.surrender is not None:
+        _surrender(s)
     if s.overlord and s.overlord not in s.autonomy:      # the relation is kept in the overlord's block
         _diplomacy_level(s)
     s.names.update(names_for([w.other for w in s.wargoals if w.other not in s.names]))
@@ -529,8 +545,11 @@ def front_text(s: CountryState) -> str:
     """How the country's wars stand for it: surrender progress, enemy strength, occupied land, the capital."""
     if s.surrender is None:
         return ""
-    out = [f"War situation: surrender progress {round(s.surrender * 100)}% (the game's measure of a country's "
-           f"collapse; at 100% it capitulates)."]
+    out = [f"War situation: surrender progress {round(s.surrender * 100)}% (at 100% it capitulates)."]
+    if s.occupation is not None and s.surrender_limit is not None:
+        out.append(f"Enemies control {round(s.occupation * 100)}% of its victory points (its key cities and regions); "
+                   f"it capitulates once it controls {round((1 - s.surrender_limit) * 100)}% or less of them, that is "
+                   f"after losing {round(s.surrender_limit * 100)}%.")
     if s.enemy_strength:
         out.append(f"Its enemies' armies together are {s.enemy_strength:.1f} times as strong as its own.")
     if s.capital_held_by:

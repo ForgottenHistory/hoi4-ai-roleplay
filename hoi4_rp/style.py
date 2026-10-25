@@ -59,7 +59,8 @@ STYLES = {
 }
 
 
-ONE_LETTER = " Write exactly one letter: no drafts, alternatives or notes about it."
+ONE_LETTER = (" Write exactly one letter: no drafts, alternatives or notes about it. Don't repeat stock phrases or "
+              "arguments from your earlier letters; say what is new.")
 
 
 def current() -> Style:

@@ -35,6 +35,7 @@ from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
 REFRESH_DAYS = 90
+VERSION = 2                   # policies written before the current context (security position) are rewritten once
 FAR_REFRESH_DAYS = 360        # a distant country with nothing to say (indifferent, urgency 0) thinks again rarely
 POLICY_WORDS = 40
 TERRITORY_REFRESH_DAYS = 30   # states changing hands between the two refresh a policy at most this often
@@ -146,7 +147,7 @@ def parse(text: str, rel: "actions.Relation", war_baseline: Optional[int] = None
         if level >= 2:
             urgency = 3                                  # suing for peace is worth a letter
     return {
-        **out_war,
+        **out_war, "v": VERSION,
         "stance": stance, "urgency": urgency, "policy": policy,
         "offers": _keys(line("offers"), actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)),
         "asks": _keys(line("asks"), actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)),
@@ -208,7 +209,7 @@ def refresh_priority(camp, tag: str, player: str, today: str, close: bool = True
     1 just old, 0 not needed. `close`: a neighbour, enemy, faction member, overlord or subject of the player; a
     country that isn't, with an indifferent policy and nothing urgent, is old only after FAR_REFRESH_DAYS."""
     raw = camp.data.setdefault("policies", {}).get(tag)
-    if not raw or "asks" not in raw or _future(camp, raw) or stale(camp, tag):
+    if not raw or "asks" not in raw or _future(camp, raw) or stale(camp, tag) or raw.get("v", 1) < VERSION:
         return 3
     age = _days(today) - _days(raw["date"])
     # something happened in the world between the two since the policy was set (not just letter outcomes,

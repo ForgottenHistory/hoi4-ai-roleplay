@@ -252,7 +252,8 @@ def describe(camp: campaign.Campaign, player: str, player_name: str, viewer: str
     return (f"{player_name.upper()}'S REPUTATION (the impartial record of how it keeps faith, known to every "
             f"government):\n{text}\nWeigh it as your government would: deeds against you count most, against your "
             f"friends and neighbours next; a country that breaks its word earns distrust, one that keeps it earns "
-            f"credit.")
+            f"credit. Let it shape how far you trust them and what terms you want, not your tone: governments rarely "
+            f"lecture a power about its record.")
 
 
 def drop_after(camp: campaign.Campaign, key: str) -> None:

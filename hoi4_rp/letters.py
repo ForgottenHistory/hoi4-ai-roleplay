@@ -190,6 +190,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"YOUR COUNTRY:\n{gamestate.describe(them)}\n\n"
         f"THE COUNTRY YOU CORRESPOND WITH:\n{gamestate.describe(me)}\n\n"
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
+        + (f"{sec}\n\n" if (sec := _security(them, me)) else "")
         + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")
         + (f"{pol}\n\n" if pol else "")
         + (f"{rep}\n\n" if rep else "")
@@ -298,6 +299,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     offers, asks = _proposals(camp, to, rel, key, reply=True)
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
                  + actions.proposal_help(them.name, me.name, offers, asks, expected=False)
+                 + (f"\n{_COUNTER}" if offers or asks else "")
                  + ("\n\n" + _peace_note(them, me, camp, offers, reply=True) if rel.at_war else "")
                  + ("\n\n" + actions.cede_help(them.name, me.name, actions.own_states(to))
                     if not rel.at_war and not rel.them_subject else "")
@@ -349,6 +351,45 @@ def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: s
         camp.letters_with(tag)[-1]["proposal"] = items
         camp.data["pending_offer"] = {"from": tag, "keys": items, "date": key}
     return items
+
+
+_COUNTER = ("You are answering their letter, so you may make a counter-offer: a package that answers what they "
+            "proposed, asked or threatened (for example something you give in return for something you ask). Your "
+            "policy above is your intent: depart from it only when their letter gives you good reason, and make "
+            "no proposal if you simply refuse.")
+
+
+def _security(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    """In peacetime: how strong `them` is against `me`, who would defend it, and what that means for its tone."""
+    if me.tag in them.enemies or not them.strength or not me.strength:
+        return ""
+    fac = lambda s: s.strength.get("civ", 0) + s.strength.get("mil", 0) + s.strength.get("dock", 0)
+    ratio = max(fac(me) / max(fac(them), 1), me.strength.get("army_k", 0) / max(them.strength.get("army_k", 0), 1))
+    lines = gamestate.query(f'{them.tag} = {{ every_other_country = {{ limit = {{ has_guaranteed = {them.tag} '
+                            f'NOT = {{ tag = {me.tag} }} }} log = "AIRPG|[THIS.GetName]" }} }}')
+    guards = [x[6:].strip() for x in lines if x.startswith("AIRPG|")]
+    if them.faction and them.faction != me.faction:
+        guards.append(f"its faction, the {them.faction}" + (f" led by {them.name_of(them.faction_leader)}"
+                                                            if them.faction_leader != them.tag else ""))
+    shield = f"pledged to defend it: {', '.join(guards)}" if guards else "no one has pledged to defend it"
+    if bridge.trigger(f"{me.tag} = {{ has_guaranteed = {them.tag} }}"):
+        shield += f"; {me.name} itself has guaranteed its independence, and can be held to its word"
+    if ratio >= 3:
+        return (f"YOUR SECURITY: {them.name} is far weaker than {me.name} (about {ratio:.0f} to 1 in industry or "
+                f"soldiers), and {shield}. A government this exposed is careful: it refuses what it must, but "
+                f"courteously and without taunts, lectures or moralising; it takes no hostile step (an embargo, "
+                f"ending agreements) it cannot back up; and it weighs whether a concession now saves more later. "
+                + ("Its protectors may stiffen its back, but their help is never certain. " if guards else "")
+                + "Only a leader reckless by nature would act otherwise.")
+    if ratio >= 1.5 and guards:
+        return (f"YOUR SECURITY: {them.name} is weaker than {me.name} on its own (about {ratio:.1f} to 1), but not "
+                f"alone: {shield}. It can stand firm, while avoiding needless provocation.")
+    if ratio >= 1.5:
+        return (f"YOUR SECURITY: {them.name} is weaker than {me.name} (about {ratio:.1f} to 1), and {shield}. It "
+                f"speaks with care and avoids needless provocation.")
+    if ratio <= 1 / 1.5:
+        return f"YOUR SECURITY: {them.name} is stronger than {me.name}, and can speak from strength."
+    return f"YOUR SECURITY: {them.name} and {me.name} are roughly matched in strength; {shield}."
 
 
 def _peace_offer(camp: campaign.Campaign, tag: str, rel: "actions.Relation", today: int, reply: bool) -> List[str]:
@@ -420,6 +461,16 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
     cfg = settings().letters
     today = _days(key)
     peace_offer = _peace_offer(camp, tag, rel, today, reply)
+    if reply:
+        # Answering the player: any deal possible now, as a counter-offer or package, with no gap or refusal
+        # memory (the player reopened the matter). Its policy, in the prompt, is its intent, not its limit.
+        pol = policy.current(camp, tag)
+        if not pol and policy.stale(camp, tag):
+            return peace_offer, []
+        offers = actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel)
+        asks = actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel)
+        ok = lambda k: k != "give:peace" and actions.possible(rel, k)
+        return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
     proposed = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("proposal")]
     if proposed and today - _days(max(proposed)) < cfg.proposal_gap_days:
         return peace_offer, []

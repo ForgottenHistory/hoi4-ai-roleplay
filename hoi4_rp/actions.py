@@ -14,6 +14,8 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
     [[offer submit]]          a proposal: them becomes my subject (puppet)
     [[ask submit]]            a proposal: them demands that I become its subject
     [[offer annex]] / [[annex]]   them joins me entirely (annexed by agreement, like the Anschluss)
+    [[offer subject TAG]]     a proposal item: them hands me its subject TAG (it becomes my subject)
+    [[ask subject TAG]]       a proposal item: them asks me to hand it my subject TAG
 
 Each deal checks the game first: it must be possible right now (agreements need peace and must not exist
 yet; ending one needs it to exist). Effect directions were checked in game:
@@ -106,6 +108,8 @@ class Relation:
     bound: str = ""          # "subject" (them is my subject), "overlord" (them is my overlord), "faction", or ""
     them_subject: bool = False   # them is a subject of anyone
     me_subject: bool = False     # I am a subject of anyone
+    them_subjects: Dict[str, str] = None   # them's subjects: tag -> name
+    me_subjects: Dict[str, str] = None     # my subjects: tag -> name
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -161,7 +165,8 @@ def relation(them: str, me: str) -> Relation:
                     them_border=border_states(them, me), me_border=border_states(me, them),
                     peace_ok=at_war and peace.possible(me, them), bound=bound,
                     them_subject=bridge.trigger(f"{them} = {{ is_subject = yes }}"),
-                    me_subject=bridge.trigger(f"{me} = {{ is_subject = yes }}"))
+                    me_subject=bridge.trigger(f"{me} = {{ is_subject = yes }}"),
+                    them_subjects=subjects_of(them), me_subjects=subjects_of(me))
 
 
 # ---------------------------------------------------------------- deals
@@ -277,11 +282,33 @@ SUBMIT_NOTE = ("Submission is the gravest step of all. A government offers it on
 
 TERRITORY_NOTE = ("Territory is a grave matter. A government cedes its own land only under real pressure, for "
                   "something substantial in return, or where the other side holds a core; it demands land only "
-                  "where it has a core, a claim or real leverage.")
+                  "where it has a core, a claim or real leverage. Real pressure counts: a country facing a far "
+                  "stronger neighbour that has shown it will use force, with no ally willing to fight for it, may "
+                  "judge that giving up a province now saves the rest, as states have done throughout history; "
+                  "a proud or reckless government may still refuse.")
 
 
 def is_state(key: str) -> bool:
     return key.startswith(("give:state:", "ask:state:"))
+
+
+# "give:subject:SLO": them hands me its subject; "ask:subject:SLO": them asks me to hand it my subject.
+#     OLD = { end_puppet = SUB } NEW = { puppet = SUB }
+_SUBJECT_NAMES: Dict[str, str] = {}
+
+
+def is_subject_key(key: str) -> bool:
+    return key.startswith(("give:subject:", "ask:subject:"))
+
+
+def subject_gives(rel: Relation) -> List[str]:
+    _SUBJECT_NAMES.update(rel.them_subjects or {})
+    return [f"give:subject:{t}" for t in (rel.them_subjects or {})]
+
+
+def subject_asks(rel: Relation) -> List[str]:
+    _SUBJECT_NAMES.update(rel.me_subjects or {})
+    return [f"ask:subject:{t}" for t in (rel.me_subjects or {})]
 
 
 def state_gives(rel: Relation) -> List[str]:
@@ -297,6 +324,18 @@ def state_asks(rel: Relation) -> List[str]:
 
 
 def get_deal(key: str) -> Optional[Deal]:
+    if is_subject_key(key):
+        tag = key.rsplit(":", 1)[1]
+        name = _SUBJECT_NAMES.get(tag, tag)
+        if key.startswith("give:"):
+            return Deal(key, "subject", False, True, f"hand your subject {name} ({tag}) over to {{me_name}}, as its "
+                        f"subject", f"their subject {name}", f"{{them}} = {{{{ end_puppet = {tag} }}}} "
+                        f"{{me}} = {{{{ puppet = {tag} }}}}", f"{{them_name}} handed {name} over to us.",
+                        f"{{them_name}} handed its subject {name} over to {{me_name}}.")
+        return Deal(key, "subject", False, True, f"ask {{me_name}} to hand you its subject {name} ({tag})",
+                    f"our subject {name}", f"{{me}} = {{{{ end_puppet = {tag} }}}} {{them}} = {{{{ puppet = {tag} }}}}",
+                    f"We handed {name} over to {{them_name}}.", f"{{me_name}} handed its subject {name} over to "
+                    f"{{them_name}}.", True)
     if not is_state(key):
         return BY_KEY.get(key)
     sid = key.rsplit(":", 1)[1]
@@ -314,6 +353,9 @@ def get_deal(key: str) -> Optional[Deal]:
 
 
 def possible(rel: Relation, key: str) -> bool:
+    if is_subject_key(key):
+        tag = key.rsplit(":", 1)[1]
+        return not rel.at_war and tag in ((rel.them_subjects if key.startswith("give:") else rel.me_subjects) or {})
     if is_state(key):
         sid = key.rsplit(":", 1)[1]
         if key.startswith("give:") and rel.them_subject and rel.bound != "subject":
@@ -356,6 +398,8 @@ def described(key: str) -> str:
     """Policy vocabulary with the state name where there is one: 'state 35 (Brabant)'."""
     if is_state(key):
         return f"{word(key)} ({get_deal(key).label})"
+    if is_subject_key(key):
+        return f"subject {key.rsplit(':', 1)[1]} ({_SUBJECT_NAMES.get(key.rsplit(':', 1)[1], '')})"
     if key == "give:submit":
         return "submit (become their subject)"
     if key == "ask:submit":
@@ -448,6 +492,7 @@ def letter_help(them_name: str, me_name: str, offers: List[str], asks: List[str]
 
 _COMMAND = re.compile(r"\[\[\s*(?:(offer|ask|end)\s+)?([a-z_]+)\s*([+-]?\d+)?\s*\]\]", re.I)
 _CEDE = re.compile(r"\[\[\s*state\s+(\d+)\s+to\s+([^\]]+?)\s*\]\]", re.I)   # [[state 35 to Lithuania]]
+_SUBJECT_DEAL = re.compile(r"\[\[\s*(offer|ask)\s+subject\s+([A-Za-z0-9]{3})\s*\]\]", re.I)
 _SUBJECT = re.compile(r"\[\[\s*(free|transfer)\s+([^\]]+?)\s*\]\]", re.I)        # [[free Slovakia]]
 
 
@@ -588,8 +633,9 @@ def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     """Strip all commands. Returns (clean text, immediate [(key or 'opinion', number)], proposals [key])."""
     immediate: List[Tuple[str, int]] = [(f"cede:{m.group(1)}:{m.group(2)}", 0) for m in _CEDE.finditer(text)]
     immediate += [(f"{m.group(1).lower()}:{m.group(2)}", 0) for m in _SUBJECT.finditer(text)]
-    proposals: List[str] = []
-    text = _SUBJECT.sub("", _CEDE.sub("", text))
+    proposals: List[str] = [f"{'give' if m.group(1).lower() == 'offer' else 'ask'}:subject:{m.group(2).upper()}"
+                            for m in _SUBJECT_DEAL.finditer(text)]
+    text = _SUBJECT.sub("", _CEDE.sub("", _SUBJECT_DEAL.sub("", text)))
     for m in _COMMAND.finditer(text):
         verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
         what = f"state:{num}" if what == "state" else what
@@ -644,7 +690,7 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 shown.append((f"{them_name}'s opinion of us {'improved' if v > 0 else 'worsened'} ({v:+d}).", v < 0))
             continue
         deal = get_deal(key)
-        if not deal or (key not in BY_KEY and not is_state(key)):
+        if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
@@ -662,6 +708,8 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
         if _effect(deal.effect.format(**fmt)):
             if is_state(key):
                 (rel.them_border if key.startswith("give:") else rel.me_border).pop(key.rsplit(":", 1)[1], None)
+            elif is_subject_key(key):
+                ((rel.them_subjects if key.startswith("give:") else rel.me_subjects) or {}).pop(key.rsplit(":", 1)[1], None)
             else:
                 rel.exists[deal.relation] = not deal.ends
             shown.append((deal.shown.format(**fmt), deal.hostile))
@@ -692,7 +740,11 @@ def package_text(keys: List[str], who: str = "they") -> str:
     plural = who == "they"
     parts = []
     for k in keys:
-        if is_state(k):
+        if is_subject_key(k):
+            name = _SUBJECT_NAMES.get(k.rsplit(":", 1)[1], k.rsplit(":", 1)[1])
+            parts.append(f"{who} {'ask' if plural else 'asks'} for our subject {name}" if k.startswith("ask:") else
+                         f"{who} {'offer' if plural else 'offers'} {'their' if plural else 'its'} subject {name}")
+        elif is_state(k):
             name = get_deal(k).label
             parts.append(f"{who} {'ask' if plural else 'asks'} for {name}" if k.startswith("ask:") else
                          f"{who} {'cede' if plural else 'cedes'} {name}")

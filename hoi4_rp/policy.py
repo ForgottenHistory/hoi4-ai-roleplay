@@ -9,7 +9,7 @@ to a default, and only things possible right now are kept:
     OFFERS: pact, market                 agreements it would offer the player
     ASKS: access                         agreements it would ask the player to grant it
     BREAKS: end access, embargo          agreements it means to end, or an embargo
-    POLICY: Two or three sentences.
+    POLICY: One or two short sentences (at most POLICY_WORDS words).
 At war with the player, three more (war.py):
     WAR: seek peace                      fight on | open to terms | seek peace | any terms
     WHY: One sentence: why, given who leads it.
@@ -35,6 +35,8 @@ from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
 REFRESH_DAYS = 90
+FAR_REFRESH_DAYS = 360        # a distant country with nothing to say (indifferent, urgency 0) thinks again rarely
+POLICY_WORDS = 40
 TERRITORY_REFRESH_DAYS = 30   # states changing hands between the two refresh a policy at most this often
 # Events that change what the two countries are to each other (a policy written before one is stale).
 RELATION_TYPES = {"subject", "independence", "capitulation", "war", "peace", "country_gone", "country_new"}
@@ -78,8 +80,8 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
         f"ASKS: agreements {them_name} wants {me_name} to give it, chosen from: {words(asks)}; or none\n"
         f"BREAKS: agreements {them_name} means to end, or measures against {me_name}, chosen from: "
         f"{words(breaks)}; or none (only for real cause)\n"
-        f"POLICY: two or three sentences on what {them_name} wants from {me_name}, fears from them, and how "
-        f"it means to deal with them"
+        f"POLICY: one or two short sentences, at most {POLICY_WORDS} words in all: what {them_name} wants from "
+        f"{me_name}, fears from them, and how it means to deal with them"
         + (f"\n\nStates are listed with their number (state N). {actions.TERRITORY_NOTE}"
            if rel.them_border or rel.me_border else "")
         + (f"\n\n{actions.bound_note(them_name, me_name, rel.bound)}" if rel.bound else "")
@@ -201,9 +203,10 @@ def current(camp, tag: str) -> Optional[Dict]:
     return p
 
 
-def refresh_priority(camp, tag: str, player: str, today: str) -> int:
+def refresh_priority(camp, tag: str, player: str, today: str, close: bool = True) -> int:
     """How badly the policy needs rewriting: 3 none or stale, 2 something happened between the two,
-    1 just old, 0 not needed."""
+    1 just old, 0 not needed. `close`: a neighbour, enemy, faction member, overlord or subject of the player; a
+    country that isn't, with an indifferent policy and nothing urgent, is old only after FAR_REFRESH_DAYS."""
     raw = camp.data.setdefault("policies", {}).get(tag)
     if not raw or "asks" not in raw or _future(camp, raw) or stale(camp, tag):
         return 3
@@ -215,7 +218,8 @@ def refresh_priority(camp, tag: str, player: str, today: str) -> int:
              if e["date"] > raw["date"] and tag in e["tags"] and player in e["tags"] and e.get("type") in WORLD_TYPES}
     if since - {"territory"}:
         return 2
-    if age >= REFRESH_DAYS or (since and age >= TERRITORY_REFRESH_DAYS):
+    far = not close and raw.get("stance") == "indifferent" and not raw.get("urgency")
+    if age >= (FAR_REFRESH_DAYS if far else REFRESH_DAYS) or (since and age >= TERRITORY_REFRESH_DAYS):
         return 1
     return 0
 

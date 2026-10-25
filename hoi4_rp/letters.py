@@ -253,13 +253,16 @@ def _show_reply(player: str, sender: str, text: str, offer: bool = False) -> Non
 
 
 def _conversation(camp: campaign.Campaign, them: gamestate.CountryState,
-                  me: gamestate.CountryState) -> List[Dict[str, str]]:
+                  me: gamestate.CountryState, last_note: str = "") -> List[Dict[str, str]]:
+    """The correspondence as chat messages; `last_note` is added under the last letter (e.g. a length reminder)."""
     msgs = []
     for x in camp.letters_with(them.tag):
         if x["from"] == them.tag:
             msgs.append({"role": "assistant", "content": x["text"]})
         else:
             msgs.append({"role": "user", "content": f"Letter from {me.name}, {x['when']}:\n\n{x['text']}"})
+    if last_note and msgs and msgs[-1]["role"] == "user":
+        msgs[-1] = {**msgs[-1], "content": msgs[-1]["content"] + f"\n\n{last_note}"}
     return msgs
 
 
@@ -287,7 +290,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                  + ("\n\n" + _peace_note(them, me, camp, offers, reply=True) if rel.at_war else ""))
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
-                  + _conversation(camp, them, me))
+                  + _conversation(camp, them, me, f"(Reply in {style.current().length}.)"))
         raw = llm.chat(prompt)
     except llm.LLMError as e:
         print("  LLM error:", e)
@@ -442,7 +445,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
               + _conversation(camp, them, me)
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
-                                             f"Write your letter to them now.)"}])
+                                             f"Write your letter to them now, in {style.current().length}.)"}])
     try:
         raw = llm.chat(prompt)
     except llm.LLMError as e:
@@ -690,7 +693,9 @@ class _Session:
         except gamestate.StateError:
             return
         # Most needed first (none or stale, then something happened, then just old); ties in importance order.
-        ranked = [(policy.refresh_priority(camp, tag, player, snap["date"]), tag) for tag in policy_countries(me, snap)]
+        close = set(me.neighbors + me.enemies + me.faction_members + me.subjects + [me.overlord or ""])
+        ranked = [(policy.refresh_priority(camp, tag, player, snap["date"], tag in close), tag)
+                  for tag in policy_countries(me, snap)]
         ranked = sorted([r for r in ranked if r[0]], key=lambda r: -r[0])
         for _, tag in ranked:
             try:

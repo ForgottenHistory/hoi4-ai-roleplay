@@ -16,6 +16,8 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
     [[offer annex]] / [[annex]]   them joins me entirely (annexed by agreement, like the Anschluss)
     [[offer subject TAG]]     a proposal item: them hands me its subject TAG (it becomes my subject)
     [[ask subject TAG]]       a proposal item: them asks me to hand it my subject TAG
+    [[offer govt IDEOLOGY]] [[ask govt IDEOLOGY]] [[govt IDEOLOGY]]   a change of government (GOVT_NOTE): them
+                              puts that party in power, or asks me to; [[govt X]] grants it when asked
     [[offer civ N]] [[ask civ N]] [[offer mil N]] [[ask mil N]]   factories as currency (FACTORY_NOTE): N
                               civilian or military factories, taken from the giver's states at random and built
                               instantly in the receiver's core states at random; [[civ N]] grants them when asked
@@ -127,6 +129,8 @@ class Relation:
     me_subjects: Dict[str, str] = None     # my subjects: tag -> name
     them_factories: Dict[str, int] = None  # "civ"/"mil" -> how many them has
     me_factories: Dict[str, int] = None
+    them_parties: Dict[str, str] = None    # parties not in power: ideology id -> "Name (ideology)" (set_parties)
+    me_parties: Dict[str, str] = None
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -342,6 +346,44 @@ FACTORY_NOTE = ("Factories are a nation's wealth and its power to arm: giving th
                 "match what is at stake.")
 
 
+# ---------------------------------------------------------------- a change of government
+# "give:govt:fascism": them puts its fascist party in power; "ask:govt:democratic": them asks me to.
+#     X = { set_politics = { ruling_party = IDEOLOGY elections_allowed = yes/no } add_popularity = { ... } }
+
+GOVT_NOTE = ("A change of government at a foreign power's demand is a humiliation few regimes accept: a government "
+             "agrees only under real threat, when far weaker, or when that party is already strong at home or close "
+             "to it in ideology; it demands one only of a country it could compel.")
+
+
+def set_parties(rel: "Relation", them: "gamestate.CountryState", me: "gamestate.CountryState") -> None:
+    """Fill in the parties each side could put in power (all but the ruling one)."""
+    pick = lambda s: {p.ideology: f"{p.name} ({p.ideology_name or p.ideology})" for p in s.parties if not p.ruling}
+    rel.them_parties, rel.me_parties = pick(them), pick(me)
+    _PARTY_LABELS.update({f"give:govt:{i}": n for i, n in rel.them_parties.items()})
+    _PARTY_LABELS.update({f"ask:govt:{i}": n for i, n in rel.me_parties.items()})
+
+
+def is_govt_key(key: str) -> bool:
+    return key.startswith(("give:govt:", "ask:govt:"))
+
+
+def govt_gives(rel: "Relation") -> List[str]:
+    return [f"give:govt:{i}" for i in (rel.them_parties or {})]
+
+
+def govt_asks(rel: "Relation") -> List[str]:
+    return [f"ask:govt:{i}" for i in (rel.me_parties or {})]
+
+
+_PARTY_LABELS: Dict[str, str] = {}
+
+
+def _govt_script(tag: str, ideology: str) -> str:
+    elections = "yes" if ideology == "democratic" else "no"
+    return (f"{tag} = {{ set_politics = {{ ruling_party = {ideology} elections_allowed = {elections} }} "
+            f"add_popularity = {{ ideology = {ideology} popularity = 0.3 }} }}")
+
+
 FACTORY_KEYS = ("give:civ", "give:mil", "ask:civ", "ask:mil")   # amount chosen in the command
 ECONOMY: Dict[str, str] = {}   # {"text": both sides' industry} for the help of the letter being written (economy())
 
@@ -437,6 +479,18 @@ def state_asks(rel: Relation) -> List[str]:
 
 
 def get_deal(key: str) -> Optional[Deal]:
+    if is_govt_key(key):
+        verb, _, ideology = key.split(":")
+        label = _PARTY_LABELS.get(key, ideology)
+        if verb == "give":
+            return Deal(key, "govt", False, True, f"change your government: put the {label} in power",
+                        f"a new government in their country: the {label}", "",
+                        f"{{them_name}} changed its government: the {label} now rules.",
+                        f"{{them_name}} put the {label} in power at {{me_name}}'s wish.")
+        return Deal(key, "govt", False, True, f"demand that {{me_name}} change its government, putting its {label} "
+                    f"in power", f"a new government in our country: the {label}", "",
+                    f"We changed our government: the {label} now rules.",
+                    f"{{me_name}} put its {label} in power at {{them_name}}'s demand.", True)
     if is_factory_key(key) or key in FACTORY_KEYS:
         verb, kind, n = (key + ":0").split(":")[:3]
         what = f"{n} {FACTORIES[kind][1]}" if n != "0" else f"N {FACTORIES[kind][1]}"
@@ -474,6 +528,13 @@ def get_deal(key: str) -> Optional[Deal]:
 
 
 def possible(rel: Relation, key: str) -> bool:
+    if is_govt_key(key):
+        verb, _, ideology = key.split(":")
+        parties = rel.them_parties if verb == "give" else rel.me_parties
+        # Not at war; a subject's government is its overlord's affair (the player's own subject may be made to)
+        subject = rel.them_subject if verb == "give" else rel.me_subject
+        allowed_subject = rel.bound == ("subject" if verb == "give" else "overlord")
+        return not rel.at_war and ideology in (parties or {}) and (not subject or allowed_subject)
     if key in ("give:civ", "give:mil", "ask:civ", "ask:mil"):           # the amount comes with the command
         side = rel.them_factories if key.startswith("give:") else rel.me_factories
         return not rel.at_war and (side or {}).get(key.split(":")[1], 0) > 0
@@ -530,6 +591,8 @@ def described(key: str) -> str:
         return f"subject {key.rsplit(':', 1)[1]} ({_SUBJECT_NAMES.get(key.rsplit(':', 1)[1], '')})"
     if is_factory_key(key) or key in ("give:civ", "give:mil", "ask:civ", "ask:mil"):
         return word(key)
+    if is_govt_key(key):
+        return f"{word(key)} ({_PARTY_LABELS.get(key, '')})"
     if key == "give:submit":
         return "submit (become their subject)"
     if key == "ask:submit":
@@ -565,12 +628,15 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
         f"- [[opinion N]]: how this letter changed {them_name}'s opinion of {me_name}, N from -20 to +20. "
         "Use it when the letter was notably friendly or offensive; leave it out for ordinary letters.",
     ]
-    gives = possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
+    gives = (possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
+             + possible_keys(rel, govt_gives(rel)))
     if gives:
         lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
                      f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
         lines += [f"- [[{word(k)}{' N' if k in FACTORY_KEYS else ''}]]: {get_deal(k).prompt.format(**f)}"
                   for k in gives]
+        if any(is_govt_key(k) for k in gives):
+            lines.append(GOVT_NOTE)
         if any(k in FACTORY_KEYS for k in gives):
             have = rel.them_factories or {}
             lines.append(f"{FACTORY_NOTE} You have {have.get('civ', 0)} civilian and {have.get('mil', 0)} military "
@@ -617,6 +683,8 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
         lines.append(ECONOMY["text"])
     if any(k in offers + asks for k in ("give:submit", "ask:submit", "give:annex")):
         lines.append(SUBMIT_NOTE)
+    if any(is_govt_key(k) for k in offers + asks):
+        lines.append(GOVT_NOTE)
     return "\n".join(lines)
 
 
@@ -634,6 +702,7 @@ def letter_help(them_name: str, me_name: str, offers: List[str], asks: List[str]
 _COMMAND = re.compile(r"\[\[\s*(?:(offer|ask|end)\s+)?([a-z_]+)\s*([+-]?\d+)?\s*\]\]", re.I)
 _CEDE = re.compile(r"\[\[\s*state\s+(\d+)\s+to\s+([^\]]+?)\s*\]\]", re.I)   # [[state 35 to Lithuania]]
 _SUBJECT_DEAL = re.compile(r"\[\[\s*(offer|ask)\s+subject\s+([A-Za-z0-9]{3})\s*\]\]", re.I)
+_GOVT = re.compile(r"\[\[\s*(offer\s+|ask\s+)?govt\s+([a-z_]+)\s*\]\]", re.I)   # [[ask govt fascism]]
 _SUBJECT = re.compile(r"\[\[\s*(free|transfer)\s+([^\]]+?)\s*\]\]", re.I)        # [[free Slovakia]]
 
 
@@ -774,9 +843,12 @@ def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     """Strip all commands. Returns (clean text, immediate [(key or 'opinion', number)], proposals [key])."""
     immediate: List[Tuple[str, int]] = [(f"cede:{m.group(1)}:{m.group(2)}", 0) for m in _CEDE.finditer(text)]
     immediate += [(f"{m.group(1).lower()}:{m.group(2)}", 0) for m in _SUBJECT.finditer(text)]
+    immediate += [(f"give:govt:{m.group(2).lower()}", 0) for m in _GOVT.finditer(text) if not m.group(1)]
     proposals: List[str] = [f"{'give' if m.group(1).lower() == 'offer' else 'ask'}:subject:{m.group(2).upper()}"
                             for m in _SUBJECT_DEAL.finditer(text)]
-    text = _SUBJECT.sub("", _CEDE.sub("", _SUBJECT_DEAL.sub("", text)))
+    proposals += [f"{'give' if m.group(1).strip().lower() == 'offer' else 'ask'}:govt:{m.group(2).lower()}"
+                  for m in _GOVT.finditer(text) if m.group(1)]
+    text = _GOVT.sub("", _SUBJECT.sub("", _CEDE.sub("", _SUBJECT_DEAL.sub("", text))))
     for m in _COMMAND.finditer(text):
         verb, what, num = (m.group(1) or "").lower(), m.group(2).lower(), int(m.group(3) or 0)
         what = f"state:{num}" if what == "state" else f"{what}:{num}" if what in FACTORIES and num else what
@@ -832,12 +904,19 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             continue
         deal = get_deal(key)
         if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)
-                        and not is_factory_key(key)):
+                        and not is_factory_key(key) and not is_govt_key(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
             why = "not a border state" if is_state(key) else f"{deal.relation} exists: {rel.exists.get(deal.relation)}"
             print(f"  {key} not possible now (at war: {rel.at_war}, {why})")
+            continue
+        if is_govt_key(key):
+            verb, _, ideology = key.split(":")
+            if _effect(_govt_script(them if verb == "give" else me, ideology)):
+                shown.append((deal.shown.format(**fmt), deal.hostile))
+                events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
+                (rel.them_parties if verb == "give" else rel.me_parties).pop(ideology, None)
             continue
         if is_factory_key(key):
             verb, kind, n = key.split(":")
@@ -897,7 +976,12 @@ def package_text(keys: List[str], who: str = "they") -> str:
     plural = who == "they"
     parts = []
     for k in keys:
-        if is_factory_key(k):
+        if is_govt_key(k):
+            party = _PARTY_LABELS.get(k, k.rsplit(":", 1)[1])
+            parts.append(f"{who} {'demand' if plural else 'demands'} that we put our {party} in power"
+                         if k.startswith("ask:") else
+                         f"{who} {'offer' if plural else 'offers'} to put {'their' if plural else 'its'} {party} in power")
+        elif is_factory_key(k):
             what = get_deal(k).label
             parts.append(f"{who} {'ask' if plural else 'asks'} us for {what}" if k.startswith("ask:") else
                          f"{who} {'offer' if plural else 'offers'} {what}")

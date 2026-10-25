@@ -296,6 +296,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.add_letter(to, player, text, key)
     camp.save()
     rel = actions.relation(to, player)
+    actions.set_parties(rel, them, me)
     offers, asks = _proposals(camp, to, rel, key, reply=True)
     actions.economy(them.name, me.name, rel)
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
@@ -320,7 +321,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.add_letter(to, to, reply, key)
     outcomes, events = actions.apply(to, player, them.name, me.name, commands,
                                      allowed=["opinion"] + actions.GIVES + actions.UNILATERAL + actions.state_gives(rel)
-                                     + ["give:civ", "give:mil"])
+                                     + ["give:civ", "give:mil"] + actions.govt_gives(rel))
     if not rel.at_war:                                  # land for a third country, at the player's request
         more_shown, more_events = actions.apply_cedes(to, player, them.name, me.name, commands,
                                                       (camp.snapshot or {}).get("countries", {}))
@@ -471,8 +472,10 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
         pol = policy.current(camp, tag)
         if not pol and policy.stale(camp, tag):
             return peace_offer, []
-        offers = actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel) + ["give:civ", "give:mil"]
-        asks = actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel) + ["ask:civ", "ask:mil"]
+        offers = (actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel) + ["give:civ", "give:mil"]
+                  + actions.govt_gives(rel))
+        asks = (actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel) + ["ask:civ", "ask:mil"]
+                + actions.govt_asks(rel))
         ok = lambda k: k != "give:peace" and actions.possible(rel, k)
         return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
     proposed = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("proposal")]

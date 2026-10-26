@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-from . import bridge, campaign
+from . import bridge, campaign, guarantees
 
 HALF_LIFE_YEARS = 3.0
 THREAT_DAYS = 365             # a threat without a deadline is empty if nothing came of it within this
@@ -130,7 +130,8 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
                                          # under Italy, 1938), the player didn't
         # A guarantee only the player ends. (A non-aggression pact either side, or the game, can end, and which
         # can't be told: not held against the player.)
-        if "my_guarantee" in kinds and "my_guarantee" not in new_ties.get(other, []):
+        if "my_guarantee" in kinds and "my_guarantee" not in new_ties.get(other, []) \
+                and not guarantees.expired(camp, player, other):         # one that ran its term broke nothing
             what = TIE_WORDS["my_guarantee"].format(p=p, o=name(other))
             deeds.append(_deed(new, [player, other], f"In peacetime, {what} came to an end."))
     rep["deeds"].extend(deeds)

@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from . import (actions, bridge, campaign, chronicle, game, gamestate, leaders, llm, origins, peace, policy, reputation,
-               steering, story, style, subjects, treaties, ultimatums, war, world)
+               guarantees, steering, story, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -268,6 +268,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + (f"{pol}\n\n" if pol else "")
         + (f"{rep}\n\n" if rep else "")
         + (f"{deals}\n\n" if (deals := treaties.describe(camp, them.tag, them.name, me.name)) else "")
+        + f"{guarantees.describe(camp, them.tag, them.name, me.name)}\n\n"
         + (f"{ults}\n\n" if (ults := ultimatums.describe(camp, them.tag, them.name, me.name)) else "")
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
         f"{me.name}, or the major powers):\n{_memory(camp, them, me)}"
@@ -425,6 +426,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     for e in events:
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False}])
     treaties.record(camp, to, [e["type"] for e in events], terms, key, them.name, later=later)
+    guarantees.record(camp, to, [e["type"] for e in events], terms)
     outcomes += [(f"Agreed: {them.name} pays us {actions.get_deal(k).label} in {terms['payments'][k][2]} months.",
                   False) for k in later]
     if renounced:
@@ -443,7 +445,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     shown = reply + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
     if items:
         shown += ("\n\n" + actions.proposal_line(items, them.name) + treaties.terms_line(terms, items, them.name)
-                  + _peace_line(items, me, them))
+                  + guarantees.proposal_line(camp, items, to, them.name, terms) + _peace_line(items, me, them))
     _show_reply(player, to, shown, offer=bool(items))
 
 
@@ -767,7 +769,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     shown = text + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
     if items:
         shown += ("\n\n" + actions.proposal_line(items, them.name) + treaties.terms_line(terms, items, them.name)
-                  + _peace_line(items, me, them))
+                  + guarantees.proposal_line(camp, items, sender, them.name, terms) + _peace_line(items, me, them))
     _show_reply(player, sender, shown, offer=bool(items))
 
 
@@ -799,6 +801,7 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
         outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in now], allowed=now)
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
         treaties.record(camp, tag, [e["type"] for e in events], offer.get("terms"), key, them_name, later=later)
+        guarantees.record(camp, tag, [e["type"] for e in events], offer.get("terms"))
         missed = len(now) - len(events)
         text = (f"{me_name} accepted the proposal ({what})."
                 + (f" {missed} part(s) could no longer be put in place." if missed else ""))
@@ -975,7 +978,7 @@ class _Session:
             camp.save()
             if old is not None:
                 self.plan_letters(camp, player, snap, events, old)
-                for tag, why in treaties.tick(camp, player) + ultimatums.tick(camp, player):
+                for tag, why in treaties.tick(camp, player) + ultimatums.tick(camp, player) + guarantees.tick(camp):
                     if active(snap, tag) and settings().letters.incoming:
                         self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()
         if rewound or self.steered != camp.id:      # the game's AI follows the policies (steering.py)

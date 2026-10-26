@@ -117,8 +117,9 @@ def write_mod(mod_root: str = MOD_ROOT) -> None:
     }
     from . import letter_mod
     files.update(letter_mod.files(mod_dir))
-    from . import peace
+    from . import guarantees, peace
     files.update(peace.files(mod_dir))
+    files.update(guarantees.files(mod_dir))
     for path, (text, enc) in files.items():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding=enc, newline="\n") as f:

@@ -33,6 +33,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/chronicle.py   one-query world snapshots; their differences become dated events
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; offers
     hoi4_rp/treaties.py    deals over time: terms that end, instalments, war pledges
+    hoi4_rp/guarantees.py  letter guarantees: civilian factory upkeep for the guarantor, a 24-month term
     hoi4_rp/ultimatums.py  AI threats of war that can come true: deadline, then war, readiness or backing down
     hoi4_rp/origins.py     how the wars began: who declared on whom and when, from the game, and why
     hoi4_rp/story.py       story events: your country reacts to your letter deals and deeds
@@ -104,6 +105,17 @@ now (another proposal came recently, or you refused it lately), it's told not to
   made before are still kept.
 - Equipment from the stockpile: `[[offer rifles N]]`, `[[ask artillery N]]`, `[[trucks N]]` (vanilla equipment
   archetypes, so mods that keep them work).
+
+## Guarantees by letter
+
+A guarantee given in a letter has a price (`hoi4_rp/guarantees.py`): it lasts 24 months (or the deal's own
+`[[for N months]]`) and ends on its own, and the guarantor ties up civilian factories while it lasts, more for each it
+holds: the 1st costs 1, the 2nd 2 more, the 3rd 3 more (1, 3, 6, 10 in all), as the game's own guarantee costs more
+political power for each country already guaranteed. That goes for your guarantees too. The upkeep is a dynamic
+modifier on the guarantor ("Guarantees by Treaty"), so run `write-mod` and restart HOI4 once. The proposal says
+what the guarantee costs whom; every country's prompts know its upkeep and the price of one more, and a new letter
+renews a guarantee at no new cost. One that runs its term ended as agreed and isn't held against anyone. The game's
+own Guarantee button is unchanged.
 
 ## Treaties
 

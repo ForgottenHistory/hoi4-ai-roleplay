@@ -155,6 +155,7 @@ class Relation:
     third: Dict[str, Dict] = None         # countries a war pledge may name: tag -> {name, flags} (pledge_*)
     them_equipment: Dict[str, int] = None  # stockpiles: "rifles"/"artillery"/"trucks" -> amount
     me_equipment: Dict[str, int] = None
+    pledged: frozenset = frozenset()      # war pledges already standing between the two (treaties.standing)
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -573,11 +574,13 @@ def _targetable(info: Dict, attacker: str, joiner: str) -> bool:
 
 
 def pledge_gives(rel: "Relation") -> List[str]:
-    return [f"give:pledge:{t}" for t, i in (rel.third or {}).items() if _targetable(i, "me", "them")]
+    return [k for t, i in (rel.third or {}).items()
+            if _targetable(i, "me", "them") and (k := f"give:pledge:{t}") not in rel.pledged]
 
 
 def pledge_asks(rel: "Relation") -> List[str]:
-    return [f"ask:pledge:{t}" for t, i in (rel.third or {}).items() if _targetable(i, "them", "me")]
+    return [k for t, i in (rel.third or {}).items()
+            if _targetable(i, "them", "me") and (k := f"ask:pledge:{t}") not in rel.pledged]
 
 
 def war_script(joiner: str, side: str, enemy: str) -> str:
@@ -1008,8 +1011,11 @@ def described(key: str) -> str:
         return f"{word(key)} ({get_deal(key).label})"
     if is_subject_key(key):
         return f"subject {key.rsplit(':', 1)[1]} ({_SUBJECT_NAMES.get(key.rsplit(':', 1)[1], '')})"
-    if is_war(key) or is_pledge(key):
-        return f"{word(key)} ({_COUNTRY_NAMES.get(key.rsplit(':', 1)[1], '')})"
+    if is_war(key) or is_pledge(key):     # whose wars, against whom: "pledge ITA" isn't a pledge to Italy
+        enemy = _COUNTRY_NAMES.get(key.rsplit(':', 1)[1], '') or key.rsplit(':', 1)[1]
+        who = "you join their" if key.startswith("give:") else "they join your"
+        return (f"{word(key)} ({who} war against {enemy})" if is_war(key)
+                else f"{word(key)} ({who} wars against {enemy}, whenever they come)")
     if key in ("give:faction", "ask:join"):
         return f"{word(key)} (they would join your faction)"
     if key in ("give:join", "ask:faction"):

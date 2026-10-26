@@ -1055,6 +1055,7 @@ class _Session:
             except gamestate.StateError:
                 continue
             rel = actions.relation(tag, player)
+            rel.pledged = frozenset(treaties.standing(camp, tag))   # a pledge given isn't wanted again
             baseline, war_part = None, ""
             if player in them.enemies:
                 baseline, reasons = war.pressure(them, me, camp)

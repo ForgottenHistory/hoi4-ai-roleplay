@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
-from . import actions, style, war
+from . import actions, style, treaties, war
 from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
@@ -205,6 +205,11 @@ def stale(camp, tag: str) -> bool:
     p = camp.data.setdefault("policies", {}).get(tag)
     if not p:
         return False
+    # A country that vanished or appeared since is another country now: dynamic tags (D01...) are reused, and
+    # the D04 that was Hitler's Reich in a civil war can be Vapsid Estonia a year later
+    if any(e["date"] > p["date"] and tag in e["tags"][:1] and e.get("type") in ("country_gone", "country_new")
+           for e in camp.data["events"]):
+        return True
     if p.get("basis"):
         now = basis(camp.snapshot, tag, camp.data["player"])
         return bool(now) and now != p["basis"]
@@ -228,6 +233,8 @@ def current(camp, tag: str) -> Optional[Dict]:
         p["offers"] = [o if ":" in o else f"give:{o}" for o in p.get("offers", [])]
         p.setdefault("asks", [])
         p.setdefault("breaks", [])
+        given = treaties.standing(camp, tag)        # a pledge made since the policy was set isn't wanted again
+        p = {**p, "offers": [k for k in p["offers"] if k not in given], "asks": [k for k in p["asks"] if k not in given]}
     return p
 
 

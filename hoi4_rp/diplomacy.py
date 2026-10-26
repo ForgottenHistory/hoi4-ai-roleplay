@@ -251,6 +251,11 @@ SHORT_NOTE = ("A proposal is one package the other side accepts or declines whol
               "wants and could get, often nothing at all. A guarantee means defending them if attacked; joining a war "
               "or a faction is the gravest step; a commitment (oppose, befriend, back) is a standing diplomatic line "
               "toward a third country, not a war.")
+WEIGH_NOTE = ("Weigh each item for your own country alone: what it gains and what it costs. A guarantee can drag you "
+              "into the other's wars and ties up factories; military access lets foreign armies through your land; "
+              "joining a faction or a war is for life and death; a commitment against a country makes it your enemy. "
+              "Take what serves you, counter what only half serves you, decline what serves only them: courtesy is "
+              "no reason to agree, and most governments say no more often than yes.")
 MENU_GIVES = ("give:pact", "give:access", "give:guarantee", "give:market", "give:faction", "give:join")
 MENU_ASKS = ("ask:access", "ask:guarantee", "ask:faction", "ask:join")
 STANCES = ("friendly", "cordial", "indifferent", "wary", "hostile")
@@ -283,6 +288,12 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
     cm = _commitments(camp, me.tag, other.tag, name)
     if cm:
         parts.append("STANDING COMMITMENTS (agreed by letter):\n" + "\n".join(cm))
+    from . import guarantees
+    civ = lambda t: w.get(t, {}).get("civ", 0)
+    parts.append(f"A guarantee given by letter is no gesture: it ties up the guarantor's civilian factories for "
+                 f"{guarantees.TERM_MONTHS} months. One more would cost {me.name} "
+                 f"{guarantees.next_cost(camp, me.tag)} of its {civ(me.tag)}, and {other.name} "
+                 f"{guarantees.next_cost(camp, other.tag)} of its {civ(other.tag)}.")
     parts.append(_last_exchange(camp, me.tag, other.tag, name))
     return "\n\n".join(parts)
 
@@ -291,7 +302,7 @@ def dispatch_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: games
                     w: Dict[str, Dict]) -> Tuple[List[Dict], List[str], List[str]]:
     offers, asks, lines = menu(a.tag, b.tag, a.name, b.name)
     task = (f"Write a short diplomatic dispatch to {b.name}: 2 to 4 sentences in {a.name}'s own voice, about what "
-            f"matters most between you now. Then, on a line of its own:\n"
+            f"matters most between you now (no heading, date or place line). Then, on a line of its own:\n"
             f"STANCE: one of {', '.join(STANCES)} (how {a.name} regards {b.name} now)\n"
             + (f"Only if {a.name} really wants a deal now, add a proposal, one command per item (at most three):\n"
                f"{lines}\n{SHORT_NOTE}" if lines else "No agreement is possible between you now: propose nothing."))
@@ -312,11 +323,12 @@ def answer_prompt(camp: campaign.Campaign, b: gamestate.CountryState, a: gamesta
         answer = (f"ANSWER: accept, decline or counter. accept: every item of the package. decline: none of it. "
                   f"counter: you refuse part of it but would agree to a different package; write ANSWER: counter, "
                   f"then your package as commands, one per item (at most three). Often it is their package without "
-                  f"what you refuse; it may also ask something in return. {a.name} then accepts or declines it.\n")
+                  f"what you refuse; it may also ask something in return. {a.name} then accepts or declines it.\n"
+                  f"{WEIGH_NOTE}\n")
         if lines:
             answer += f"Commands for a counter (your offers to {a.name} and your requests of it):\n{lines}\n"
     task = (f"{a.name} sent you this dispatch:\n\"{text}\"\n{deal}\n\nAnswer it in 1 to 3 sentences in {b.name}'s "
-            f"own voice. Then, on lines of their own:\n{answer}"
+            f"own voice (no heading, date or place line). Then, on lines of their own:\n{answer}"
             f"STANCE: one of {', '.join(STANCES)} (how {b.name} regards {a.name} now)")
     return ([{"role": "system", "content": _situation(camp, b, a, w) + "\n\n" + task},
              {"role": "user", "content": "Write the answer now."}], c_offers, c_asks)
@@ -329,7 +341,7 @@ def final_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: gamestat
     task = (f"You wrote to {b.name}:\n\"{text}\"\n\n{b.name} answered:\n\"{reply}\"\nand made a counter-proposal "
             f"instead of yours, a package you accept or decline as a whole: {actions.package_text(counter, b.name)}."
             f"\n\nAnswer in 1 or 2 sentences in {a.name}'s own voice: is the counter-proposal still worth it to "
-            f"{a.name}? Then, on lines of their own:\nANSWER: accept or decline\n"
+            f"{a.name}? {WEIGH_NOTE}\nThen, on lines of their own:\nANSWER: accept or decline\n"
             f"STANCE: one of {', '.join(STANCES)} (how {a.name} regards {b.name} now)")
     return [{"role": "system", "content": _situation(camp, a, b, w) + "\n\n" + task},
             {"role": "user", "content": "Write the answer now."}]

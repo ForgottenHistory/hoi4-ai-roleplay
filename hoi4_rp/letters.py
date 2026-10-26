@@ -1061,7 +1061,8 @@ class _Session:
             self.ai_diplomacy(camp)
         return camp
 
-    # ---- AI-to-AI diplomacy (diplomacy.py): two short calls per exchange, up to AI_PARALLEL exchanges side by side
+    # ---- AI-to-AI diplomacy (diplomacy.py): two or three short calls per exchange, up to AI_PARALLEL side by side,
+    #      in their own queue beside the letters to the player (NanoGPT takes parallel calls)
     def ai_diplomacy(self, camp: campaign.Campaign) -> None:
         cfg = settings().ai
         if cfg.mode != "dry":
@@ -1077,8 +1078,6 @@ class _Session:
                 if nxt:
                     running.append(nxt)
         self.ai_jobs = running
-        if self.pending:
-            return     # letters to the player come first; policies and judgements run beside it in their own queues
         if diplomacy.due(camp):
             queued = diplomacy.draw(camp, cfg.exchanges_per_month, cfg.cooldown_days)
             print("  [ai] this month: " + (", ".join(f"{x[0]} -> {x[1]}" for x in queued) or "nobody"))

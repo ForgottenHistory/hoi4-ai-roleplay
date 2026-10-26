@@ -237,7 +237,7 @@ reaches the game, and no country you write to knows of them.
   the other side's answer: accept, decline, or a counter-proposal (often the same package without what it refuses,
   or with something asked in return), which the proposer accepts or declines in a third short call. The stances
   are kept per pair; the letters too, marked as dry.
-- It runs only while the game runs and no letter to you is waiting to be written, up to three exchanges at once.
+- It runs while the game runs, in its own queue beside your letters, up to three exchanges at once.
   `python -m hoi4_rp usage` shows its calls as `ai:dispatch`, `ai:answer` and `ai:final`.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)

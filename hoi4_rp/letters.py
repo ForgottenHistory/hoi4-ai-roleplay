@@ -47,6 +47,7 @@ IDLE_SECONDS = 600        # game date still this long (paused, player away): no 
 EVENT_LETTERS = 2          # countries that may write about one batch of events
 RETRY_SECONDS = 60        # after a failed background LLM call, wait this long before the next one
 AI_PARALLEL = 3           # AI-to-AI exchanges running at once (NanoGPT takes several calls at a time)
+POLICY_PARALLEL = 3       # policy refreshes running at once (never two for the same country)
 
 
 def read_outbox(block: str) -> Optional[str]:
@@ -969,8 +970,8 @@ class _Session:
         self.steered = 0                         # campaign whose game AI strategies were last brought in line
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
-        self.pool = ThreadPoolExecutor(max_workers=1)  # policy refreshes: the slow LLM part runs here
-        self.policy_job: Optional[tuple] = None   # (tag, future, date key, Relation, campaign id, basis, war baseline)
+        self.pool = ThreadPoolExecutor(max_workers=POLICY_PARALLEL)  # policy refreshes, side by side
+        self.policy_jobs: List[tuple] = []        # [(tag, future, date key, Relation, campaign id, basis, war baseline)]
         self.gm_pool = ThreadPoolExecutor(max_workers=1)   # the reputation game master's LLM calls
         self.gm_job: Optional[tuple] = None       # (kind, item, future, campaign id)
         self.story_pool = ThreadPoolExecutor(max_workers=1)   # story events are written here
@@ -1005,7 +1006,7 @@ class _Session:
         if not self.camp or self.camp.id != cid or self.camp.data["player"] != player:
             self.camp = campaign.Campaign(cid, player)
             self.pending.clear()          # letters queued for the previous game
-            self.policy_job = None        # a refresh still running belongs to the previous game: drop it
+            self.policy_jobs = []         # refreshes still running belong to the previous game: drop them
             self.gm_job = None
             self.story_job = self.story_draft = None
             self.ultimatum_job = None
@@ -1279,42 +1280,28 @@ class _Session:
 
     # ---- neighbours' policies toward the player, refreshed one at a time in the background
     def policies(self, camp: campaign.Campaign, player: str, snap: Dict) -> None:
-        if self.policy_job:
-            tag, fut, key, rel, cid, basis, baseline = self.policy_job
-            if not fut.done():
-                return
-            self.policy_job = None
-            if cid != camp.id or key > (camp.data.get("last_date") or key):
-                return                    # started for another game, or an earlier save was loaded since
-            try:
-                text = fut.result()
-            except llm.LLMError as e:
-                print(f"  policy for {tag} failed: {e}")
-                self.failed()
-                return
-            p = policy.parse(text, rel, baseline)
-            p.update(date=key, when=campaign.date_words(key), basis=basis)
-            camp.set_policy(tag, p)
-            camp.save()
-            words = lambda keys: ", ".join(actions.word(k) for k in keys) or "none"
-            print(f"  policy {tag} -> {player}: {p['stance']}, urgency {p['urgency']}, offers {words(p['offers'])}, "
-                  f"asks {words(p['asks'])}, breaks {words(p['breaks'])}: {p['policy']}")
-            if p.get("war"):
-                print(f"    war stance {p['war']} (situation: {p['war_baseline']}): {p.get('war_why', '')} "
-                      f"Terms: {p.get('terms', '')}")
-            for line in steering.sync(camp, tag):
-                print(line)
+        running = []
+        for job in self.policy_jobs:
+            if not job[1].done():
+                running.append(job)
+            else:
+                self._policy_done(camp, player, *job)
+        self.policy_jobs = running
+        if len(self.policy_jobs) >= POLICY_PARALLEL or time.monotonic() < self.retry_at:
             return
         try:
             me = gamestate.country(player)
         except gamestate.StateError:
             return
         # Most needed first (none or stale, then something happened, then just old); ties in importance order.
+        busy = {job[0] for job in self.policy_jobs}
         close = set(me.neighbors + me.enemies + me.faction_members + me.subjects + [me.overlord or ""])
         ranked = [(policy.refresh_priority(camp, tag, player, snap["date"], tag in close), tag)
-                  for tag in policy_countries(me, snap)]
+                  for tag in policy_countries(me, snap) if tag not in busy]
         ranked = sorted([r for r in ranked if r[0]], key=lambda r: -r[0])
         for _, tag in ranked:
+            if len(self.policy_jobs) >= POLICY_PARALLEL:
+                return
             try:
                 them = gamestate.country(tag)
             except gamestate.StateError:
@@ -1329,10 +1316,32 @@ class _Session:
                          f"{_context(them, me, camp)}\n\nYOUR CORRESPONDENCE WITH {me.name.upper()}:\n"
                          f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, rel, war_part)}"},
                         {"role": "user", "content": f"State {them.name}'s policy toward {me.name} now."}]
-            self.policy_job = (tag, self.pool.submit(llm.chat, messages, None, 0.7, None, "policy", tag),
-                               snap["date"], rel, camp.id,
-                               policy.basis(snap, tag, player), baseline)
+            self.policy_jobs.append((tag, self.pool.submit(llm.chat, messages, None, 0.7, None, "policy", tag),
+                                     snap["date"], rel, camp.id, policy.basis(snap, tag, player), baseline))
+
+    def _policy_done(self, camp: campaign.Campaign, player: str, tag: str, fut, key: str, rel, cid: int, basis: str,
+                     baseline) -> None:
+        """A finished refresh: keep the policy and steer the game's AI by it."""
+        if cid != camp.id or key > (camp.data.get("last_date") or key):
+            return                        # started for another game, or an earlier save was loaded since
+        try:
+            text = fut.result()
+        except llm.LLMError as e:
+            print(f"  policy for {tag} failed: {e}")
+            self.failed()
             return
+        p = policy.parse(text, rel, baseline)
+        p.update(date=key, when=campaign.date_words(key), basis=basis)
+        camp.set_policy(tag, p)
+        camp.save()
+        words = lambda keys: ", ".join(actions.word(k) for k in keys) or "none"
+        print(f"  policy {tag} -> {player}: {p['stance']}, urgency {p['urgency']}, offers {words(p['offers'])}, "
+              f"asks {words(p['asks'])}, breaks {words(p['breaks'])}: {p['policy']}")
+        if p.get("war"):
+            print(f"    war stance {p['war']} (situation: {p['war_baseline']}): {p.get('war_why', '')} "
+                  f"Terms: {p.get('terms', '')}")
+        for line in steering.sync(camp, tag):
+            print(line)
 
     # ---- who writes to the player on their own
     def _cooling(self, camp: campaign.Campaign, tag: str, today: int) -> bool:

@@ -222,11 +222,15 @@ Each change follows a policy refresh; only the difference is pushed and every pu
 back exactly, and loading an earlier save forgets what came after. When a country's stance toward your requests
 changes, its next letter says so.
 
-## AI-to-AI diplomacy (dry run)
+## AI-to-AI diplomacy
 
-Countries other than you write to each other (`hoi4_rp/diplomacy.py`, `[ai_diplomacy]` in config.ini). For now
-only as a dry run (`mode = dry`): the exchanges are written and logged to `data/logs/ai_diplomacy.txt`, nothing
-reaches the game, and no country you write to knows of them.
+Countries other than you write to each other (`hoi4_rp/diplomacy.py`, `[ai_diplomacy]` in config.ini), logged to
+`data/logs/ai_diplomacy.txt`. `mode = dry` only writes and logs; with `mode = on` what they agree takes effect, for
+now only pacts, market access and guarantees (a package holding anything else stays logged, whole: half a trade
+is no deal). It enters the chronicle as news, so the countries you write to know of it (all of them when a major
+power is in it), and a guarantee costs its guarantor civilian factories for 24 months, as yours do.
+`python -m hoi4_rp ai-undo` ends every agreement it put in place (stop `run` first); loading an earlier save
+forgets what it did since.
 
 - Each game month a few pairs are drawn (`exchanges_per_month`, default 3), weighted by what ties them: neighbours,
   the same continent, major powers, factions, guarantees, recent events between them and commitments made by
@@ -236,7 +240,7 @@ reaches the game, and no country you write to knows of them.
   most one proposal (pact, access, guarantee, market, faction, joining a war, oppose/befriend/back, sanction), and
   the other side's answer: accept, decline, or a counter-proposal (often the same package without what it refuses,
   or with something asked in return), which the proposer accepts or declines in a third short call. The stances
-  are kept per pair; the letters too, marked as dry.
+  are kept per pair, and the letters too (marked as dry when nothing took effect).
 - It runs while the game runs, in its own queue beside your letters, up to three exchanges at once.
   `python -m hoi4_rp usage` shows its calls as `ai:dispatch`, `ai:answer` and `ai:final`.
 

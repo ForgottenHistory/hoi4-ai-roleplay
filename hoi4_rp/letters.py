@@ -1065,7 +1065,7 @@ class _Session:
     #      in their own queue beside the letters to the player (NanoGPT takes parallel calls)
     def ai_diplomacy(self, camp: campaign.Campaign) -> None:
         cfg = settings().ai
-        if cfg.mode != "dry":
+        if cfg.mode not in ("dry", "on"):
             return
         st = diplomacy._state(camp)
         running = []

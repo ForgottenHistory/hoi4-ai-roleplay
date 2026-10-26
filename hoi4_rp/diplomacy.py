@@ -1,6 +1,7 @@
 """AI-to-AI diplomacy: countries other than the player write to each other.
 
-For now in dry-run mode only ([ai_diplomacy] mode = dry): exchanges are written and logged, nothing reaches the game.
+[ai_diplomacy] mode = dry: exchanges are written and logged, nothing reaches the game. mode = on: an agreed package of
+LIVE kinds (pacts, market access, guarantees) takes effect, as chronicle news; anything else stays logged.
 One exchange is two short LLM calls: a dispatch from one government (a few sentences, its stance, at most one
 proposal from a short menu) and the other's answer: accept, decline, or counter with a package of its own (often
 theirs without what it refuses), on which the proposer has the last word in a third call. One round only. The prompts are short by
@@ -154,7 +155,7 @@ def pick(camp: campaign.Campaign, scored: List[Tuple], n: int, cooldown_days: in
 
 def _state(camp: campaign.Campaign) -> Dict:
     st = camp.data.setdefault("ai_diplomacy", {})
-    for k, v in (("tick", ""), ("queue", []), ("pairs", {}), ("started", {})):
+    for k, v in (("tick", ""), ("queue", []), ("pairs", {}), ("started", {}), ("applied", [])):
         st.setdefault(k, v)
     return st
 
@@ -323,7 +324,8 @@ def answer_prompt(camp: campaign.Campaign, b: gamestate.CountryState, a: gamesta
         answer = (f"ANSWER: accept, decline or counter. accept: every item of the package. decline: none of it. "
                   f"counter: you refuse part of it but would agree to a different package; write ANSWER: counter, "
                   f"then your package as commands, one per item (at most three). Often it is their package without "
-                  f"what you refuse; it may also ask something in return. {a.name} then accepts or declines it.\n"
+                  f"what you refuse; it may also ask something modest in return (not always a guarantee: market "
+                  f"access, a pact, a commitment, or simply less). {a.name} then accepts or declines it.\n"
                   f"{WEIGH_NOTE}\n")
         if lines:
             answer += f"Commands for a counter (your offers to {a.name} and your requests of it):\n{lines}\n"
@@ -401,23 +403,96 @@ def read_answer(raw: str, items: List[str], c_offers: List[str] = (), c_asks: Li
     return _tidy(text), answer, stance, counter if answer == "counter" else []
 
 
-# ---------------------------------------------------------------- keeping it
+# ---------------------------------------------------------------- keeping it, and what takes effect
+
+# The deal kinds that take effect between AI countries (mode = on); a package holding anything else stays logged
+# only, whole (half a trade is no deal). Commitments, sanctions, factions and wars come later.
+LIVE = ("give:pact", "give:market", "give:guarantee", "ask:guarantee")
+
+
+def _settled(a: str, b: str, items: List[str], answer: str, counter: List[str], final_answer: str
+             ) -> Tuple[List[str], str, str]:
+    """The package agreed, and who wrote it ("give" = writer gives other): (items, writer, other), or ([], "", "")."""
+    if items and answer == "accept":
+        return list(items), a, b
+    if counter and final_answer == "accept":
+        return list(counter), b, a
+    return [], "", ""
+
+
+def apply_deal(camp: campaign.Campaign, writer: str, other: str, items: List[str]) -> List[str]:
+    """Put an agreed package in place between two AI countries: the game's agreements, the chronicle's news (major
+    when a major power is in it), a letter guarantee's term and upkeep, and the ledger undo() works from. Returns
+    what took effect, as news."""
+    from . import actions, guarantees
+    c = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: c.get(t, {}).get("name", t)
+    key = camp.data.get("last_date") or ""
+    _, events = actions.apply(writer, other, name(writer), name(other), [(k, 0) for k in items], allowed=list(items))
+    major = any(c.get(t, {}).get("major") for t in (writer, other))
+    camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": major, "ai": True}
+                     for e in events])
+    done = [e["type"] for e in events]
+    guarantees.record(camp, writer, done, None, other=other)
+    if done:
+        _state(camp)["applied"].append({"date": key, "with": writer, "me": other, "items": done})
+    return [e["text"] for e in events]
+
+
+_UNDO = {   # what ends each live kind ("give" = W gives M)
+    "give:pact": ("{W} = {{ has_non_aggression_pact_with = {M} }}",
+                  "{W} = {{ diplomatic_relation = {{ country = {M} relation = non_aggression_pact active = no }} }}"),
+    # the game has no effect that ends market access, but an embargo does, and it stays ended once lifted
+    "give:market": ("{W} = {{ has_market_access_with = {M} }}",
+                    "{W} = {{ send_embargo = {M} }} {W} = {{ diplomatic_relation = {{ country = {M} relation = embargo "
+                    "active = no }} }}"),
+    "give:guarantee": ("{W} = {{ has_guaranteed = {M} }}",
+                       "{W} = {{ diplomatic_relation = {{ country = {M} relation = guarantee active = no }} }}"),
+    "ask:guarantee": ("{M} = {{ has_guaranteed = {W} }}",
+                      "{M} = {{ diplomatic_relation = {{ country = {W} relation = guarantee active = no }} }}"),
+}
+
+
+def undo(camp: campaign.Campaign) -> List[str]:
+    """End every agreement AI-to-AI diplomacy put in place that still holds (`python -m hoi4_rp ai-undo`), and stop
+    the upkeep of its guarantees. Returns what was ended."""
+    from . import actions, bridge, guarantees
+    c = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: c.get(t, {}).get("name", t)
+    ended = []
+    for x in _state(camp)["applied"]:
+        for k in x["items"]:
+            if k not in _UNDO:
+                continue
+            holds, script = (s.format(W=x["with"], M=x["me"]) for s in _UNDO[k])
+            if bridge.trigger(holds) and actions._effect(script):
+                ended.append(f"{name(x['with'])} / {name(x['me'])}: {k}")
+    _state(camp)["applied"] = []
+    guarantees.tick(camp)                      # guarantees no longer held stop costing
+    camp.save()
+    return ended
+
 
 def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, items: List[str], reply: str,
            answer: str, b_stance: str, why: List, usage: str = "", counter: List[str] = (), final: str = "",
            final_answer: str = "", final_stance: str = "") -> None:
-    """Store a finished exchange (dry run: the letters and both stances only) and log it. With a counter-proposal,
-    `final` is `a`'s last word on it."""
+    """Store a finished exchange and log it; with mode = on, put an agreed package of LIVE kinds in place. With a
+    counter-proposal, `final` is `a`'s last word on it."""
     from . import actions
+    from .config import settings
     key = camp.data.get("last_date") or ""
+    agreed, writer, other = _settled(a, b, items, answer, list(counter), final_answer)
+    live = settings().ai.mode == "on" and bool(agreed) and all(k in LIVE for k in agreed)
+    news = apply_deal(camp, writer, other, agreed) if live else []
+    dry = not news
     camp.add_letter(a, a, text, key, other=b)
-    camp.letters_with(a, b)[-1].update({"dry": True, "proposal": items, "stance": stance})
+    camp.letters_with(a, b)[-1].update({"dry": dry, "proposal": items, "stance": stance})
     camp.add_letter(b, b, reply, key, other=a)
-    camp.letters_with(a, b)[-1].update({"dry": True, "answer": answer, "stance": b_stance,
+    camp.letters_with(a, b)[-1].update({"dry": dry, "answer": answer, "stance": b_stance,
                                         **({"proposal": list(counter)} if counter else {})})
     if counter:
         camp.add_letter(a, a, final, key, other=b)
-        camp.letters_with(a, b)[-1].update({"dry": True, "answer": final_answer, "stance": final_stance})
+        camp.letters_with(a, b)[-1].update({"dry": dry, "answer": final_answer, "stance": final_stance})
     for x, y, s in ((a, b, final_stance or stance), (b, a, b_stance)):
         camp.set_policy(x, {"stance": s, "date": key, "when": campaign.date_words(key), "light": True}, other=y)
     c = (camp.snapshot or {}).get("countries", {})
@@ -428,14 +503,15 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
     if deal:
         lines.append(f"  proposes: {deal}")
     lines.append(f"{name(b).upper()} ({b_stance}{', ' + answer.upper() if answer else ''}): {reply}")
-    if deal and answer == "accept":
-        lines.append(f"  [dry run] would take effect: {deal}")
     if counter:
-        other = actions.package_text(list(counter), name(b))
-        lines += [f"  counters: {other}",
+        lines += [f"  counters: {actions.package_text(list(counter), name(b))}",
                   f"{name(a).upper()} ({final_stance}, {final_answer.upper()}): {final}"]
-        if final_answer == "accept":
-            lines.append(f"  [dry run] would take effect: {other}")
+    if news:
+        lines.append(f"  [live] took effect: {' '.join(news)}")
+    elif agreed:
+        why_not = ("dry run" if settings().ai.mode != "on" else
+                   "not live yet" if not all(k in LIVE for k in agreed) else "could not be put in place")
+        lines.append(f"  [{why_not}] would take effect: {actions.package_text(agreed, name(writer))}")
     if usage:
         lines.append(f"  ({usage})")
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
@@ -445,10 +521,11 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
 
 
 def drop_after(camp: campaign.Campaign, key: str) -> None:
-    """An earlier save was loaded: this month's draw and the cooldowns since are forgotten (the letters and stances
-    go with the campaign's own rewind)."""
+    """An earlier save was loaded: this month's draw, the cooldowns and what took effect since are forgotten (the
+    save holds the game as it was; the letters, stances and guarantees go with their own rewinds)."""
     st = _state(camp)
     st["queue"] = []
     st["tick"] = st["tick"] if st["tick"] < key else ""
     st["pairs"] = {k: d for k, d in st["pairs"].items() if d < key}
     st["started"] = {k: d for k, d in st["started"].items() if d < key}
+    st["applied"] = [x for x in st["applied"] if x["date"] < key]

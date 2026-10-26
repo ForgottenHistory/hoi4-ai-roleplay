@@ -63,12 +63,13 @@ def _charge(camp: campaign.Campaign, by: str) -> None:
     actions._effect(script)
 
 
-def record(camp: campaign.Campaign, tag: str, types: List[str], terms: Optional[Dict]) -> List[str]:
-    """The guarantees a letter deal with `tag` just made (give:guarantee: `tag` guarantees the player; ask:guarantee:
-    the player guarantees `tag`). Renewing a standing one extends it, at no new cost. Returns a line for the player
-    on each (its term and upkeep), for a guarantee granted outright, which no proposal line announced."""
+def record(camp: campaign.Campaign, tag: str, types: List[str], terms: Optional[Dict], other: str = "") -> List[str]:
+    """The guarantees a letter deal between `tag` and `other` (the player by default) just made (give:guarantee:
+    `tag` guarantees `other`; ask:guarantee: `other` guarantees `tag`). Renewing a standing one extends it, at no new
+    cost. Returns a line for the player on each (its term and upkeep), for a guarantee granted outright, which no
+    proposal line announced."""
     from . import treaties
-    player = camp.data["player"]
+    player = other or camp.data["player"]
     today = camp.data.get("last_date") or ""
     months = (terms or {}).get("months") or TERM_MONTHS
     payers, lines = set(), []
@@ -125,8 +126,8 @@ def tick(camp: campaign.Campaign) -> List[Tuple[str, str]]:
             camp.add_events([{"date": today, "when": campaign.date_words(today), "type": "guarantee:expired",
                               "tags": [g["by"], g["of"]], "text": text, "major": False}])
             print(f"  [guarantee] {text}")
-            other = g["of"] if g["by"] == player else g["by"]
-            letters.append((other, text))
+            if player in (g["by"], g["of"]):         # one between two other countries is news, not a letter
+                letters.append((g["of"] if g["by"] == player else g["by"], text))
     for by in payers:
         if by in countries:
             _charge(camp, by)

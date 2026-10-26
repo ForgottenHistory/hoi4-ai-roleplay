@@ -35,7 +35,7 @@ from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
 REFRESH_DAYS = 90
-VERSION = 3                   # policies written before the current context (security position) are rewritten once
+VERSION = 4                   # older policies are rewritten once (v4: no war pledges, docking only with a coast)
 FAR_REFRESH_DAYS = 360        # a distant country with nothing to say (indifferent, urgency 0) thinks again rarely
 POLICY_WORDS = 40
 TERRITORY_REFRESH_DAYS = 30   # states changing hands between the two refresh a policy at most this often

@@ -156,6 +156,10 @@ class Relation:
     them_equipment: Dict[str, int] = None  # stockpiles: "rifles"/"artillery"/"trucks" -> amount
     me_equipment: Dict[str, int] = None
     pledged: frozenset = frozenset()      # war pledges already standing between the two (treaties.standing)
+    them_ports: bool = True               # has a coast: docking rights in its ports mean something
+    me_ports: bool = True
+    them_navy: bool = True                # has ships to dock
+    me_navy: bool = True
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -234,7 +238,16 @@ def relation(them: str, me: str) -> Relation:
                     me_in_faction=bridge.trigger(f"{me} = {{ is_in_faction = yes }}"),
                     me_enemies=joinable_enemies(me, them), them_enemies=joinable_enemies(them, me),
                     third=third_countries(them, me) if PLEDGES else {},
-                    them_equipment=equipment_counts(them), me_equipment=equipment_counts(me))
+                    them_equipment=equipment_counts(them), me_equipment=equipment_counts(me),
+                    them_ports=_coastal(them), me_ports=_coastal(me), them_navy=_navy(them), me_navy=_navy(me))
+
+
+def _coastal(tag: str) -> bool:
+    return bridge.trigger(f"{tag} = {{ any_owned_state = {{ is_coastal = yes }} }}")
+
+
+def _navy(tag: str) -> bool:
+    return bridge.trigger(f"{tag} = {{ has_navy_size = {{ size > 0 }} }}")
 
 
 # ---------------------------------------------------------------- deals
@@ -1034,6 +1047,10 @@ def possible(rel: Relation, key: str) -> bool:
         # take subjects of its own). Fellow faction members may.
         return (not rel.at_war and rel.bound in ("", "faction")
                 and not rel.them_subject and not rel.me_subject)
+    if key == "give:docking" and not (rel.them_ports and rel.me_navy):     # a coast to give, ships to use it
+        return False
+    if key == "ask:docking" and not (rel.me_ports and rel.them_navy):
+        return False
     if rel.bound and key not in BOUND_ALLOWED:
         return False
     d = BY_KEY[key]

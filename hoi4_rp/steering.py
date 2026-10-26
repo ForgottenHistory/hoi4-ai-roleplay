@@ -14,6 +14,13 @@ strategies toward the player (add_ai_strategy, id = player). Checked live in a 1
                              lend-lease (50%) or invite to a faction (80%), a non-aligned country can't justify war goals
                              (50%). They wait for the rules to allow them.
 
+A commitment toward a third country made by letter (treaties.commitments: "Britain works against Italy alongside
+Austria") sets strategies on the committed country's AI toward that country (COMMIT, id = it). Checked live from
+January to August 1936 (Britain against Italy, Sweden against Norway, Britain behind Yugoslavia): at 0% tension contain,
+antagonize, protect and support changed nothing visible (opinions, embargoes, war goals, guarantees all still). They
+are its leanings for when the game's rules open up; what acts at once is the acceptance score (the request penalty)
+and befriend (Italy's opinion of Turkey, -10 to +92 in a month).
+
 Strategies stack and are kept in saves, so each country keeps a dated ledger of what was pushed (as ultimatums do):
 the difference to what its policy calls for now is pushed, a loaded earlier save forgets later pushes, and a country
 that vanished or appeared since (dynamic tags are reused) starts from nothing. War itself stays with ultimatums.
@@ -27,7 +34,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from . import actions, campaign, policy
+from . import actions, campaign, policy, treaties
 
 # How each stance answers the player's requests, added to the game's acceptance score
 ACCEPT = {"friendly": 40, "cordial": 15, "indifferent": 0, "wary": -20, "hostile": -50}
@@ -48,17 +55,23 @@ NOTICE = {"friendly": ("{them}'s government now favours your requests: access, d
           "wary": ("{them} now leans against your requests.", True),
           "hostile": ("{them}'s government now opposes your requests and works against you.", True)}
 
-Key = Tuple[str, str]       # (strategy type, extra script: "target = military_access" or "")
+# What a commitment toward a third country sets toward it (strategy type, extra script) -> value
+_ACCEPT = lambda v: {("diplo_action_acceptance", f"target = {t}"): v for t in ACCEPT_TARGETS}
+COMMIT = {"oppose": {("contain", ""): 100, ("antagonize", ""): 50, **_ACCEPT(-50)},
+          "befriend": {("befriend", ""): 100, ("diplo_action_desire", "target = improve_relation"): 100, **_ACCEPT(30)},
+          "back": {("protect", ""): 100, ("support", ""): 100, **_ACCEPT(30)}}
+
+Key = Tuple[str, str, str]  # (id: the country it is about, strategy type, extra script: "target = military_access")
 
 
-def _wanted(p: Optional[Dict], bound: bool = False) -> Dict[Key, int]:
+def _wanted(p: Optional[Dict], bound: bool = False) -> Dict[Tuple[str, str], int]:
     """The strategies a policy calls for (nothing for no policy, or at war: the war is the game's). `bound`: a subject,
     overlord or faction member of the player, whose ties do what befriending or protecting would: only how it
     answers the player's requests (a call to arms above all)."""
     if not p or p.get("war"):
         return {}
     stance = p["stance"]
-    out: Dict[Key, int] = {}
+    out: Dict[Tuple[str, str], int] = {}
     for target in ACCEPT_TARGETS:
         out[("diplo_action_acceptance", f"target = {target}")] = ACCEPT.get(stance, 0)
     for key in p.get("offers", []):
@@ -74,10 +87,28 @@ def _ledger(camp: campaign.Campaign, tag: str) -> Dict:
     return camp.data.setdefault("steering", {}).setdefault(tag, {"pushes": [], "stance": ""})
 
 
-def _totals(entry: Dict) -> Dict[Key, int]:
+def _who(push: List, player: str) -> str:
+    return push[4] if len(push) > 4 else player          # pushes before commitments were all toward the player
+
+
+def _totals(entry: Dict, player: str) -> Dict[Key, int]:
     out: Dict[Key, int] = {}
-    for _, kind, extra, value in entry["pushes"]:
-        out[(kind, extra)] = out.get((kind, extra), 0) + value
+    for push in entry["pushes"]:
+        k = (_who(push, player), push[1], push[2])
+        out[k] = out.get(k, 0) + push[3]
+    return out
+
+
+def _committed(camp: campaign.Campaign, tag: str) -> Dict[Key, int]:
+    """What `tag`'s commitments toward third countries call for (none toward one it is at war with)."""
+    snap = camp.snapshot or {}
+    out: Dict[Key, int] = {}
+    for r in treaties.commitments(camp):
+        x = r["target"]
+        if r["actor"] != tag or x not in snap.get("countries", {}) or "|".join(sorted([tag, x])) in snap.get("wars", []):
+            continue
+        for (kind, extra), v in COMMIT[r["kind"]].items():
+            out[(x, kind, extra)] = out.get((x, kind, extra), 0) + v
     return out
 
 
@@ -100,30 +131,40 @@ def sync(camp: campaign.Campaign, tag: str) -> List[str]:
     c = camp.snapshot["countries"]
     bound = (c[tag].get("overlord") == player or c[player].get("overlord") == tag
              or bool(c[tag].get("faction")) and c[tag].get("faction") == c[player].get("faction"))
-    want, have = _wanted(p, bound), _totals(entry)
+    toward_me = {(player, kind, extra): v for (kind, extra), v in _wanted(p, bound).items()}
+    want = dict(toward_me)
+    for k, v in _committed(camp, tag).items():
+        want[k] = want.get(k, 0) + v
+    gone = [x for x in entry["pushes"] if _who(x, player) not in c]    # its strategies went with that country
+    if gone:
+        entry["pushes"] = [x for x in entry["pushes"] if _who(x, player) in c]
+    have = _totals(entry, player)
     diff = {k: want.get(k, 0) - have.get(k, 0) for k in set(want) | set(have)}
     diff = {k: v for k, v in diff.items() if v}
     if not diff:
+        if gone:
+            camp.save()
         return []
-    script = " ".join(f"add_ai_strategy = {{ type = {kind} id = {player} {extra} value = {v} }}"
-                      for (kind, extra), v in diff.items())
+    script = " ".join(f"add_ai_strategy = {{ type = {kind} id = {who} {extra} value = {v} }}"
+                      for (who, kind, extra), v in diff.items())
     if not actions._effect(f"{tag} = {{ {script} }}"):
         return []
     key = camp.data.get("last_date") or ""
-    entry["pushes"].extend([key, kind, extra, v] for (kind, extra), v in diff.items())
-    stance = p["stance"] if want else ""
+    entry["pushes"].extend([key, kind, extra, v, who] for (who, kind, extra), v in diff.items())
+    stance = p["stance"] if toward_me else ""
     if stance != entry.get("stance"):
         if entry.get("stance"):                  # a change, not the first stance of a new game
             entry["notice"] = stance or "indifferent"
         entry["stance"] = stance
     camp.save()
     return [f"  steering {tag}: {stance or 'none'} ("
-            + ", ".join(f"{kind}{' ' + extra.split('= ')[-1] if extra else ''} {v:+d}" for (kind, extra), v in
-                        sorted(diff.items())) + ")"]
+            + ", ".join(f"{kind}{' ' + extra.split('= ')[-1] if extra else ''}{'' if who == player else ' ' + who} "
+                        f"{v:+d}" for (who, kind, extra), v in sorted(diff.items())) + ")"]
 
 
 def sync_all(camp: campaign.Campaign) -> None:
-    for tag in sorted(set(camp.data.get("policies", {})) | set(camp.data.get("steering", {}))):
+    actors = {r["actor"] for r in treaties.commitments(camp)}
+    for tag in sorted(set(camp.data.get("policies", {})) | set(camp.data.get("steering", {})) | actors):
         for line in sync(camp, tag):
             print(line)
 

@@ -285,6 +285,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + (f"{pol}\n\n" if pol else "")
         + (f"{rep}\n\n" if rep else "")
         + (f"{deals}\n\n" if (deals := treaties.describe(camp, them.tag, them.name, me.name)) else "")
+        + (f"{lines}\n\n" if (lines := treaties.commitments_text(camp, them.tag)) else "")
         + f"{guarantees.describe(camp, them.tag, them.name, me.name)}\n\n"
         + (f"{ults}\n\n" if (ults := ultimatums.describe(camp, them.tag, them.name, me.name)) else "")
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
@@ -434,7 +435,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                                      allowed=["opinion"] + actions.GIVES + actions.UNILATERAL + actions.state_gives(rel)
                                      + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel)
                                      + actions.rights_gives(rel) + actions.dmz_gives(rel)
-                                     + actions.EQUIPMENT_GIVES + actions.war_gives(rel) + actions.pledge_gives(rel))
+                                     + actions.EQUIPMENT_GIVES + actions.war_gives(rel) + actions.third_gives(rel))
     if not rel.at_war:                                  # land for a third country, at the player's request
         more_shown, more_events = actions.apply_cedes(to, player, them.name, me.name, commands,
                                                       (camp.snapshot or {}).get("countries", {}))
@@ -448,6 +449,8 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                   False) for k in later]
     if renounced:
         outcomes += treaties.renounce(camp, to, player)
+    for line in steering.sync(camp, to):                # commitments made or renounced steer its AI
+        print(line)
     # Proposal items are only kept if still possible after what was just applied.
     after = actions.relation(to, player) if events else rel
     items = _attach_proposal(camp, to, actions.package([p for p in proposals if actions.possible(after, p)],
@@ -507,7 +510,8 @@ def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: s
 # A letter that speaks of a deal but carries no command for it leaves nothing to accept. The LLM sometimes writes the
 # offer into the text and forgets the commands; one short follow-up asks for them.
 _DEAL_WORDS = re.compile(r"\b(offer|propos|in return|in exchange|pact|guarantee|access|passage|market|trade|"
-                         r"factor|pledge|alliance|faction|docking|rifles|artillery|trucks|equipment|cede)", re.I)
+                         r"factor|pledge|alliance|faction|docking|rifles|artillery|trucks|equipment|cede|"
+                         r"oppos|befriend|sanction|stand behind)", re.I)
 _REPAIR_KINDS = re.compile(r"\[\[\s*(offer|ask|for)\b", re.I)
 
 
@@ -691,10 +695,10 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
         offers = (actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel)
                   + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel) + actions.rights_gives(rel)
                   + actions.dmz_gives(rel) + actions.EQUIPMENT_GIVES + actions.war_gives(rel)
-                  + actions.pledge_gives(rel))
+                  + actions.third_gives(rel))
         asks = (actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel)
                 + ["ask:civ", "ask:mil", "ask:dismantle"] + actions.govt_asks(rel) + actions.rights_asks(rel)
-                + actions.dmz_asks(rel) + actions.EQUIPMENT_ASKS + actions.war_asks(rel) + actions.pledge_asks(rel))
+                + actions.dmz_asks(rel) + actions.EQUIPMENT_ASKS + actions.war_asks(rel) + actions.third_asks(rel))
         standing = treaties.standing(camp, tag)
         ok = lambda k: k != "give:peace" and k not in standing and actions.possible(rel, k)
         return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
@@ -772,6 +776,8 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
     if renounced:
         outcomes += treaties.renounce(camp, sender, player)
+        for line in steering.sync(camp, sender):
+            print(line)
     after = actions.relation(sender, player) if events else rel
     items = _attach_proposal(camp, sender, actions.package([p for p in proposals if actions.possible(after, p)],
                                                            offers + asks), key, terms)
@@ -819,6 +825,8 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
         treaties.record(camp, tag, [e["type"] for e in events], offer.get("terms"), key, them_name, later=later)
         guarantees.record(camp, tag, [e["type"] for e in events], offer.get("terms"))
+        for line in steering.sync(camp, tag):              # a commitment it made steers its AI
+            print(line)
         missed = len(now) - len(events)
         text = (f"{me_name} accepted the proposal ({what})."
                 + (f" {missed} part(s) could no longer be put in place." if missed else ""))
@@ -1033,6 +1041,8 @@ class _Session:
                 for tag, why in treaties.tick(camp, player) + ultimatums.tick(camp, player) + guarantees.tick(camp):
                     if active(snap, tag) and settings().letters.incoming:
                         self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()
+                if self.steered == camp.id:     # commitments that ended, or a war with their country, since
+                    steering.sync_all(camp)
         if rewound or self.steered != camp.id:      # the game's AI follows the policies (steering.py)
             self.steered = camp.id
             steering.sync_all(camp)

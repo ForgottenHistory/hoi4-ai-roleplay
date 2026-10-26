@@ -52,6 +52,7 @@ _DEAL_WEIGHTS = [
          "treaty:clause")),
     (2, ("give:civ", "ask:civ", "give:mil", "ask:mil", "give:dismantle", "ask:dismantle", "give:dmz", "ask:dmz",
          "give:rights", "ask:rights", "embargo", "give:pledge", "ask:pledge", "give:rifles", "ask:rifles",
+         "give:oppose", "ask:oppose", "give:back", "ask:back", "give:sanction", "ask:sanction",
          "give:artillery", "ask:artillery", "give:trucks", "ask:trucks")),
 ]
 # Plain agreements (pacts, guarantees, access, docking, market) count 1: no event of their own, they make dull news.

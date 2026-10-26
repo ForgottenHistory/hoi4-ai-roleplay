@@ -7,6 +7,8 @@ A deal made by letter may carry terms the mod plays out as the game runs:
     [[ask rifles 500 x4 every 6]]   ... every 6 months
     [[offer pledge GER]]            a war pledge (actions.py): whenever the other side goes to war with Germany,
                                     this side joins it
+    [[offer oppose ITA]]            a commitment toward a third country (oppose, befriend, back; actions.py): a
+                                    standing line for as long as the treaty stands
 parse_terms() takes the term and instalment parts out of a letter before actions.parse() reads the rest.
 
 Kept in the campaign (data["treaties"]) and played out by tick() each time the world moves:
@@ -16,6 +18,9 @@ Kept in the campaign (data["treaties"]) and played out by tick() each time the w
     a war pledge is called   -> them joins the war at once; for my pledge the player is asked to honour it
                                 (already at war with that country: honoured as it stands)
     war between the two      -> the treaty lapses
+    a commitment             -> the committed side's AI is steered toward that country (steering.py, the AI's side
+                                only); a step against it (a pact with a country it promised to oppose, war on one it
+                                promised to back) breaks the treaty, the player's breaks remembered by reputation
 The player is never bound: refusing is allowed, and it is remembered (the other country sees it, the reputation
 game master judges it, and the country writes about it). The AI keeps its side unless it renounces the treaty in a
 letter ([[end treaty]]), which is remembered too.
@@ -23,7 +28,8 @@ letter ([[end treaty]]), which is remembered too.
 Treaty: {"id", "with", "date", "when", "items": [keys], "labels": {key: text}, "text", "until": date or "",
          "status": active | fulfilled | ended | lapsed | broken | renounced, "closed": date, "how": text,
          "payments": [{"key", "count", "every", "paid": [dates], "missed": [dates]}],
-         "clauses": [{"key", "fired": date, "asked": date}]}
+         "clauses": [{"key", "fired": date, "asked": date}]}   (a commitment: "fired" when it ended, "how", and
+         "base": the steps against it that already held when it was made)
 data["treaty_due"]: [{"treaty", "kind": payment | clause, "key", "date", "n"}] waiting for the player.
 """
 
@@ -100,7 +106,7 @@ def for_items(terms: Optional[Dict], items: List[str]) -> Dict:
     """The part of a letter's terms that concerns these deal items."""
     terms = terms or {}
     pay = {k: v for k, v in (terms.get("payments") or {}).items() if k in items}
-    lasting = any(_endable(k) or actions.is_pledge(k) for k in items)
+    lasting = any(_endable(k) or actions.is_pledge(k) or actions.is_align(k) for k in items)
     return {"months": terms.get("months", 0) if lasting else 0, "payments": pay}
 
 
@@ -184,6 +190,9 @@ def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optiona
                  "paid": [] if _start(spec) else [key], "missed": []}
                 for k, spec in terms["payments"].items()]
     clauses = [{"key": k, "fired": "", "asked": ""} for k in applied if actions.is_pledge(k)]
+    held = standing(camp, tag)                       # a commitment already standing isn't made twice
+    clauses += [{"key": k, "fired": "", "asked": "", "base": _against(k, tag, camp.data["player"])}
+                for k in applied if actions.is_align(k) and k not in held]
     until = _add_months(key, terms["months"]) if terms["months"] else ""
     if not (payments or clauses or (until and any(_endable(k) for k in applied))):
         return None
@@ -202,6 +211,99 @@ def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optiona
           + "".join(f"; {p['key']} x{p['count']} every {p['every']} months"
                     + (f", the first in {p['start']} months" if p["start"] else "") for p in payments))
     return t
+
+
+# Steps against a commitment toward a third country X: (trigger in the committed country's scope, what it did).
+# One that already held when the treaty was made counts only once it has lapsed and come back.
+_AGAINST = {
+    "oppose": [("has_non_aggression_pact_with = {X}", "signed a non-aggression pact with {x}"),
+               ("is_in_faction_with = {X}", "joined a faction with {x}"),
+               ("has_guaranteed = {X}", "guaranteed {x}'s independence"),
+               ("gives_military_access_to = {X}", "gave {x} military access")],
+    "befriend": [("has_war_with = {X}", "went to war with {x}"),
+                 ("is_embargoing = {X}", "imposed a trade embargo on {x}")],
+    "back": [("has_war_with = {X}", "went to war with {x}"),
+             ("is_embargoing = {X}", "imposed a trade embargo on {x}")],
+}
+_PROMISE = {"oppose": "to work against {x}", "befriend": "to seek friendship with {x}", "back": "to stand behind {x}"}
+
+
+def _against(key: str, tag: str, player: str) -> List[int]:
+    """The steps against this commitment that hold now (indexes into _AGAINST)."""
+    verb, kind, x = key.split(":")
+    actor = tag if verb == "give" else player
+    return [i for i, (trigger, _) in enumerate(_AGAINST[kind])
+            if bridge.trigger(f"{actor} = {{ {trigger.format(X=x)} }}")]
+
+
+def _keep_commitment(camp: campaign.Campaign, t: Dict, c: Dict, player: str, today: str) -> Tuple[bool, str]:
+    """Watch one commitment: (changed, why the other country should write: a broken commitment, else '')."""
+    from . import reputation
+    tag = t["with"]
+    verb, kind, x = c["key"].split(":")
+    countries = (camp.snapshot or {}).get("countries", {})
+    x_name = countries.get(x, {}).get("name", x)
+    if x not in countries:
+        c["fired"], c["how"] = today, f"{x_name} no longer exists"
+        return True, ""
+    now = _against(c["key"], tag, player)
+    base = [i for i in c.get("base", []) if i in now]
+    changed = base != c.get("base", [])
+    c["base"] = base
+    step = next((i for i in now if i not in base), None)
+    if step is None:
+        return changed, ""
+    them_name, me_name = _names(camp, player, tag)
+    did, promise = _AGAINST[kind][step][1].format(x=x_name), _PROMISE[kind].format(x=x_name)
+    c["fired"], c["how"] = today, "broken"
+    if verb == "ask":                                  # the player's own word
+        deed = (f"{me_name} {did}, though it had committed in the treaty of {t['when']} with {them_name} {promise}, "
+                f"breaking its word.")
+        _close(t, "broken", today, f"broken by {me_name}")
+        reputation._rep(camp)["deeds"].append({"date": today, "when": campaign.date_words(today),
+                                               "tags": [player, tag], "facts": deed, "weight": None, "verdict": ""})
+    else:
+        deed = f"{them_name} {did}, though it had committed in the treaty of {t['when']} with {me_name} {promise}."
+        _close(t, "broken", today, f"broken by {them_name}")
+    _event(camp, "broken", [tag, player, x], deed)
+    return True, deed
+
+
+def commitments(camp: campaign.Campaign) -> List[Dict]:
+    """Standing commitments toward third countries: [{"actor", "for", "kind", "target", "when", "treaty"}]."""
+    player = camp.data["player"]
+    out = []
+    for t in _all(camp):
+        if t["status"] != "active":
+            continue
+        for c in t["clauses"]:
+            if actions.is_align(c["key"]) and not c["fired"]:
+                verb, kind, x = c["key"].split(":")
+                actor, ben = (t["with"], player) if verb == "give" else (player, t["with"])
+                out.append({"actor": actor, "for": ben, "kind": kind, "target": x, "when": t["when"], "treaty": t["id"]})
+    return out
+
+
+_COMMIT_WORDS = {"oppose": "work against {x} alongside {b}", "befriend": "seek friendship with {x}, as {b} wished",
+                 "back": "stand behind {x} alongside {b}"}
+
+
+def commitments_text(camp: campaign.Campaign, tag: str) -> str:
+    """Every standing commitment toward a third country, for `tag`'s prompts, `tag` as 'you' ('' if none)."""
+    rows = commitments(camp)
+    if not rows:
+        return ""
+    c = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: "you" if t == tag else c.get(t, {}).get("name", t)
+    lines = []
+    for r in rows[-10:]:
+        a = name(r["actor"])
+        lines.append(f"- {a[0].upper() + a[1:]} {'have' if r['actor'] == tag else 'has'} committed to "
+                     + _COMMIT_WORDS[r["kind"]].format(x=name(r["target"]), b=name(r["for"]))
+                     + f" (treaty of {r['when']}).")
+    return ("STANDING COMMITMENTS TOWARD THIRD COUNTRIES (agreed by letter; the committed government's diplomacy "
+            "follows each for as long as its treaty stands, and a step against one is remembered as a broken "
+            "word):\n" + "\n".join(lines))
 
 
 def _event(camp: campaign.Campaign, kind: str, tags: List[str], text: str, **extra) -> None:
@@ -310,6 +412,14 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
                 _due(camp).append({"treaty": t["id"], "kind": "payment", "key": p["key"], "date": today, "n": n})
                 changed = True
         for c in t["clauses"]:
+            if actions.is_align(c["key"]):
+                if not c["fired"]:
+                    moved, why = _keep_commitment(camp, t, c, player, today)
+                    changed |= moved
+                    if why:
+                        letters.append((tag, why))
+                        break                           # the treaty is broken
+                continue
             if c["fired"] or c["asked"]:
                 continue
             verb, _, enemy = c["key"].split(":")
@@ -337,7 +447,7 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
             else:
                 c["asked"] = today
                 _due(camp).append({"treaty": t["id"], "kind": "clause", "key": c["key"], "date": today, "n": 0})
-        if _done(t):
+        if t["status"] == "active" and _done(t):
             _close(t, "fulfilled", today, "all of it was carried out")
             changed = True
     if changed:
@@ -495,6 +605,11 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
                 enemy = (camp.snapshot or {}).get("countries", {}).get(c["key"].rsplit(":", 1)[1], {}).get(
                     "name", c["key"].rsplit(":", 1)[1])
                 who, whom = (them_name, me_name) if c["key"].startswith("give:") else (me_name, them_name)
+                if actions.is_align(c["key"]):
+                    bits.append(f"Commitment: {who} committed {_PROMISE[c['key'].split(':')[1]].format(x=enemy)}"
+                                + (f" ({c.get('how', 'ended')} {campaign.date_words(c['fired'])})." if c["fired"]
+                                   else " (stands)."))
+                    continue
                 bits.append(f"War pledge: {who} joins {whom} whenever {whom} goes to war with {enemy}"
                             + (f" (honoured {campaign.date_words(c['fired'])})." if c["fired"] else " (stands)."))
         else:
@@ -521,6 +636,8 @@ def drop_after(camp: campaign.Campaign, key: str) -> None:
             p["paid"] = [d for d in p["paid"] if d < key]
             p["missed"] = [d for d in p["missed"] if d < key]
         for c in t["clauses"]:
+            if c["fired"] and c["fired"] >= key:
+                c.pop("how", None)
             c["fired"] = c["fired"] if c["fired"] and c["fired"] < key else ""
             c["asked"] = c["asked"] if c["asked"] and c["asked"] < key else ""
         if t["closed"] and t["closed"] >= key:

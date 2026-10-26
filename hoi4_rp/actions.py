@@ -28,6 +28,9 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
                               to join its war against TAG
     [[offer pledge TAG]] [[ask pledge TAG]] [[pledge TAG]]   a war pledge, kept by treaties.py: them joins my
                               war whenever I go to war with TAG, or asks me to pledge the same
+    [[offer oppose TAG]] [[offer befriend TAG]] [[offer back TAG]]   a standing commitment toward a third country
+                              (ALIGN_NOTE), kept by treaties.py, steering them's AI (steering.py); ask/plain forms too
+    [[offer sanction TAG]] [[ask sanction TAG]] [[sanction TAG]]   a trade embargo on a third country, now
     [[offer rifles N]] [[ask artillery N]] [[trucks N]]   stockpiled equipment as currency (EQUIPMENT)
     Terms over time ([[for 12 months]], instalments [[offer civ 2 x3]]) and [[end treaty]]: treaties.py
 
@@ -152,10 +155,10 @@ class Relation:
     me_in_faction: bool = False
     me_enemies: Dict[str, str] = None     # my enemies them could join a war against: tag -> name (war_gives)
     them_enemies: Dict[str, str] = None   # them's enemies I could join a war against
-    third: Dict[str, Dict] = None         # countries a war pledge may name: tag -> {name, flags} (pledge_*)
+    third: Dict[str, Dict] = None         # countries a pledge or commitment may name: tag -> {name, flags}
     them_equipment: Dict[str, int] = None  # stockpiles: "rifles"/"artillery"/"trucks" -> amount
     me_equipment: Dict[str, int] = None
-    pledged: frozenset = frozenset()      # war pledges already standing between the two (treaties.standing)
+    pledged: frozenset = frozenset()      # pledges, commitments standing between the two (treaties.standing)
     them_ports: bool = True               # has a coast: docking rights in its ports mean something
     me_ports: bool = True
     them_navy: bool = True                # has ships to dock
@@ -237,7 +240,7 @@ def relation(them: str, me: str) -> Relation:
                     them_in_faction=bridge.trigger(f"{them} = {{ is_in_faction = yes }}"),
                     me_in_faction=bridge.trigger(f"{me} = {{ is_in_faction = yes }}"),
                     me_enemies=joinable_enemies(me, them), them_enemies=joinable_enemies(them, me),
-                    third=third_countries(them, me) if PLEDGES else {},
+                    third=third_countries(them, me),
                     them_equipment=equipment_counts(them), me_equipment=equipment_counts(me),
                     them_ports=_coastal(them), me_ports=_coastal(me), them_navy=_navy(them), me_navy=_navy(me))
 
@@ -537,6 +540,8 @@ def third_countries(them: str, me: str) -> Dict[str, Dict]:
         f'if = {{ limit = {{ is_in_faction_with = {s} }} log = "AIRPTF|[THIS.GetTag]|ally_{"me" if s == me else "them"}" }} '
         f'if = {{ limit = {{ OR = {{ has_guaranteed = {s} {s} = {{ has_guaranteed = PREV }} }} }} '
         f'log = "AIRPTF|[THIS.GetTag]|friend_{"me" if s == me else "them"}" }} '
+        f'if = {{ limit = {{ {s} = {{ is_embargoing = PREV }} }} '
+        f'log = "AIRPTF|[THIS.GetTag]|embargoed_{"me" if s == me else "them"}" }} '
         # a quarrel the game knows: claims or cores on each other's land, or a war goal either way
         f'if = {{ limit = {{ OR = {{ any_owned_state = {{ OR = {{ is_claimed_by = {s} is_core_of = {s} }} }} '
         f'any_state = {{ is_owned_by = {s} OR = {{ is_claimed_by = PREV is_core_of = PREV }} }} '
@@ -632,13 +637,136 @@ def _targetable(info: Dict, attacker: str, joiner: str) -> bool:
 
 
 def pledge_gives(rel: "Relation") -> List[str]:
+    if not PLEDGES:
+        return []
     return [k for t, i in (rel.third or {}).items()
             if _targetable(i, "me", "them") and (k := f"give:pledge:{t}") not in rel.pledged]
 
 
 def pledge_asks(rel: "Relation") -> List[str]:
+    if not PLEDGES:
+        return []
     return [k for t, i in (rel.third or {}).items()
             if _targetable(i, "them", "me") and (k := f"ask:pledge:{t}") not in rel.pledged]
+
+
+# ---------------------------------------------------------------- commitments toward a third country
+# "give:oppose:ITA": them commits to work against Italy alongside me; "give:befriend:HUN": to seek Hungary's friendship
+# at my wish; "give:back:YUG": to stand behind Yugoslavia with me; "ask:...": them asks me for the same. A standing
+# line, kept as a treaty clause for as long as its treaty stands (treaties.py); them's own commitments steer HOI4's AI
+# toward that country (steering.py). The player's are never enforced: treaties.py notices a step against one (a pact
+# with a country it promised to oppose, war on one it promised to back) and remembers it.
+# "give:sanction:ITA": them embargoes Italy now, at my wish ("ask:": I do). A step, not a clause.
+#     A = { send_embargo = X }
+ALIGN_KINDS = ("oppose", "befriend", "back")
+THIRD_KINDS = ALIGN_KINDS + ("sanction",)
+ALIGN_NOTE = ("A commitment toward a third country (oppose, befriend, back) is a standing diplomatic line, not a war and "
+              "not a promise to fight: like the Stresa Front against German expansion, or a great power taking a small "
+              "state under its wing. The committed government's diplomacy follows it for as long as the treaty stands: "
+              "opposing a country means no favours to it (no access, no trade, no help) and support for those it "
+              "threatens; befriending one means courting it; backing one means protecting it and sending it aid once "
+              "the world's tension allows. It costs little at once but binds a government's hands: give one only where "
+              "it serves your own interests too, and ask it of a country whose stance would count. A pact with, a "
+              "guarantee of or military access for a country one committed to oppose, or war on or an embargo of one "
+              "it committed to befriend or back, breaks the commitment, and it is remembered. A sanction (a trade "
+              "embargo on a third country) is a step taken at once, like the League's sanctions on Italy in 1935.")
+# kind -> (give prompt, ask prompt, give label, ask label, give shown, ask shown, give remembered, ask remembered);
+# {x} the third country's name, {t} its tag
+_COMMIT = {
+    "oppose": ("commit to work against {x} ({t}) alongside {me_name}: a standing diplomatic line against it (no "
+               "favours to it, support for those it threatens), not a war",
+               "ask {me_name} to commit to working against {x} ({t}) alongside you",
+               "a commitment to work against {x}", "our commitment to work against {x}",
+               "{them_name} committed to work against {x} with us.",
+               "We committed to work against {x} alongside {them_name}.",
+               "{them_name} committed to work against {x} alongside {me_name}.",
+               "{me_name} committed to work against {x} alongside {them_name}."),
+    "befriend": ("commit to seek friendship with {x} ({t}), as {me_name} wishes: court it, improve relations with it "
+                 "and look kindly on its requests",
+                 "ask {me_name} to commit to seeking friendship with {x} ({t})",
+                 "a commitment to befriend {x}", "our commitment to befriend {x}",
+                 "{them_name} committed to seek friendship with {x}.",
+                 "We committed to seek friendship with {x}, as {them_name} wished.",
+                 "{them_name} committed to seek friendship with {x}, as {me_name} wished.",
+                 "{me_name} committed to seek friendship with {x}, as {them_name} wished."),
+    "back": ("commit to stand behind {x} ({t}) with {me_name}: protect it and support it (guarantees and aid once the "
+             "world's tension allows)",
+             "ask {me_name} to commit to standing behind {x} ({t}) with you",
+             "a commitment to back {x}", "our commitment to back {x}",
+             "{them_name} committed to stand behind {x} with us.",
+             "We committed to stand behind {x} alongside {them_name}.",
+             "{them_name} committed to stand behind {x} alongside {me_name}.",
+             "{me_name} committed to stand behind {x} alongside {them_name}."),
+    "sanction": ("impose a trade embargo on {x} ({t}) at once, at {me_name}'s wish",
+                 "ask {me_name} to impose a trade embargo on {x} ({t})",
+                 "a trade embargo on {x}", "our trade embargo on {x}",
+                 "{them_name} imposed a trade embargo on {x}.", "We imposed a trade embargo on {x}.",
+                 "{them_name} imposed a trade embargo on {x} at {me_name}'s wish.",
+                 "{me_name} imposed a trade embargo on {x} at {them_name}'s wish."),
+}
+
+
+def third_kind(key: str) -> str:
+    """'give:oppose:ITA' -> 'oppose' ('' for anything but a commitment or sanction)."""
+    parts = key.split(":")
+    return parts[1] if len(parts) == 3 and parts[0] in ("give", "ask") and parts[1] in THIRD_KINDS else ""
+
+
+def is_align(key: str) -> bool:
+    return third_kind(key) in ALIGN_KINDS
+
+
+def is_sanction(key: str) -> bool:
+    return third_kind(key) == "sanction"
+
+
+def is_third(key: str) -> bool:
+    """A deal item naming a third country: a war pledge, a commitment or a sanction."""
+    return is_pledge(key) or bool(third_kind(key))
+
+
+def _commit_ok(kind: str, info: Dict, actor: str, ben: str) -> bool:
+    """May `actor` ("me"/"them") take this line toward the country, for `ben`? Never toward a country bound to
+    either side or at war with `actor`. Opposing or sanctioning: a threat to `ben` that is no ally or friend of either
+    side (and not embargoed by `actor` already). Befriending or backing: no threat to or enemy of `ben`, not in
+    `actor`'s faction or embargoed by it; backing only a lesser power near one of them or a friend of `ben`."""
+    f = info["flags"]
+    if "bound" in f or f"war_{actor}" in f:
+        return False
+    # within reach of the committing side: a major, or a country next to it or on its continent (Britain borders
+    # Guatemala through a colony; Austria has no line toward it)
+    if not ("major" in f or {f"near_{actor}", f"continent_{actor}"} & f):
+        return False
+    if kind in ("oppose", "sanction"):
+        if {f"ally_{actor}", f"friend_{actor}", f"ally_{ben}", f"friend_{ben}"} & f:
+            return False
+        return f"threat_{ben}" in f and not (kind == "sanction" and f"embargoed_{actor}" in f)
+    if {f"threat_{ben}", f"war_{ben}", f"ally_{actor}", f"embargoed_{actor}"} & f:
+        return False
+    # and one that matters to the side it is for: its neighbour or friend, or a major on its continent
+    near_ben = bool({f"near_{ben}", f"friend_{ben}", f"ally_{ben}"} & f)
+    if kind == "back":
+        return "major" not in f and near_ben
+    return near_ben or ("major" in f and f"continent_{ben}" in f)
+
+
+def commit_gives(rel: "Relation") -> List[str]:
+    return [k for t, i in (rel.third or {}).items() for kind in THIRD_KINDS
+            if _commit_ok(kind, i, "them", "me") and (k := f"give:{kind}:{t}") not in rel.pledged]
+
+
+def commit_asks(rel: "Relation") -> List[str]:
+    return [k for t, i in (rel.third or {}).items() for kind in THIRD_KINDS
+            if _commit_ok(kind, i, "me", "them") and (k := f"ask:{kind}:{t}") not in rel.pledged]
+
+
+def third_gives(rel: "Relation") -> List[str]:
+    """Items naming a third country them could give: pledges (when on), commitments, sanctions."""
+    return pledge_gives(rel) + commit_gives(rel)
+
+
+def third_asks(rel: "Relation") -> List[str]:
+    return pledge_asks(rel) + commit_asks(rel)
 
 
 def war_script(joiner: str, side: str, enemy: str) -> str:
@@ -900,6 +1028,15 @@ def get_deal(key: str) -> Optional[Deal]:
                     f"war with {name} ({tag}), whoever starts it", f"our pledge to join their wars with {name}", "",
                     f"We pledged to join {{them_name}} whenever it goes to war with {name}.",
                     f"{{me_name}} pledged to join {{them_name}} whenever {{them_name}} goes to war with {name}.", True)
+    if third_kind(key):
+        verb, kind, tag = key.split(":")
+        sub = lambda s: s.replace("{x}", _COUNTRY_NAMES.get(tag, tag)).replace("{t}", tag)
+        g = 0 if verb == "give" else 1
+        texts = _COMMIT[kind]
+        actor = "{them}" if g == 0 else "{me}"
+        effect = f"{actor} = {{{{ send_embargo = {tag} }}}}" if kind == "sanction" else ""
+        return Deal(key, "sanction" if kind == "sanction" else "commit", False, True, sub(texts[g]),
+                    sub(texts[2 + g]), effect, sub(texts[4 + g]), sub(texts[6 + g]))
     if is_equipment_key(key):
         verb, kind, n = (key + ":0").split(":")[:3]
         what = _amount(n if n != '0' else 'N', EQUIPMENT[kind][1])
@@ -995,6 +1132,11 @@ def possible(rel: Relation, key: str) -> bool:
         return (not rel.at_war and not joiner_subject and rel.bound not in ("subject", "overlord")
                 and bool(info) and _targetable(info, "me" if verb == "give" else "them",
                                                "them" if verb == "give" else "me"))
+    if third_kind(key):
+        verb, kind, tag = key.split(":")
+        info = (rel.third or {}).get(tag)
+        actor, ben = ("them", "me") if verb == "give" else ("me", "them")
+        return not rel.at_war and bool(info) and _commit_ok(kind, info, actor, ben)
     if key in ("give:faction", "ask:join"):                    # I join them's faction
         return (not rel.at_war and not rel.bound and rel.them_leader and not rel.me_in_faction
                 and not rel.me_subject and not rel.them_subject)
@@ -1080,6 +1222,14 @@ def described(key: str) -> str:
         who = "you join their" if key.startswith("give:") else "they join your"
         return (f"{word(key)} ({who} war against {enemy})" if is_war(key)
                 else f"{word(key)} ({who} wars against {enemy}, whenever they come)")
+    if third_kind(key):
+        x = _COUNTRY_NAMES.get(key.rsplit(":", 1)[1], "") or key.rsplit(":", 1)[1]
+        gloss = ({"oppose": f"you work against {x} alongside them", "befriend": f"you seek friendship with {x} at "
+                  f"their wish", "back": f"you stand behind {x} with them", "sanction": f"you embargo {x} at their wish"}
+                 if key.startswith("give:") else
+                 {"oppose": f"they work against {x} alongside you", "befriend": f"they seek friendship with {x} at your "
+                  f"wish", "back": f"they stand behind {x} with you", "sanction": f"they embargo {x} at your wish"})
+        return f"{word(key)} ({gloss[third_kind(key)]})"
     if key in ("give:faction", "ask:join"):
         return f"{word(key)} (they would join your faction)"
     if key in ("give:join", "ask:faction"):
@@ -1097,6 +1247,21 @@ def described(key: str) -> str:
     return word(key)
 
 
+def described_list(keys: List[str]) -> List[str]:
+    """described() for each key, with items naming a third country folded into one per kind: 'oppose TAG (you work
+    against TAG alongside them); TAG one of ITA (Italy), GER (German Reich)'."""
+    out, groups = [], {}
+    for k in keys:
+        if is_third(k):
+            groups.setdefault(k.rsplit(":", 1)[0], []).append(k.rsplit(":", 1)[1])
+        else:
+            out.append(described(k))
+    for base, tags in groups.items():
+        out.append(described(f"{base}:TAG") + "; TAG one of "
+                   + " / ".join(f"{t} ({_COUNTRY_NAMES.get(t, t)})" for t in tags))
+    return out
+
+
 # ---------------------------------------------------------------- prompts
 
 def _fmt(them_name: str, me_name: str) -> Dict[str, str]:
@@ -1107,7 +1272,7 @@ def _item_lines(verb: str, keys: List[str], f: Dict[str, str]) -> List[str]:
     """One help line per deal item; war and pledge items, one per country, are folded into one line each."""
     lines, groups = [], {}
     for k in keys:
-        if is_war(k) or is_pledge(k):
+        if is_war(k) or is_third(k):
             groups.setdefault(k.rsplit(":", 1)[0], []).append(k.rsplit(":", 1)[1])
             continue
         lines.append(f"- [[{verb}{word(k)}{' N' if k in AMOUNT_KEYS else ''}]]: "
@@ -1142,7 +1307,7 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
     gives = (possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
              + possible_keys(rel, govt_gives(rel)) + possible_keys(rel, rights_gives(rel))
              + possible_keys(rel, dmz_gives(rel) + ["give:dismantle"])
-             + possible_keys(rel, EQUIPMENT_GIVES + war_gives(rel) + pledge_gives(rel)))
+             + possible_keys(rel, EQUIPMENT_GIVES + war_gives(rel) + third_gives(rel)))
     if gives:
         lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
                      f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
@@ -1184,6 +1349,8 @@ def _new_goods_notes(keys: List[str]) -> List[str]:
     out = []
     if any(is_war(k) or is_pledge(k) for k in keys):
         out.append(WAR_NOTE)
+    if any(third_kind(k) for k in keys):
+        out.append(ALIGN_NOTE)
     if any(k in ("give:faction", "give:join", "ask:faction", "ask:join", "give:leave", "ask:leave") for k in keys):
         out.append(FACTION_NOTE)
     if any(is_equipment_key(k) for k in keys):
@@ -1284,7 +1451,8 @@ _CEDE = re.compile(r"\[\[\s*state\s+(\d+)\s+to\s+([^\]]+?)\s*\]\]", re.I)   # [[
 _SUBJECT_DEAL = re.compile(r"\[\[\s*(offer|ask)\s+subject\s+([A-Za-z0-9]{3})\s*\]\]", re.I)
 _GOVT = re.compile(r"\[\[\s*(offer\s+|ask\s+)?govt\s+([a-z_]+)\s*\]\]", re.I)   # [[ask govt fascism]]
 _SUBJECT = re.compile(r"\[\[\s*(free|transfer)\s+([^\]]+?)\s*\]\]", re.I)        # [[free Slovakia]]
-_WAR = re.compile(r"\[\[\s*(offer\s+|ask\s+)?(war|pledge)\s+(?:against\s+)?([^\]]+?)\s*\]\]", re.I)
+_WAR = re.compile(r"\[\[\s*(offer\s+|ask\s+)?(war|pledge|" + "|".join(THIRD_KINDS)
+                  + r")\s+(?:against\s+)?([^\]]+?)\s*\]\]", re.I)   # also commitments and sanctions
 
 
 def _country_tag(text: str) -> str:
@@ -1441,7 +1609,8 @@ def _bracket_bare(text: str) -> str:
         i -= 1
     def bracket(m: re.Match) -> str:
         words = m.group(1).split()
-        if len(words) == 3 and re.fullmatch(r"[A-Z][A-Z0-9]{2}", words[2]) and words[1].lower() not in ("war", "pledge"):
+        if len(words) == 3 and re.fullmatch(r"[A-Z][A-Z0-9]{2}", words[2]) and \
+                words[1].lower() not in ("war", "pledge") + THIRD_KINDS:
             words = words[:2]                                  # "offer guarantee BEL": the tag is the letter's
         return f"[[{' '.join(words)}]]"
     tail = [(bracket(m) if (m := _BARE.match(x)) else x) for x in lines[i:]]
@@ -1522,7 +1691,7 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
         deal = get_deal(key)
         if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)
                         and not is_factory_key(key) and not is_govt_key(key) and not is_rights(key)
-                        and not is_dmz(key) and not is_war(key) and not is_pledge(key)):
+                        and not is_dmz(key) and not is_war(key) and not is_pledge(key) and not third_kind(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
@@ -1536,9 +1705,17 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
                 (rel.them_parties if verb == "give" else rel.me_parties).pop(ideology, None)
             continue
-        if is_pledge(key):                         # a promise for later: treaties.py keeps and carries it out
+        if is_pledge(key) or is_align(key):        # a promise for later: treaties.py keeps it
             shown.append((deal.shown.format(**fmt), False))
             events.append({"type": key, "tags": [them, me, key.rsplit(":", 1)[1]], "text": deal.remembered.format(**fmt)})
+            continue
+        if is_sanction(key):
+            verb, _, target = key.split(":")
+            if _effect(deal.effect.format(**fmt)):
+                shown.append((deal.shown.format(**fmt), False))
+                events.append({"type": key, "tags": [them, me, target], "text": deal.remembered.format(**fmt)})
+                if info := (rel.third or {}).get(target):
+                    info["flags"].add(f"embargoed_{'them' if verb == 'give' else 'me'}")
             continue
         if is_war(key):
             verb, _, enemy = key.split(":")
@@ -1642,9 +1819,18 @@ def package_text(keys: List[str], who: str = "they") -> str:
     s = lambda verb: verb if plural else verb + "s"
     their = "their" if plural else "its"
     for k in keys:
-        if is_war(k) or is_pledge(k):
+        if is_war(k) or is_third(k):
             name = _COUNTRY_NAMES.get(k.rsplit(":", 1)[1], k.rsplit(":", 1)[1])
-            parts.append({"give:war": f"{who} {s('offer')} to join our war against {name}",
+            them_it = "them" if plural else "it"
+            parts.append({"give:oppose": f"{who} {s('commit')} to work against {name} with us",
+                          "ask:oppose": f"{who} {s('ask')} us to work against {name} with {them_it}",
+                          "give:befriend": f"{who} {s('commit')} to seek friendship with {name}",
+                          "ask:befriend": f"{who} {s('ask')} us to seek friendship with {name}",
+                          "give:back": f"{who} {s('commit')} to stand behind {name} with us",
+                          "ask:back": f"{who} {s('ask')} us to stand behind {name} with {them_it}",
+                          "give:sanction": f"{who} {s('offer')} to impose a trade embargo on {name}",
+                          "ask:sanction": f"{who} {s('ask')} us to impose a trade embargo on {name}",
+"give:war": f"{who} {s('offer')} to join our war against {name}",
                           "ask:war": f"{who} {s('ask')} us to join {their} war against {name}",
                           "give:pledge": f"{who} {s('pledge')} to join us whenever we go to war with {name}",
                           "ask:pledge": f"{who} {s('ask')} us to pledge to join {'them' if plural else 'it'} whenever "

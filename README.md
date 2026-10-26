@@ -32,13 +32,13 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/gamestate.py   live game state (names, parties, factions, wars, states, ideas, focuses)
     hoi4_rp/chronicle.py   one-query world snapshots; their differences become dated events
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; offers
-    hoi4_rp/treaties.py    deals over time: terms that end, instalments, war pledges
+    hoi4_rp/treaties.py    deals over time: terms that end, instalments, war pledges, commitments
     hoi4_rp/guarantees.py  letter guarantees: civilian factory upkeep for the guarantor, a 24-month term
     hoi4_rp/ultimatums.py  AI threats of war that can come true: deadline, then war, readiness or backing down
     hoi4_rp/origins.py     how the wars began: who declared on whom and when, from the game, and why
     hoi4_rp/story.py       story events: your country reacts to your letter deals and deeds
     hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
-    hoi4_rp/steering.py    policies steer HOI4's own AI toward the player (add_ai_strategy)
+    hoi4_rp/steering.py    policies and commitments steer HOI4's own AI (add_ai_strategy)
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
@@ -105,6 +105,16 @@ now (another proposal came recently, or you refused it lately), it's told not to
   to join theirs). War pledges (join whenever the other goes to war with TAG) are switched off for now
   (`PLEDGES` in actions.py): the AI asked for them too often and against enemies that made no sense. Pledges
   made before are still kept.
+- Commitments toward a third country: `[[offer oppose TAG]]` (they work against TAG alongside you),
+  `[[offer befriend TAG]]` (they seek TAG's friendship at your wish), `[[offer back TAG]]` (they stand behind TAG
+  with you), and the same as asks of you. A standing line, kept as a treaty clause for as long as the treaty
+  stands (a term ends it, `[[end treaty]]` renounces it). The AI's own commitments steer its game AI toward TAG
+  (`steering.COMMIT`: contain and antagonize, befriend, protect and support, and how it answers TAG's requests).
+  Yours bind nothing, but a step against one (a pact with, guarantee of or access for a country you promised to
+  oppose; war on or an embargo of one you promised to befriend or back) breaks the treaty and is remembered; the
+  AI's steps against its own break it too. Every country's prompts list the standing commitments, the target's
+  included. Targets: a threat to the side it is for (oppose), or a neighbour or friend of it (befriend, back), in
+  reach of the committing side. `[[offer sanction TAG]]` / `[[ask sanction TAG]]`: a trade embargo on TAG now.
 - Equipment from the stockpile: `[[offer rifles N]]`, `[[ask artillery N]]`, `[[trucks N]]` (vanilla equipment
   archetypes, so mods that keep them work).
 

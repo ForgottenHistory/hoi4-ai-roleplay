@@ -64,7 +64,7 @@ def war_instructions(them_name: str, me_name: str, baseline: int, reasons: List[
 
 def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part: str = "") -> str:
     def words(keys: List[str]) -> str:
-        return ", ".join(actions.described(k) for k in keys) or "(none possible right now)"
+        return ", ".join(actions.described_list(keys)) or "(none possible right now)"
     gives = (actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)
              + actions.possible_keys(rel, actions.rights_gives(rel) + actions.dmz_gives(rel) + _war_gives(rel)))
     asks = (actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)
@@ -89,17 +89,18 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
            if rel.them_border or rel.me_border else "")
         + (f"\n\n{actions.bound_note(them_name, me_name, rel.bound)}" if rel.bound else "")
         + (f"\n\n{actions.WAR_NOTE}" if any(actions.is_war(k) or actions.is_pledge(k) for k in gives + asks) else "")
+        + (f"\n\n{actions.ALIGN_NOTE}" if any(actions.third_kind(k) for k in gives + asks) else "")
         + war_part
     )
 
 
 def _war_gives(rel: "actions.Relation") -> List[str]:
-    """Joining the player's wars, and pledges to join its future wars."""
-    return actions.war_gives(rel) + actions.pledge_gives(rel)
+    """Joining the player's wars, and items naming a third country (pledges, commitments, sanctions)."""
+    return actions.war_gives(rel) + actions.third_gives(rel)
 
 
 def _war_asks(rel: "actions.Relation") -> List[str]:
-    return actions.war_asks(rel) + actions.pledge_asks(rel)
+    return actions.war_asks(rel) + actions.third_asks(rel)
 
 
 def _days(key: str) -> int:
@@ -115,8 +116,8 @@ def _keys(value: str, allowed: List[str]) -> List[str]:
     """Map a comma-separated line of policy words to deal keys, keeping only `allowed` ones."""
     out = []
     for part in re.split(r"[,;/]|\band\b", value.lower()):
-        wr = re.search(r"\b(war|pledge)\s+([a-z0-9]{3})\b", part)
-        if wr:                                  # "war ETH (Ethiopia)", "pledge GER (German Reich)"
+        wr = re.search(r"\b(war|pledge|" + "|".join(actions.THIRD_KINDS) + r")\s+([a-z0-9]{3})\b", part)
+        if wr:                                  # "war ETH (Ethiopia)", "oppose GER (German Reich)"
             tag = wr.group(2).upper()
             out += [c for c in (f"give:{wr.group(1)}:{tag}", f"ask:{wr.group(1)}:{tag}") if c in allowed][:1]
             continue

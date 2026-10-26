@@ -94,8 +94,9 @@ news, red bad) and the agreements are remembered in the chronicle.
   they leave their own faction, or ask you to leave yours (not a faction you share; a leader can't leave).
 - Wars: `[[war TAG]]` / `[[offer war TAG]]` (they join your war against TAG), `[[ask war TAG]]` (they ask you
   to join theirs). War pledges: `[[offer pledge TAG]]` (they join you whenever you go to war with TAG, whoever
-  starts it), `[[ask pledge TAG]]` (they ask you to pledge the same), kept by `treaties.py`. TAG: a major power
-  or a neighbour of the side going to war, at peace with both. Any war counts, because the game doesn't call
+  starts it), `[[ask pledge TAG]]` (they ask you to pledge the same), kept by `treaties.py`. TAG: a common enemy,
+  a threat to both sides: a quarrel over land or a war goal, or a major power of another ideology next door (or,
+  for a major, on its continent); at peace with both and no ally or guarantor of either. Any war counts, because the game doesn't call
   joining a guarantee's war "offensive" (the UK and France in 1939); unlike a guarantee, a pledge also covers
   the other side's own attacks.
 - Equipment from the stockpile: `[[offer rifles N]]`, `[[ask artillery N]]`, `[[trucks N]]` (vanilla equipment

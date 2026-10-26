@@ -515,27 +515,59 @@ def joinable_enemies(side: str, joiner: str) -> Dict[str, str]:
 
 def third_countries(them: str, me: str) -> Dict[str, Dict]:
     """Countries a war pledge between them and me may name: the major powers and both sides' neighbours, with
-    whether they are at war with or allied to either side."""
+    whether they are at war with, allied to, friends of or rivals of either side, and whether each side is a major
+    (flags me_major / them_major on every entry)."""
     out: Dict[str, Dict] = {}
-    for line in gamestate.query(
-            f'every_country = {{ limit = {{ NOT = {{ tag = {them} }} NOT = {{ tag = {me} }} '
-            f'OR = {{ is_major = yes is_neighbor_of = {me} is_neighbor_of = {them} }} }} '
-            f'log = "AIRPT|[THIS.GetTag]|[THIS.GetName]" '
-            f'if = {{ limit = {{ is_major = yes }} log = "AIRPTF|[THIS.GetTag]|major" }} '
-            f'if = {{ limit = {{ is_neighbor_of = {me} }} log = "AIRPTF|[THIS.GetTag]|near_me" }} '
-            f'if = {{ limit = {{ is_neighbor_of = {them} }} log = "AIRPTF|[THIS.GetTag]|near_them" }} '
-            f'if = {{ limit = {{ has_war_with = {me} }} log = "AIRPTF|[THIS.GetTag]|war_me" }} '
-            f'if = {{ limit = {{ has_war_with = {them} }} log = "AIRPTF|[THIS.GetTag]|war_them" }} '
-            f'if = {{ limit = {{ is_in_faction_with = {me} }} log = "AIRPTF|[THIS.GetTag]|ally_me" }} '
-            f'if = {{ limit = {{ is_in_faction_with = {them} }} log = "AIRPTF|[THIS.GetTag]|ally_them" }} '
-            f'if = {{ limit = {{ OR = {{ is_subject_of = {me} is_subject_of = {them} {me} = {{ is_subject_of = PREV }} '
-            f'{them} = {{ is_subject_of = PREV }} }} }} log = "AIRPTF|[THIS.GetTag]|bound" }} }}'):
+    side = lambda s: (
+        f'if = {{ limit = {{ is_neighbor_of = {s} }} log = "AIRPTF|[THIS.GetTag]|near_{"me" if s == me else "them"}" }} '
+        f'if = {{ limit = {{ has_war_with = {s} }} log = "AIRPTF|[THIS.GetTag]|war_{"me" if s == me else "them"}" }} '
+        f'if = {{ limit = {{ is_in_faction_with = {s} }} log = "AIRPTF|[THIS.GetTag]|ally_{"me" if s == me else "them"}" }} '
+        f'if = {{ limit = {{ OR = {{ has_guaranteed = {s} {s} = {{ has_guaranteed = PREV }} }} }} '
+        f'log = "AIRPTF|[THIS.GetTag]|friend_{"me" if s == me else "them"}" }} '
+        # a quarrel the game knows: claims or cores on each other's land, or a war goal either way
+        f'if = {{ limit = {{ OR = {{ any_owned_state = {{ OR = {{ is_claimed_by = {s} is_core_of = {s} }} }} '
+        f'any_state = {{ is_owned_by = {s} OR = {{ is_claimed_by = PREV is_core_of = PREV }} }} '
+        f'has_wargoal_against = {s} {s} = {{ has_wargoal_against = PREV }} }} }} '
+        f'log = "AIRPTF|[THIS.GetTag]|claim_{"me" if s == me else "them"}" }} ')
+    lines = gamestate.query(
+        f'every_country = {{ limit = {{ OR = {{ tag = {them} tag = {me} }} }} '
+        f'log = "AIRPTS|[THIS.GetTag]|[THIS.GetRulingIdeology]|[THIS.Capital.GetContinent]" '
+        f'if = {{ limit = {{ is_major = yes }} log = "AIRPTM|[THIS.GetTag]" }} }} '
+        f'every_country = {{ limit = {{ NOT = {{ tag = {them} }} NOT = {{ tag = {me} }} '
+        f'OR = {{ is_major = yes is_neighbor_of = {me} is_neighbor_of = {them} }} }} '
+        f'log = "AIRPT|[THIS.GetTag]|[THIS.GetName]|[THIS.GetRulingIdeology]|[THIS.Capital.GetContinent]" '
+        f'if = {{ limit = {{ is_major = yes }} log = "AIRPTF|[THIS.GetTag]|major" }} '
+        + side(me) + side(them) +
+        f'if = {{ limit = {{ OR = {{ is_subject_of = {me} is_subject_of = {them} {me} = {{ is_subject_of = PREV }} '
+        f'{them} = {{ is_subject_of = PREV }} }} }} log = "AIRPTF|[THIS.GetTag]|bound" }} }}')
+    ideology: Dict[str, str] = {}
+    continent: Dict[str, str] = {}
+    majors = set()
+    for line in lines:
         f = [x.strip() for x in line.split("|")]
-        if f[0] == "AIRPT" and len(f) >= 3:
-            out[f[1]] = {"name": f[2], "flags": set()}
+        if f[0] == "AIRPTS" and len(f) >= 4:
+            ideology[f[1]], continent[f[1]] = f[2], f[3]
+        elif f[0] == "AIRPTM" and len(f) >= 2:
+            majors.add(f[1])
+        elif f[0] == "AIRPT" and len(f) >= 5:
+            out[f[1]] = {"name": f[2], "ideology": f[3], "continent": f[4], "flags": set()}
             _COUNTRY_NAMES[f[1]] = f[2]
         elif f[0] == "AIRPTF" and len(f) >= 3 and f[1] in out:
             out[f[1]]["flags"].add(f[2])
+    for info in out.values():
+        fl = info["flags"]
+        for who, tag in (("me", me), ("them", them)):
+            if tag in majors:
+                fl.add(f"{who}_major")
+            if continent.get(tag) == info["continent"]:          # capitals on the same continent
+                fl.add(f"continent_{who}")
+            # A threat to this side: a quarrel over land or a war goal; or a major power of another ideology next
+            # door (or, for a major, anywhere on its continent). Two non-aligned governments can be anything to
+            # each other, so they count as different.
+            differ = info["ideology"] != ideology.get(tag, "") or info["ideology"] in ("non-aligned", "")
+            close = f"near_{who}" in fl or (tag in majors and f"continent_{who}" in fl)
+            if f"claim_{who}" in fl or ("major" in fl and differ and close):
+                fl.add(f"threat_{who}")
     return out
 
 
@@ -546,7 +578,10 @@ WAR_NOTE = ("Joining a war is the gravest commitment short of submission: your s
             "the named country (declaring war itself, being attacked, or called in by an ally or guarantee), the "
             "other joins at once, as Italy pledged itself to Germany in the Pact of Steel. Unlike a guarantee it "
             "binds you to that side's own attacks too: give it only to a power whose wars against that enemy you "
-            "want to share. The game holds you to the pledges you give for as long as the treaty stands.")
+            "want to share. The game holds you to the pledges you give for as long as the treaty stands. Pledges are "
+            "rare: a country seeks one only against an enemy both sides expect to fight, when the other's army would "
+            "count in that war, and most often as a mutual pledge between allies; asking a country to join your wars "
+            "while pledging nothing back is what a patron asks of a client. Most policies and letters have none.")
 
 
 def is_war(key: str) -> bool:
@@ -567,10 +602,14 @@ def war_asks(rel: "Relation") -> List[str]:
 
 def _targetable(info: Dict, attacker: str, joiner: str) -> bool:
     """May a war pledge name this country, `attacker` ("me"/"them") the side going to war with it and `joiner` the
-    side pledging to join? A major power or the attacker's neighbour, at peace with both and allied to neither."""
+    side pledging to join? Only a common enemy: a threat to both sides (a quarrel over land or a war goal, or a major
+    power of another ideology next door or on a major's continent), and no friend, ally, enemy already, overlord or
+    subject of either."""
     f = info["flags"]
-    return bool({"major", f"near_{attacker}"} & f) and not (
-        {f"war_{attacker}", f"war_{joiner}", f"ally_{attacker}", f"ally_{joiner}", "bound"} & f)
+    if {f"war_{attacker}", f"war_{joiner}", f"ally_{attacker}", f"ally_{joiner}", f"friend_{attacker}",
+            f"friend_{joiner}", "bound"} & f:
+        return False
+    return {f"threat_{attacker}", f"threat_{joiner}"} <= f
 
 
 def pledge_gives(rel: "Relation") -> List[str]:

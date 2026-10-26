@@ -62,7 +62,9 @@ save files. Its memory lives in `data/campaigns/<id>.json`:
 - every letter exchanged with each country, dated in game time
 - a world chronicle: while `run` is going it snapshots the world every few seconds of play and records
   wars, peace, capitulations, faction changes, subjects, governments, new or vanished countries and
-  territory changes
+  territory changes, and your agreements with other countries beginning or ending however they came about
+  (the game's diplomacy, a focus, an event: pacts, guarantees, access and market access both ways, embargoes;
+  those a letter deal made are told by the deal)
 
 When a country answers a letter it sees your whole correspondence and the events it took part in, plus
 those involving you or the major powers. Loading an earlier save drops memories dated after it.

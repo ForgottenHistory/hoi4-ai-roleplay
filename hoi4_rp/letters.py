@@ -857,6 +857,40 @@ def active(snap: Optional[Dict], tag: str) -> bool:
 _CESSIONS = ("give:state", "ask:state", "cede:", "give:annex")
 
 
+# Agreement events (chronicle.AGREEMENTS) a letter deal already told: the deal's own event types for each
+_BY_LETTER = {"pact": ("give:pact",), "my_guarantee": ("ask:guarantee",), "their_guarantee": ("give:guarantee",),
+              "their_access": ("give:access",), "my_access": ("ask:access",), "market": ("give:market", "ask:market"),
+              "their_embargo": ("embargo",), "my_embargo": ()}
+
+
+def _not_by_letter(camp: campaign.Campaign, player: str, snap: Dict, events: List[Dict]) -> List[Dict]:
+    """Agreements that began or ended outside the letters (the game's diplomacy, a focus, an event) stay in the
+    chronicle; one a letter deal made or ended is told by the deal already, and one that ended with a war between
+    the two, or as a treaty's or letter guarantee's term ran out, is told by that."""
+    since = campaign.shift(snap["date"], -30)
+    recent = [x for x in camp.data["events"] if x["date"] >= since]
+    at_war = lambda t: "|".join(sorted([player, t])) in snap.get("wars", [])
+    out = []
+    for e in events:
+        kind = e.get("type", "")
+        if not kind.startswith("agreement:"):
+            out.append(e)
+            continue
+        tie, ended = kind.split(":")[1], kind.endswith(":end")
+        other = next((t for t in e["tags"] if t != player), "")
+        mine = [x for x in recent if other in x["tags"] and player in x["tags"]]
+        if ended:
+            deal = tie.replace("my_", "").replace("their_", "")
+            told = at_war(other) or any(x.get("type", "") in (f"end:{deal}", "end:embargo" if "embargo" in tie else "",
+                                                              "treaty:lapsed", "guarantee:expired", "war")
+                                        for x in mine)
+        else:
+            told = any(x.get("type", "") in _BY_LETTER.get(tie, ()) for x in mine)
+        if not told:
+            out.append(e)
+    return out
+
+
 def _agreed(camp: campaign.Campaign, snap: Dict, events: List[Dict]) -> List[Dict]:
     """A land transfer that a letter deal agreed reads as such: third countries otherwise see only "X took Y from
     Z" (a seizure), and the state may carry another name under its new owner."""
@@ -984,7 +1018,8 @@ class _Session:
         old = camp.snapshot
         if old is None or snap["date"] > old["date"]:
             if old is not None:
-                events = _agreed(camp, snap, _with_peace_terms(camp, player, old, snap, chronicle.diff(old, snap)))
+                events = _not_by_letter(camp, player, snap, _agreed(camp, snap, _with_peace_terms(
+                    camp, player, old, snap, chronicle.diff(old, snap))))
                 for e in events:
                     print(f"  [{e['when']}] {e['text']}")
                 camp.add_events(events)

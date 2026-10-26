@@ -85,6 +85,23 @@ TIES = {
     "their_justifying": "is_justifying_wargoal_against = {p}",
     "my_wargoal": "{p} = {{ has_wargoal_against = PREV }}",
     "their_wargoal": "has_wargoal_against = {p}",
+    "market": "has_market_access_with = {p}",
+    "their_embargo": "is_embargoing = {p}",                        # it embargoes the player
+    "my_embargo": "{p} = {{ is_embargoing = PREV }}",
+}
+
+# Agreements whose start and end are news, however they came about (the game's own diplomacy, a focus, an event, a
+# letter): (start text, end text). letters._not_by_letter drops those a letter deal already told, and ends a war
+# or a term explains.
+AGREEMENTS = {
+    "pact": ("{p} and {o} signed a non-aggression pact.", "The non-aggression pact between {p} and {o} ended."),
+    "my_guarantee": ("{p} guaranteed the independence of {o}.", "{p}'s guarantee of {o}'s independence ended."),
+    "their_guarantee": ("{o} guaranteed the independence of {p}.", "{o}'s guarantee of {p}'s independence ended."),
+    "their_access": ("{o} granted {p} military access.", "{o} no longer gives {p} military access."),
+    "my_access": ("{p} granted {o} military access.", "{p} no longer gives {o} military access."),
+    "market": ("{p} and {o} opened market access to each other.", "Market access between {p} and {o} closed."),
+    "their_embargo": ("{o} imposed a trade embargo on {p}.", "{o} lifted its trade embargo on {p}."),
+    "my_embargo": ("{p} imposed a trade embargo on {o}.", "{p} lifted its trade embargo on {o}."),
 }
 
 # Ties whose start is news (diff() turns them into events): "{a}" begins it against "{b}".
@@ -128,7 +145,7 @@ WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_l
                # ultimatums.py: a threat of war, and how it ended
                "ultimatum:issued", "ultimatum:met", "ultimatum:war", "ultimatum:ready", "ultimatum:dropped",
                # guarantees.py: a letter guarantee that ran its term
-               "guarantee:expired"}
+               "guarantee:expired"} | {f"agreement:{k}{e}" for k in AGREEMENTS for e in ("", ":end")}
 
 
 def snapshot(player: str) -> Dict:
@@ -138,6 +155,7 @@ def snapshot(player: str) -> Dict:
     wars: Set[str] = set()
     lines = query(f"{player} = {{ {_EFFECT} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} }}")
     snap["ties"] = _read_ties(lines, player)
+    snap["tie_kinds"] = sorted(TIES)                  # what was looked for: a kind added later isn't news at first
     snap["player"] = player
     snap["front"] = _read_front(lines)
     for line in lines:
@@ -243,6 +261,12 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
                     kind_name, text = TIE_EVENTS[kind]
                     # its overlord hears of it too (a threat to a colony is a threat to its master)
                     add([player, tag, nc[tag].get("overlord", "")], text.format(p=name(player), o=name(tag)), kind_name)
+                elif kind in AGREEMENTS and tag in nc and kind in old.get("tie_kinds", ()):
+                    add([player, tag], AGREEMENTS[kind][0].format(p=name(player), o=name(tag)), f"agreement:{kind}")
+        for tag, kinds in old["ties"].items():
+            for kind in set(kinds) - set(new.get("ties", {}).get(tag, [])):
+                if kind in AGREEMENTS and tag in nc and kind in new.get("tie_kinds", ()):
+                    add([player, tag], AGREEMENTS[kind][1].format(p=name(player), o=name(tag)), f"agreement:{kind}:end")
 
     moved: Dict[Tuple[str, str], List[str]] = defaultdict(list)
     for sid, (sname, owner) in new["states"].items():

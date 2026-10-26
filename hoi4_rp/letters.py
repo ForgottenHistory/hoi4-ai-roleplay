@@ -46,6 +46,7 @@ CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded
 IDLE_SECONDS = 600        # game date still this long (paused, player away): no background LLM work, no letters
 EVENT_LETTERS = 2          # countries that may write about one batch of events
 RETRY_SECONDS = 60        # after a failed background LLM call, wait this long before the next one
+AI_PARALLEL = 3           # AI-to-AI exchanges running at once (NanoGPT takes several calls at a time)
 
 
 def read_outbox(block: str) -> Optional[str]:
@@ -977,8 +978,8 @@ class _Session:
         self.story_draft: Optional[tuple] = None  # a written event waiting to be shown: (draft, campaign id, ...)
         self.war_pool = ThreadPoolExecutor(max_workers=1)    # ultimatum decisions
         self.ultimatum_job: Optional[tuple] = None   # (ultimatum, future, campaign id)
-        self.ai_pool = ThreadPoolExecutor(max_workers=1)     # AI-to-AI exchanges (diplomacy.py), last in line
-        self.ai_job: Optional[tuple] = None       # (stage, queue item, future, campaign id, what the next stage needs)
+        self.ai_pool = ThreadPoolExecutor(max_workers=AI_PARALLEL)   # AI-to-AI exchanges (diplomacy.py), side by side
+        self.ai_jobs: List[tuple] = []            # [(stage, queue item, future, campaign id, what the next stage needs)]
         self.date_seen = ""                       # the game date at the last snapshot
         self.active_at = time.monotonic()         # when the date last moved or the player last wrote
         self.retry_at = 0.0                       # no background LLM call before this (after a failure)
@@ -1008,7 +1009,7 @@ class _Session:
             self.gm_job = None
             self.story_job = self.story_draft = None
             self.ultimatum_job = None
-            self.ai_job = None
+            self.ai_jobs = []
             print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
                   f"{sum(len(v) for v in self.camp.data['letters'].values())} letters remembered")
         return self.camp
@@ -1059,66 +1060,72 @@ class _Session:
             self.ai_diplomacy(camp)
         return camp
 
-    # ---- AI-to-AI diplomacy (diplomacy.py): two short calls per exchange, behind everything of the player's
+    # ---- AI-to-AI diplomacy (diplomacy.py): two short calls per exchange, up to AI_PARALLEL exchanges side by side
     def ai_diplomacy(self, camp: campaign.Campaign) -> None:
         cfg = settings().ai
         if cfg.mode != "dry":
             return
         st = diplomacy._state(camp)
-        if self.ai_job:
-            stage, item, fut, cid, ctx = self.ai_job
+        running = []
+        for job in self.ai_jobs:
+            stage, item, fut, cid, ctx = job
             if not fut.done():
-                return
-            self.ai_job = None
-            if cid != camp.id:
-                return
-            try:
-                raw = fut.result()
-            except llm.LLMError as e:
-                print(f"  [ai] {item[0]} -> {item[1]} failed: {e}")
-                self.failed()
-                return
-            a, b = item[0], item[1]
-            if stage == "dispatch":
-                offers, asks, w = ctx
-                text, stance, items = diplomacy.read_dispatch(raw, offers, asks)
-                try:
-                    msgs = diplomacy.answer_prompt(camp, gamestate.country(b), gamestate.country(a), w, text, items)
-                except gamestate.StateError as e:
-                    print(f"  [ai] {b} could not answer {a}: {e}")
-                    return
-                self.ai_job = ("answer", item, self.ai_pool.submit(llm.chat, msgs, None, None, None, "ai:answer", b),
-                               camp.id, (text, stance, items))
-            else:
-                text, stance, items = ctx
-                reply, answer, b_stance = diplomacy.read_answer(raw, items)
-                diplomacy.record(camp, a, b, text, stance, items, reply, answer, b_stance, item[2:4])
-                camp.save()
-            return
-        if self.pending or self.policy_job or self.gm_job or self.story_job or self.ultimatum_job:
-            return                                       # the player's own letters and policies come first
+                running.append(job)
+            elif cid == camp.id:
+                nxt = self._ai_step(camp, stage, item, fut, ctx)
+                if nxt:
+                    running.append(nxt)
+        self.ai_jobs = running
+        if self.pending:
+            return     # letters to the player come first; policies and judgements run beside it in their own queues
         if diplomacy.due(camp):
             queued = diplomacy.draw(camp, cfg.exchanges_per_month, cfg.cooldown_days)
             print("  [ai] this month: " + (", ".join(f"{x[0]} -> {x[1]}" for x in queued) or "nobody"))
             camp.save()
         snap = camp.snapshot or {}
-        while st["queue"]:
+        w = None
+        while st["queue"] and len(self.ai_jobs) < AI_PARALLEL:
             item = st["queue"].pop(0)
             a, b = item[0], item[1]
             if a not in snap.get("countries", {}) or b not in snap.get("countries", {}) \
                     or campaign.pair(a, b) in snap.get("wars", []):
                 continue                                 # gone, or at war since the draw
             try:
-                w = diplomacy.world()
+                w = w or diplomacy.world()
                 msgs, offers, asks = diplomacy.dispatch_prompt(camp, gamestate.country(a), gamestate.country(b), w)
             except gamestate.StateError as e:
                 print(f"  [ai] {a} could not write to {b}: {e}")
                 continue
             st["pairs"][campaign.pair(a, b)] = st["started"][a] = camp.data.get("last_date") or ""
             camp.save()
-            self.ai_job = ("dispatch", item, self.ai_pool.submit(llm.chat, msgs, None, None, None, "ai:dispatch", a),
-                           camp.id, (offers, asks, w))
-            return
+            self.ai_jobs.append(("dispatch", item, self.ai_pool.submit(llm.chat, msgs, None, None, None,
+                                                                       "ai:dispatch", a), camp.id, (offers, asks, w)))
+
+    def _ai_step(self, camp: campaign.Campaign, stage: str, item: List, fut, ctx) -> Optional[tuple]:
+        """A finished call of an exchange: the dispatch leads to the answer (returned as the next job), the answer
+        to the record."""
+        a, b = item[0], item[1]
+        try:
+            raw = fut.result()
+        except llm.LLMError as e:
+            print(f"  [ai] {a} -> {b} failed: {e}")
+            self.failed()
+            return None
+        if stage == "dispatch":
+            offers, asks, w = ctx
+            text, stance, items = diplomacy.read_dispatch(raw, offers, asks)
+            try:
+                msgs = diplomacy.answer_prompt(camp, gamestate.country(b), gamestate.country(a), w, text, items)
+            except gamestate.StateError as e:
+                print(f"  [ai] {b} could not answer {a}: {e}")
+                return None
+            return ("answer", item, self.ai_pool.submit(llm.chat, msgs, None, None, None, "ai:answer", b), camp.id,
+                    (text, stance, items))
+        text, stance, items = ctx
+        reply, answer, b_stance = diplomacy.read_answer(raw, items)
+        diplomacy.record(camp, a, b, text, stance, items, reply, answer, b_stance, item[2:4])
+        camp.save()
+        return None
 
     # ---- ultimatums past their deadline: the country decides between war and backing down (in the background)
     def ultimatum_decision(self, camp: campaign.Campaign, player: str) -> None:

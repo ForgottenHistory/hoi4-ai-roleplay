@@ -167,10 +167,12 @@ def due(camp: campaign.Campaign) -> bool:
 
 
 def draw(camp: campaign.Campaign, n: int, cooldown_days: int) -> List[List]:
-    """This month's pairs, queued: [[first, second, score, reasons]]."""
+    """This month's pairs, queued: [[first, second, score, reasons]]. Pairs left from last month go: written
+    late, a dispatch would answer a month that has passed."""
     st = _state(camp)
     scored = score(camp, world())
     why = {(x[1], x[2]): (x[0], x[3]) for x in scored}
+    st["queue"] = []
     for a, b in pick(camp, scored, n, cooldown_days):
         s, reasons = why.get((a, b)) or why.get((b, a))
         st["queue"].append([a, b, s, reasons])
@@ -345,8 +347,11 @@ def read_answer(raw: str, items: List[str]) -> Tuple[str, str, str]:
     """(text, answer: accept | decline | '', stance) from an answer."""
     from . import actions
     stance = next((s for s in STANCES if s in _line(raw, "stance")), "indifferent")
+    import re
     said = _line(raw, "answer")
-    answer = ("accept" if "accept" in said else "decline") if items else ""
+    # "decline, though we would accept the pact alone" is a refusal: a refusal word anywhere wins
+    yes = "accept" in said and not re.search(r"\b(declin|reject|refus)", said)
+    answer = ("accept" if yes else "decline") if items else ""
     return _tidy(actions.parse(_strip(raw))[0]), answer, stance
 
 

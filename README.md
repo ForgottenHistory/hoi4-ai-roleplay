@@ -77,7 +77,8 @@ Letters can change the game (`hoi4_rp/actions.py`). The LLM appends simple comma
 Python removes them, checks each in the game (agreements need peace and mustn't exist yet; ending one
 needs it to exist) and applies what's allowed. What happened is listed under the letter (green good
 news, red bad) and the agreements are remembered in the chronicle. A letter whose text makes a deal but that forgot its commands
-gets them in one short follow-up, so a deal written in prose can still be accepted; when a country may not propose
+gets them in one short follow-up, so a deal written in prose can still be accepted, and one whose text speaks of
+something its proposal leaves out (a factory, rifles, access...) is asked whether it offers it; when a country may not propose
 now (another proposal came recently, or you refused it lately), it's told not to make concrete offers in prose.
 
 - In a reply: `[[opinion N]]` (-20..+20, mod-defined modifiers fading 1 per month), and the agreements

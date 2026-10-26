@@ -399,6 +399,9 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         raw += "\n\n" + extra
     raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
+    if fixed := _unmatched(prompt, raw, to, proposals + [k for k, _ in commands], offers + asks):
+        raw, terms = treaties.parse_terms(fixed)
+        letter, commands, proposals = actions.parse(raw)
     commands, renounced = treaties.take_renounce(commands)
     # Payments agreed for later ([[civ 1 in 12 months]]) are kept by the treaty, not made now; only what they could
     # grant now (asked for, and possible) counts.
@@ -507,6 +510,34 @@ def _missing_commands(prompt: List[Dict], raw: str, about: str, grants: bool) ->
     if found:
         print(f"  {about}'s letter spoke of a deal without commands; added {' '.join(found)}")
     return " ".join(found)
+
+
+_PROPOSAL_COMMAND = re.compile(r"\[\[\s*(offer|ask|for)\b[^\[\]]*\]\]", re.I)
+
+
+def _unmatched(prompt: List[Dict], raw: str, about: str, covered: List[str], allowed: List[str]) -> str:
+    """The letter's text speaks of a kind of deal its commands leave out (it says it can spare a factory, and no
+    factory is in the proposal): ask once whether the letter offers it. Returns `raw` with its proposal commands
+    replaced by the corrected ones, or '' if they stand."""
+    missing = actions.unmatched_topics(_PROPOSAL_COMMAND.sub("", raw), covered, allowed)
+    if not missing:
+        return ""
+    what = ", ".join(missing)
+    ask = (f"Your letter's text speaks of {what}, but its commands don't include that. If the letter offers or asks "
+           f"for it as part of the deal, answer with all the proposal commands the letter should carry: the whole "
+           f"proposal, terms included, as the instructions describe. If the letter declines it or only mentions it in "
+           f"passing, answer SAME. Commands or SAME only, no other text.")
+    try:
+        answer = llm.chat(prompt + [{"role": "assistant", "content": raw}, {"role": "user", "content": ask}],
+                          kind="commands", about=about)
+    except llm.LLMError as e:
+        print(f"  checking {about}'s proposal failed: {e}")
+        return ""
+    found = [c for c in re.findall(r"\[\[[^\[\]]+\]\]", answer) if _REPAIR_KINDS.match(c)]
+    if not found:
+        return ""
+    print(f"  {about}'s letter spoke of {what} outside its proposal; proposal now {' '.join(found)}")
+    return _PROPOSAL_COMMAND.sub("", raw).rstrip() + "\n\n" + " ".join(found)
 
 
 def _dropped(about: str, proposals: List[str], items: List[str]) -> None:
@@ -707,6 +738,9 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
         raw += "\n\n" + extra
     raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
+    if (offers or asks) and (fixed := _unmatched(prompt, raw, sender, proposals, offers + asks)):
+        raw, terms = treaties.parse_terms(fixed)
+        letter, commands, proposals = actions.parse(raw)
     commands, renounced = treaties.take_renounce(commands)
     text = _clean_for_game(letter)
     camp.add_letter(sender, sender, text, key)

@@ -1208,7 +1208,9 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
              f"offers and requests mixed (for example something you give in return for something you ask). "
              f"{me_name} accepts or declines the whole package with one Accept/Decline. {when} Write the proposal "
              f"into the letter, then add one command per item after the letter. Every item the letter proposes "
-             f"MUST have its command, or it has no effect; propose nothing in the text that isn't listed here."]
+             f"MUST have its command, or it has no effect; propose nothing in the text that isn't listed here. "
+             f"Say plainly what the proposal holds and what it doesn't: if you won't give something {me_name} asked "
+             f"for, say no clearly, never as a hint ('we can scarcely spare one') that reads like a promise."]
     lines += _item_lines("offer ", offers, f) + _item_lines("ask ", asks, f)
     if any(k in FACTORY_KEYS for k in offers + asks):
         lines.append(FACTORY_NOTE + f" N is a whole number up to {MAX_FACTORIES}, at most what the giver has.")
@@ -1226,6 +1228,41 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
         lines.append(GOVT_NOTE)
     lines += _new_goods_notes(offers + asks)
     return "\n".join(lines)
+
+
+# What a deal item is about, and the words a letter uses for it: a letter that speaks of one its commands leave out
+# gets asked about it (letters._unmatched). Only kinds a letter can name without doubt.
+TOPIC_WORDS = {
+    "factories": r"\bfactor(y|ies)\b",
+    "rifles": r"\b(rifles?|small arms|infantry equipment)\b",
+    "artillery": r"\b(artillery|field guns?|howitzers?)\b",
+    "trucks": r"\b(trucks?|lorries|motor vehicles)\b",
+    "access": r"\b(military access|passage|transit)\b",
+    "docking": r"\b(docking|harbou?rs?)\b",
+    "pact": r"\b(non-aggression|pacts?)\b",
+    "guarantee": r"\bguarantee",
+    "market": r"\b(market access|open markets?|markets)\b",
+    "faction": r"\bfaction\b",
+}
+
+
+def topic(key: str) -> str:
+    """'give:civ:2' -> 'factories', 'ask:rifles:500' -> 'rifles', 'give:pact' -> 'pact' ('' for other kinds)."""
+    parts = factory_base(key).split(":")
+    what = parts[1] if len(parts) > 1 else ""
+    if what in ("civ", "mil", "dismantle"):
+        return "factories"
+    if what in ("join", "faction"):
+        return "faction"
+    return what if what in TOPIC_WORDS else ""
+
+
+def unmatched_topics(text: str, covered: List[str], allowed: List[str]) -> List[str]:
+    """Kinds of deal the letter's text speaks of that its commands (`covered` keys) leave out, among those it could
+    have proposed (`allowed` keys)."""
+    have = {topic(k) for k in covered}
+    return [t for t in dict.fromkeys(topic(k) for k in allowed)
+            if t and t not in have and re.search(TOPIC_WORDS[t], text, re.I)]
 
 
 def letter_help(them_name: str, me_name: str, offers: List[str], asks: List[str], steps: List[str],

@@ -162,7 +162,8 @@ def parse(text: str, rel: "actions.Relation", war_baseline: Optional[int] = None
     if not policy:          # tolerate a policy written as a paragraph after the other lines
         rest = re.sub(r"^[\W_]*(stance|urgency|offers|asks|breaks|war|why|terms)[*_\s]*[:\-–].*$", "", text,
                       flags=re.I | re.M).strip()
-        policy = re.sub(r"\s+", " ", rest)[:600]
+        policy = re.sub(r"\s+", " ", rest)[:600] or " ".join(x for x in (line("why"), line("terms")) if x)
+        # (at war the model sometimes writes WHY and TERMS but no POLICY: Switzerland, 1938)
     out_war = {}
     if war_baseline is not None:
         got = war.parse_stance(line("war"))

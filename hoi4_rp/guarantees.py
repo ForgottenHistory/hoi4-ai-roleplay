@@ -63,14 +63,17 @@ def _charge(camp: campaign.Campaign, by: str) -> None:
     actions._effect(script)
 
 
-def record(camp: campaign.Campaign, tag: str, types: List[str], terms: Optional[Dict]) -> None:
+def record(camp: campaign.Campaign, tag: str, types: List[str], terms: Optional[Dict]) -> List[str]:
     """The guarantees a letter deal with `tag` just made (give:guarantee: `tag` guarantees the player; ask:guarantee:
-    the player guarantees `tag`). Renewing a standing one extends it, at no new cost."""
+    the player guarantees `tag`). Renewing a standing one extends it, at no new cost. Returns a line for the player
+    on each (its term and upkeep), for a guarantee granted outright, which no proposal line announced."""
     from . import treaties
     player = camp.data["player"]
     today = camp.data.get("last_date") or ""
     months = (terms or {}).get("months") or TERM_MONTHS
-    payers = set()
+    payers, lines = set(), []
+    names = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: "we" if t == player else names.get(t, {}).get("name", t)
     for kind in types:
         if kind not in ("give:guarantee", "ask:guarantee"):
             continue
@@ -79,13 +82,19 @@ def record(camp: campaign.Campaign, tag: str, types: List[str], terms: Optional[
         g = next((g for g in _active(camp, by) if g["of"] == of), None)
         if g:
             g["until"] = max(g["until"], until)
+            lines.append(f"The guarantee is renewed until {campaign.date_words(g['until'])}, at no new cost.")
         else:
+            cost = next_cost(camp, by)
             _all(camp).append({"by": by, "of": of, "date": today, "until": until, "status": "active", "closed": ""})
+            lines.append(f"The guarantee lasts until {campaign.date_words(until)}; {name(by)} "
+                         f"{'tie' if by == player else 'ties'} up {cost} civilian "
+                         f"{'factory' if cost == 1 else 'factories'} for it.")
         payers.add(by)
     for by in payers:
         _charge(camp, by)
     if payers:
         camp.save()
+    return lines
 
 
 def tick(camp: campaign.Campaign) -> List[Tuple[str, str]]:

@@ -443,7 +443,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     for e in events:
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False}])
     treaties.record(camp, to, [e["type"] for e in events], terms, key, them.name, later=later)
-    guarantees.record(camp, to, [e["type"] for e in events], terms)
+    outcomes += [(line, False) for line in guarantees.record(camp, to, [e["type"] for e in events], terms)]
     outcomes += [(f"Agreed: {them.name} pays us {actions.get_deal(k).label} in {terms['payments'][k][2]} months.",
                   False) for k in later]
     if renounced:

@@ -1276,7 +1276,8 @@ class _Session:
         # before come first; new countries (just liberated or puppeted) last.
         reasons: Dict[str, str] = {}
         for e in events:
-            if player not in e["tags"]:
+            # market access alone is no reason to write: the game opens it with half the world at once
+            if player not in e["tags"] or e.get("type", "").startswith("agreement:market"):
                 continue
             for other in e["tags"]:
                 if other != player and active(snap, other) and not self._cooling(camp, other, today):

@@ -145,7 +145,9 @@ WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_l
                # ultimatums.py: a threat of war, and how it ended
                "ultimatum:issued", "ultimatum:met", "ultimatum:war", "ultimatum:ready", "ultimatum:dropped",
                # guarantees.py: a letter guarantee that ran its term
-               "guarantee:expired"} | {f"agreement:{k}{e}" for k in AGREEMENTS for e in ("", ":end")}
+               "guarantee:expired"} | {f"agreement:{k}{e}" for k in AGREEMENTS for e in ("", ":end")
+                                         if k != "market"}   # market access comes and goes in bulk: no news
+MARKET_MASS = 3             # more market access changes than this in one snapshot are told as one line
 
 
 def snapshot(player: str) -> Dict:
@@ -255,18 +257,33 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
     # The player's war goals and justifications, both ways (older snapshots have no ties: nothing to compare)
     player = new.get("player")
     if player and "ties" in old:
+        markets: Dict[str, List[str]] = {"": [], ":end": []}     # market access opened / closed with each
         for tag, kinds in new.get("ties", {}).items():
             for kind in set(kinds) - set(old["ties"].get(tag, [])):
                 if kind in TIE_EVENTS and tag in nc:
                     kind_name, text = TIE_EVENTS[kind]
                     # its overlord hears of it too (a threat to a colony is a threat to its master)
                     add([player, tag, nc[tag].get("overlord", "")], text.format(p=name(player), o=name(tag)), kind_name)
+                elif kind == "market" and tag in nc and kind in old.get("tie_kinds", ()):
+                    markets[""].append(tag)
                 elif kind in AGREEMENTS and tag in nc and kind in old.get("tie_kinds", ()):
                     add([player, tag], AGREEMENTS[kind][0].format(p=name(player), o=name(tag)), f"agreement:{kind}")
         for tag, kinds in old["ties"].items():
             for kind in set(kinds) - set(new.get("ties", {}).get(tag, [])):
-                if kind in AGREEMENTS and tag in nc and kind in new.get("tie_kinds", ()):
+                if kind == "market" and tag in nc and kind in new.get("tie_kinds", ()):
+                    markets[":end"].append(tag)
+                elif kind in AGREEMENTS and tag in nc and kind in new.get("tie_kinds", ()):
                     add([player, tag], AGREEMENTS[kind][1].format(p=name(player), o=name(tag)), f"agreement:{kind}:end")
+        # The game opens and closes market access with dozens of countries at once (a trade law, a new government):
+        # then one line for the player alone, not news between it and Oman
+        for end, tags in markets.items():
+            if len(tags) > MARKET_MASS:
+                names = ", ".join(name(t) for t in sorted(tags, key=lambda t: not nc[t].get("major"))[:6])
+                add([player], f"{name(player)} {'closed' if end else 'opened'} market access with {len(tags)} "
+                              f"countries at once ({names} and others).", f"agreement:market{end}:mass")
+            for t in tags if len(tags) <= MARKET_MASS else ():
+                add([player, t], AGREEMENTS["market"][1 if end else 0].format(p=name(player), o=name(t)),
+                    f"agreement:market{end}")
 
     moved: Dict[Tuple[str, str], List[str]] = defaultdict(list)
     for sid, (sname, owner) in new["states"].items():

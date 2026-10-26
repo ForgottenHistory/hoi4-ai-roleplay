@@ -234,9 +234,11 @@ reaches the game, and no country you write to knows of them.
   A pair waits `cooldown_days` (90) before talking again, a country starts at most one exchange a month.
 - An exchange is two short LLM calls (under 1k tokens of prompt each): a dispatch with the writer's stance and at
   most one proposal (pact, access, guarantee, market, faction, joining a war, oppose/befriend/back, sanction), and
-  the other side's answer, accept or decline. The stances are kept per pair; the letters too, marked as dry.
+  the other side's answer: accept, decline, or a counter-proposal (often the same package without what it refuses,
+  or with something asked in return), which the proposer accepts or declines in a third short call. The stances
+  are kept per pair; the letters too, marked as dry.
 - It runs only while the game runs and no letter to you is waiting to be written, up to three exchanges at once.
-  `python -m hoi4_rp usage` shows its calls as `ai:dispatch` and `ai:answer`.
+  `python -m hoi4_rp usage` shows its calls as `ai:dispatch`, `ai:answer` and `ai:final`.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)
 

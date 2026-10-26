@@ -1116,15 +1116,32 @@ class _Session:
             offers, asks, w = ctx
             text, stance, items = diplomacy.read_dispatch(raw, offers, asks)
             try:
-                msgs = diplomacy.answer_prompt(camp, gamestate.country(b), gamestate.country(a), w, text, items)
+                msgs, c_offers, c_asks = diplomacy.answer_prompt(camp, gamestate.country(b), gamestate.country(a), w,
+                                                                 text, items)
             except gamestate.StateError as e:
                 print(f"  [ai] {b} could not answer {a}: {e}")
                 return None
             return ("answer", item, self.ai_pool.submit(llm.chat, msgs, None, None, None, "ai:answer", b), camp.id,
-                    (text, stance, items))
-        text, stance, items = ctx
-        reply, answer, b_stance = diplomacy.read_answer(raw, items)
-        diplomacy.record(camp, a, b, text, stance, items, reply, answer, b_stance, item[2:4])
+                    (text, stance, items, w, c_offers, c_asks))
+        if stage == "answer":
+            text, stance, items, w, c_offers, c_asks = ctx
+            reply, answer, b_stance, counter = diplomacy.read_answer(raw, items, c_offers, c_asks)
+            if answer == "counter":                     # the proposer has the last word on the counter
+                try:
+                    msgs = diplomacy.final_prompt(camp, gamestate.country(a), gamestate.country(b), w, text, reply,
+                                                  counter)
+                except gamestate.StateError as e:
+                    print(f"  [ai] {a} could not weigh {b}'s counter: {e}")
+                    return None
+                return ("final", item, self.ai_pool.submit(llm.chat, msgs, None, None, None, "ai:final", a), camp.id,
+                        (text, stance, items, reply, b_stance, counter))
+            diplomacy.record(camp, a, b, text, stance, items, reply, answer, b_stance, item[2:4])
+            camp.save()
+            return None
+        text, stance, items, reply, b_stance, counter = ctx
+        final, final_answer, final_stance, _ = diplomacy.read_answer(raw, counter)
+        diplomacy.record(camp, a, b, text, stance, items, reply, "counter", b_stance, item[2:4], counter=counter,
+                         final=final, final_answer=final_answer, final_stance=final_stance)
         camp.save()
         return None
 

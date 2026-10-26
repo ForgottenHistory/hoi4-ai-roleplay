@@ -2,7 +2,8 @@
 
 For now in dry-run mode only ([ai_diplomacy] mode = dry): exchanges are written and logged, nothing reaches the game.
 One exchange is two short LLM calls: a dispatch from one government (a few sentences, its stance, at most one
-proposal from a short menu) and the other's answer (accept or decline, a few sentences). The prompts are short by
+proposal from a short menu) and the other's answer: accept, decline, or counter with a package of its own (often
+theirs without what it refuses), on which the proposer has the last word in a third call. One round only. The prompts are short by
 design (about 1.5-2k tokens, a tenth of a letter to the player): a card per country, what is in force between
 them, their last few events together.
 
@@ -299,16 +300,38 @@ def dispatch_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: games
 
 
 def answer_prompt(camp: campaign.Campaign, b: gamestate.CountryState, a: gamestate.CountryState,
-                  w: Dict[str, Dict], text: str, items: List[str]) -> List[Dict]:
+                  w: Dict[str, Dict], text: str, items: List[str]) -> Tuple[List[Dict], List[str], List[str]]:
+    """`b` answers `a`'s dispatch: accept, decline or (with a proposal) counter with a package of its own. Returns
+    (messages, what b could offer a, what b could ask of a) for reading the counter."""
     from . import actions
-    deal = (f"Its proposal, which you accept or decline as a whole: {actions.package_text(items, a.name)}."
+    deal = (f"Its proposal, a package you accept or decline as a whole: {actions.package_text(items, a.name)}."
             if items else "It makes no proposal.")
+    c_offers, c_asks, lines = menu(b.tag, a.tag, b.name, a.name) if items else ([], [], "")
+    answer = ""
+    if items:
+        answer = (f"ANSWER: accept, decline or counter. accept: every item of the package. decline: none of it. "
+                  f"counter: you refuse part of it but would agree to a different package; write ANSWER: counter, "
+                  f"then your package as commands, one per item (at most three). Often it is their package without "
+                  f"what you refuse; it may also ask something in return. {a.name} then accepts or declines it.\n")
+        if lines:
+            answer += f"Commands for a counter (your offers to {a.name} and your requests of it):\n{lines}\n"
     task = (f"{a.name} sent you this dispatch:\n\"{text}\"\n{deal}\n\nAnswer it in 1 to 3 sentences in {b.name}'s "
-            f"own voice. Then, on lines of their own:\n"
-            + ("ANSWER: accept or decline (accept means every item of the package; if you refuse any part, "
-               "decline, and say what you would accept instead)\n" if items else "")
-            + f"STANCE: one of {', '.join(STANCES)} (how {b.name} regards {a.name} now)")
-    return [{"role": "system", "content": _situation(camp, b, a, w) + "\n\n" + task},
+            f"own voice. Then, on lines of their own:\n{answer}"
+            f"STANCE: one of {', '.join(STANCES)} (how {b.name} regards {a.name} now)")
+    return ([{"role": "system", "content": _situation(camp, b, a, w) + "\n\n" + task},
+             {"role": "user", "content": "Write the answer now."}], c_offers, c_asks)
+
+
+def final_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: gamestate.CountryState, w: Dict[str, Dict],
+                 text: str, reply: str, counter: List[str]) -> List[Dict]:
+    """`a` decides on `b`'s counter-proposal (the last word: one round only)."""
+    from . import actions
+    task = (f"You wrote to {b.name}:\n\"{text}\"\n\n{b.name} answered:\n\"{reply}\"\nand made a counter-proposal "
+            f"instead of yours, a package you accept or decline as a whole: {actions.package_text(counter, b.name)}."
+            f"\n\nAnswer in 1 or 2 sentences in {a.name}'s own voice: is the counter-proposal still worth it to "
+            f"{a.name}? Then, on lines of their own:\nANSWER: accept or decline\n"
+            f"STANCE: one of {', '.join(STANCES)} (how {a.name} regards {b.name} now)")
+    return [{"role": "system", "content": _situation(camp, a, b, w) + "\n\n" + task},
             {"role": "user", "content": "Write the answer now."}]
 
 
@@ -343,30 +366,47 @@ def read_dispatch(raw: str, offers: List[str], asks: List[str]) -> Tuple[str, st
     return _tidy(text), stance, items
 
 
-def read_answer(raw: str, items: List[str]) -> Tuple[str, str, str]:
-    """(text, answer: accept | decline | '', stance) from an answer."""
+def read_answer(raw: str, items: List[str], c_offers: List[str] = (), c_asks: List[str] = ()
+                ) -> Tuple[str, str, str, List[str]]:
+    """(text, answer: accept | decline | counter | '', stance, the counter's items) from an answer. A counter
+    without a valid item is a decline."""
+    import re
     from . import actions
     stance = next((s for s in STANCES if s in _line(raw, "stance")), "indifferent")
-    import re
     said = _line(raw, "answer")
+    text, _, proposals = actions.parse(_strip(raw))
+    allowed = list(c_offers) + list(c_asks)
+    counter = actions.package([p for p in proposals if p in allowed], allowed)[:3] if allowed else []
+    if not items:
+        answer = ""
+    elif "counter" in said and counter:
+        answer = "counter"
     # "decline, though we would accept the pact alone" is a refusal: a refusal word anywhere wins
-    yes = "accept" in said and not re.search(r"\b(declin|reject|refus)", said)
-    answer = ("accept" if yes else "decline") if items else ""
-    return _tidy(actions.parse(_strip(raw))[0]), answer, stance
+    elif "accept" in said and not re.search(r"\b(declin|reject|refus)", said):
+        answer = "accept"
+    else:
+        answer = "decline"
+    return _tidy(text), answer, stance, counter if answer == "counter" else []
 
 
 # ---------------------------------------------------------------- keeping it
 
 def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, items: List[str], reply: str,
-           answer: str, b_stance: str, why: List, usage: str = "") -> None:
-    """Store a finished exchange (dry run: the letters and both stances only) and log it."""
+           answer: str, b_stance: str, why: List, usage: str = "", counter: List[str] = (), final: str = "",
+           final_answer: str = "", final_stance: str = "") -> None:
+    """Store a finished exchange (dry run: the letters and both stances only) and log it. With a counter-proposal,
+    `final` is `a`'s last word on it."""
     from . import actions
     key = camp.data.get("last_date") or ""
     camp.add_letter(a, a, text, key, other=b)
     camp.letters_with(a, b)[-1].update({"dry": True, "proposal": items, "stance": stance})
     camp.add_letter(b, b, reply, key, other=a)
-    camp.letters_with(a, b)[-1].update({"dry": True, "answer": answer, "stance": b_stance})
-    for x, y, s in ((a, b, stance), (b, a, b_stance)):
+    camp.letters_with(a, b)[-1].update({"dry": True, "answer": answer, "stance": b_stance,
+                                        **({"proposal": list(counter)} if counter else {})})
+    if counter:
+        camp.add_letter(a, a, final, key, other=b)
+        camp.letters_with(a, b)[-1].update({"dry": True, "answer": final_answer, "stance": final_stance})
+    for x, y, s in ((a, b, final_stance or stance), (b, a, b_stance)):
         camp.set_policy(x, {"stance": s, "date": key, "when": campaign.date_words(key), "light": True}, other=y)
     c = (camp.snapshot or {}).get("countries", {})
     name = lambda t: c.get(t, {}).get("name", t)
@@ -378,6 +418,12 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
     lines.append(f"{name(b).upper()} ({b_stance}{', ' + answer.upper() if answer else ''}): {reply}")
     if deal and answer == "accept":
         lines.append(f"  [dry run] would take effect: {deal}")
+    if counter:
+        other = actions.package_text(list(counter), name(b))
+        lines += [f"  counters: {other}",
+                  f"{name(a).upper()} ({final_stance}, {final_answer.upper()}): {final}"]
+        if final_answer == "accept":
+            lines.append(f"  [dry run] would take effect: {other}")
     if usage:
         lines.append(f"  ({usage})")
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)

@@ -164,7 +164,7 @@ def sync(camp: campaign.Campaign, tag: str) -> List[str]:
 
 def sync_all(camp: campaign.Campaign) -> None:
     actors = {r["actor"] for r in treaties.commitments(camp)}
-    for tag in sorted(set(camp.data.get("policies", {})) | set(camp.data.get("steering", {})) | actors):
+    for tag in sorted(set(camp.policies_toward()) | set(camp.data.get("steering", {})) | actors):
         for line in sync(camp, tag):
             print(line)
 

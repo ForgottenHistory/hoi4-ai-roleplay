@@ -1,6 +1,6 @@
 """Policies: what a country that matters to the player (neighbour, overlord or subject, enemy, faction
 member, major power) currently wants from the player, written by the LLM from the full
-game state and memory, and stored in the campaign (data["policies"][TAG]).
+game state and memory, and stored in the campaign (data["policies"]["TAG>PLAYER"]: campaign.policy_of).
 
 A policy is plain text in six lines (no JSON: it breaks). Parsing is lenient; anything missing falls back
 to a default, and only things possible right now are kept:
@@ -204,7 +204,7 @@ def basis(snap: Optional[Dict], tag: str, player: str) -> str:
 
 def stale(camp, tag: str) -> bool:
     """Written under a relationship that no longer holds."""
-    p = camp.data.setdefault("policies", {}).get(tag)
+    p = camp.policy_of(tag)
     if not p:
         return False
     # A country that vanished or appeared since is another country now: dynamic tags (D01...) are reused, and
@@ -225,9 +225,9 @@ def stale(camp, tag: str) -> bool:
 
 def current(camp, tag: str) -> Optional[Dict]:
     """The country's policy toward the player, or None (none yet, or stale until it is refreshed)."""
-    p = camp.data.setdefault("policies", {}).get(tag)
+    p = camp.policy_of(tag)
     if p and _future(camp, p):
-        del camp.data["policies"][tag]
+        camp.drop_policy(tag)
         return None
     if p and stale(camp, tag):
         return None
@@ -245,7 +245,7 @@ def refresh_priority(camp, tag: str, player: str, today: str, close: bool = True
     """How badly the policy needs rewriting: 3 none or stale, 2 something happened between the two,
     1 just old, 0 not needed. `close`: a neighbour, enemy, faction member, overlord or subject of the player; a
     country that isn't, with an indifferent policy and nothing urgent, is old only after FAR_REFRESH_DAYS."""
-    raw = camp.data.setdefault("policies", {}).get(tag)
+    raw = camp.policy_of(tag)
     if not raw or "asks" not in raw or _future(camp, raw) or stale(camp, tag) or raw.get("v", 1) < VERSION:
         return 3
     age = _days(today) - _days(raw["date"])

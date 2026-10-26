@@ -134,6 +134,8 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
                 and not guarantees.expired(camp, player, other):         # one that ran its term broke nothing
             what = TIE_WORDS["my_guarantee"].format(p=p, o=name(other))
             deeds.append(_deed(new, [player, other], f"In peacetime, {what} came to an end."))
+    for d in deeds:
+        d["by"] = player
     rep["deeds"].extend(deeds)
     _settle_threats(camp, player, new, events, name)
     return deeds
@@ -203,11 +205,11 @@ def _focuses(player: str) -> str:
 def next_job(camp: campaign.Campaign, player: str) -> Optional[Tuple[str, Dict]]:
     """The next piece of judging to do: ("promises", letter) or ("deed", deed), oldest first; None if done."""
     rep = _rep(camp)
-    for tag, letters in camp.data["letters"].items():
+    for tag, letters in camp.threads().items():
         for x in letters:
             if x["from"] == player and not x.get("promises_read") and x["date"] >= rep["since"]:
                 return "promises", {**x, "to": tag}
-    pending = [d for d in rep["deeds"] if d["weight"] is None]
+    pending = [d for d in rep["deeds"] if d["weight"] is None and d.get("by", player) == player]
     return ("deed", pending[0]) if pending else None
 
 
@@ -368,7 +370,8 @@ def standing(score: float) -> str:
 def record(camp: campaign.Campaign, player: str, player_name: str, viewer: str = "", limit: int = 8) -> str:
     """The player's reputation for a prompt, as `viewer` sees it (its own dealings marked)."""
     today = camp.data.get("last_date") or ""
-    judged = [d for d in _rep(camp)["deeds"] if d["weight"] is not None and d["weight"] != 0]
+    judged = [d for d in _rep(camp)["deeds"] if d["weight"] is not None and d["weight"] != 0
+              and d.get("by", player) == player]
     if not judged:
         return ""
     score = sum(_faded(d, today) for d in judged)

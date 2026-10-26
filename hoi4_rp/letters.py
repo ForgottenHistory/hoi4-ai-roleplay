@@ -222,7 +222,7 @@ def _allies_stances(camp: campaign.Campaign, them: gamestate.CountryState, me: g
         return ""
     groups: Dict[str, List[str]] = {}
     for t in side:
-        pol = camp.data.get("policies", {}).get(t) or {}
+        pol = camp.policy_of(t) or {}
         stance = "capitulated" if t in them.fallen else pol.get("war") or "unknown"
         groups.setdefault(stance, []).append(them.name_of(t))
     order = ["capitulated"] + list(reversed(war.STANCES)) + ["unknown"]
@@ -704,13 +704,13 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
         standing = treaties.standing(camp, tag)
         ok = lambda k: k != "give:peace" and k not in standing and actions.possible(rel, k)
         return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
-    proposed = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("proposal")]
+    proposed = [x["date"] for ls in camp.threads().values() for x in ls if x.get("proposal")]
     if proposed and today - _days(max(proposed)) < cfg.proposal_gap_days:
         return peace_offer, []
     player = camp.data["player"]
     refused = set()
     for r in camp.data.get("refusals", []):
-        if r["from"] != tag or today - _days(r["date"]) >= cfg.refusal_days:
+        if r["from"] != tag or r.get("to", player) != player or today - _days(r["date"]) >= cfg.refusal_days:
             continue
         if any(e["date"] > r["date"] and tag in e["tags"] and player in e["tags"]
                and e.get("type") in chronicle.WORLD_TYPES for e in camp.data["events"]):
@@ -837,7 +837,7 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
             ultimatums.met_by_deal(camp, tag, me_name, them_name)
     else:
         text = f"{me_name} declined the proposal ({what})."
-        camp.data.setdefault("refusals", []).append({"from": tag, "keys": items, "date": key,
+        camp.data.setdefault("refusals", []).append({"from": tag, "to": player, "keys": items, "date": key,
                                                      "basis": policy.basis(camp.snapshot, tag, player)})
         print(f"declined {tag}'s proposal: {items}")
         if offer.get("ultimatum"):
@@ -1222,7 +1222,7 @@ class _Session:
                 return
             p = policy.parse(text, rel, baseline)
             p.update(date=key, when=campaign.date_words(key), basis=basis)
-            camp.data.setdefault("policies", {})[tag] = p
+            camp.set_policy(tag, p)
             camp.save()
             words = lambda keys: ", ".join(actions.word(k) for k in keys) or "none"
             print(f"  policy {tag} -> {player}: {p['stance']}, urgency {p['urgency']}, offers {words(p['offers'])}, "
@@ -1291,19 +1291,19 @@ class _Session:
         if self.pending:
             return
         # Letters countries start without an event (policy or quiet spell) keep letter_gap_days apart.
-        started = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("initiated")]
+        started = [x["date"] for ls in camp.threads().values() for x in ls if x.get("initiated")]
         if started and today - _days(max(started)) < cfg.letter_gap_days:
             return
         # A country writes soon, once per policy, when its policy is urgent (3) or it has something to
         # propose or do and some urgency (2): that letter is where it happens.
-        for tag in list(camp.data.get("policies", {})):
+        for tag in list(camp.policies_toward()):
             p = policy.current(camp, tag)
             own = [x for x in camp.letters_with(tag) if x.get("initiated")]
             if (policy.wants_to_write(p) and active(snap, tag) and not self._cooling(camp, tag, today)
                     and (not own or own[-1]["date"] < p["date"])):
                 self.pending[tag] = ""
                 return
-        letters = [x for ls in camp.data["letters"].values() for x in ls]
+        letters = [x for ls in camp.threads().values() for x in ls]
         camp.data.setdefault("started", snap["date"])
         last = max([x["date"] for x in letters if x["from"] != player] or [camp.data["started"]])
         if today - _days(last) < cfg.quiet_days:
@@ -1314,7 +1314,7 @@ class _Session:
             return
         candidates = [t for t in policy_countries(me, snap) if not self._cooling(camp, t, today)]
         if candidates:
-            pols = camp.data.get("policies", {})
+            pols = camp.policies_toward()
             weights = [relevance(me, t) * (1 + pols.get(t, {}).get("urgency", 0)) for t in candidates]
             self.pending[random.choices(candidates, weights)[0]] = ""
 

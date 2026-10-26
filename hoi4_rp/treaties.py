@@ -153,8 +153,11 @@ def help_text() -> str:
 
 # ---------------------------------------------------------------- keeping treaties
 
-def _all(camp: campaign.Campaign) -> List[Dict]:
+def _store(camp: campaign.Campaign) -> List[Dict]:
+    """Every treaty, between any two countries: "with" wrote the deal, "me" is the other side."""
     out = camp.data.setdefault("treaties", [])
+    for t in out:
+        t.setdefault("me", camp.data["player"])
     for t in out:                                   # war pledges were "attack" keys at first
         if any(":attack:" in k for k in t["items"]):
             fix = lambda k: k.replace(":attack:", ":pledge:")
@@ -163,6 +166,13 @@ def _all(camp: campaign.Campaign) -> List[Dict]:
             for c in t["clauses"]:
                 c["key"] = fix(c["key"])
     return out
+
+
+def _all(camp: campaign.Campaign, me: str = "") -> List[Dict]:
+    """The treaties of `me` (the player by default). Those between two other countries are kept by the AI's own
+    diplomacy, not here."""
+    me = me or camp.data["player"]
+    return [t for t in _store(camp) if t["me"] == me]
 
 
 def _due(camp: campaign.Campaign) -> List[Dict]:
@@ -200,12 +210,12 @@ def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optiona
     fmt = {"them_name": them_name, "me_name": me_name}
     # In names, not "we/they": the text goes into both sides' prompts.
     text = " ".join(actions.get_deal(k).remembered.format(**fmt) for k in applied).rstrip(".")
-    t = {"id": max([x["id"] for x in _all(camp)] or [0]) + 1, "with": tag, "date": key,
+    t = {"id": max([x["id"] for x in _store(camp)] or [0]) + 1, "with": tag, "me": camp.data["player"], "date": key,
          "when": campaign.date_words(key), "items": applied,
          "labels": {k: actions.get_deal(k).label for k in applied},
          "text": text, "until": until, "status": "active", "closed": "",
          "how": "", "payments": payments, "clauses": clauses}
-    _all(camp).append(t)
+    _store(camp).append(t)
     print(f"  treaty {t['id']} with {tag}: {t['text']}"
           + (f"; until {campaign.date_words(until)}" if until else "")
           + "".join(f"; {p['key']} x{p['count']} every {p['every']} months"
@@ -260,7 +270,7 @@ def _keep_commitment(camp: campaign.Campaign, t: Dict, c: Dict, player: str, tod
         deed = (f"{me_name} {did}, though it had committed in the treaty of {t['when']} with {them_name} {promise}, "
                 f"breaking its word.")
         _close(t, "broken", today, f"broken by {me_name}")
-        reputation._rep(camp)["deeds"].append({"date": today, "when": campaign.date_words(today),
+        reputation._rep(camp)["deeds"].append({"date": today, "when": campaign.date_words(today), "by": player,
                                                "tags": [player, tag], "facts": deed, "weight": None, "verdict": ""})
     else:
         deed = f"{them_name} {did}, though it had committed in the treaty of {t['when']} with {me_name} {promise}."
@@ -270,16 +280,16 @@ def _keep_commitment(camp: campaign.Campaign, t: Dict, c: Dict, player: str, tod
 
 
 def commitments(camp: campaign.Campaign) -> List[Dict]:
-    """Standing commitments toward third countries: [{"actor", "for", "kind", "target", "when", "treaty"}]."""
-    player = camp.data["player"]
+    """Standing commitments toward third countries, between any two countries: [{"actor", "for", "kind",
+    "target", "when", "treaty"}]."""
     out = []
-    for t in _all(camp):
+    for t in _store(camp):
         if t["status"] != "active":
             continue
         for c in t["clauses"]:
             if actions.is_align(c["key"]) and not c["fired"]:
                 verb, kind, x = c["key"].split(":")
-                actor, ben = (t["with"], player) if verb == "give" else (player, t["with"])
+                actor, ben = (t["with"], t["me"]) if verb == "give" else (t["me"], t["with"])
                 out.append({"actor": actor, "for": ben, "kind": kind, "target": x, "when": t["when"], "treaty": t["id"]})
     return out
 
@@ -463,7 +473,7 @@ def _shown(camp: campaign.Campaign, tid: int, key: str) -> bool:
 
 
 def _get(camp: campaign.Campaign, tid: int) -> Optional[Dict]:
-    return next((t for t in _all(camp) if t["id"] == tid), None)
+    return next((t for t in _store(camp) if t["id"] == tid), None)
 
 
 def next_prompt(camp: campaign.Campaign, player: str) -> Optional[Tuple[Dict, str, str]]:
@@ -545,8 +555,8 @@ def answer(camp: campaign.Campaign, player: str, due: Dict, accepted: bool) -> s
                 f"the treaty of {t['when']} ({t['text']}), breaking its word.")
     _close(t, "broken", today, f"broken by {me_name}")
     _event(camp, "broken", [tag, player], deed)
-    reputation._rep(camp)["deeds"].append({"date": today, "when": campaign.date_words(today), "tags": [player, tag],
-                                           "facts": deed, "weight": None, "verdict": ""})
+    reputation._rep(camp)["deeds"].append({"date": today, "when": campaign.date_words(today), "by": player,
+                                           "tags": [player, tag], "facts": deed, "weight": None, "verdict": ""})
     camp.save()
     return deed
 
@@ -629,7 +639,7 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
 def drop_after(camp: campaign.Campaign, key: str) -> None:
     """An earlier save was loaded: forget treaties made, and steps taken, from that moment on."""
     keep = []
-    for t in _all(camp):
+    for t in _store(camp):
         if t["date"] >= key:
             continue
         for p in t["payments"]:

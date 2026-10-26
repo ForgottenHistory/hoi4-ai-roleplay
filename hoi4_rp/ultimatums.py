@@ -46,8 +46,17 @@ _ULTIMATUM = re.compile(r"\[\[\s*ultimatum\s+(\d+)\s*(months?|weeks?|days?)?\s*[
 _STEPS = ("met", "war", "ready", "extend", "drop")
 
 
+def _store(camp: campaign.Campaign) -> List[Dict]:
+    """Every ultimatum, "from" one country "to" another."""
+    out = camp.data.setdefault("ultimatums", [])
+    for u in out:
+        u.setdefault("to", camp.data["player"])
+    return out
+
+
 def _all(camp: campaign.Campaign) -> List[Dict]:
-    return camp.data.setdefault("ultimatums", [])
+    """The ultimatums to the player."""
+    return [u for u in _store(camp) if u["to"] == camp.data["player"]]
 
 
 def open_from(camp: campaign.Campaign, tag: str) -> Optional[Dict]:
@@ -121,11 +130,11 @@ def issue(camp: campaign.Campaign, tag: str, player: str, months: int, demand: s
     """Set the ultimatum. Returns it and the line to show under the letter."""
     from . import treaties
     deadline = treaties._add_months(key, months)
-    u = {"id": max([x["id"] for x in _all(camp)] or [0]) + 1, "from": tag, "date": key,
+    u = {"id": max([x["id"] for x in _store(camp)] or [0]) + 1, "from": tag, "to": player, "date": key,
          "when": campaign.date_words(key), "deadline": deadline, "demand": demand,
          "items": [k for k in items if k.startswith("ask:")], "status": "open", "closed": "", "how": "",
          "extended": False, "deciding": False, "pushes": []}
-    _all(camp).append(u)
+    _store(camp).append(u)
     _push(camp, u, ("antagonize", "prepare_for_war"), STRATEGY)
     _event(camp, "issued", [tag, player], f"{them_name} gave {me_name} an ultimatum: {demand}, by "
                                           f"{campaign.date_words(deadline)}, or war.")
@@ -453,7 +462,7 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
 def drop_after(camp: campaign.Campaign, key: str) -> None:
     """An earlier save was loaded: forget ultimatums from that moment on, and steps taken since."""
     keep = []
-    for u in _all(camp):
+    for u in _store(camp):
         if u["date"] >= key:
             continue
         if u["closed"] and u["closed"] >= key:

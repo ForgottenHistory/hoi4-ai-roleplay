@@ -6,6 +6,18 @@ Memory is dated in game time. If the game date goes backwards (an earlier save w
 dated after it never happened in this timeline and is dropped.
 
 Files: data/campaigns/<id>.json (git-ignored).
+
+Relationships are stored as pairs, so that any two countries can have them, not only a country and the player
+(SCHEMA 2; older campaigns are converted on load):
+    letters["AUS|FRA"]        the correspondence of two countries (pair(): tags sorted), each letter with "from"
+    policies["FRA>AUS"]       France's policy toward Austria (toward())
+    treaties                  "with" the side that wrote the deal, "me" the other ("give" = with gives me)
+    ultimatums                "from" and "to";  refusals: "from" (who proposed) and "to" (who refused)
+    reputation deeds          "by": the country whose deed it is
+    guarantees ("by", "of"), steering (per country, each push with the country it is about), events ("tags")
+                              were pairs already
+The accessors (letters_with, policy_of, ...) take the other side, the player by default. The reply window's state
+(pending_offer, treaty_due, sent) is the player's alone.
 """
 
 from __future__ import annotations
@@ -20,6 +32,19 @@ from . import bridge
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "campaigns")
 ID_VARIABLE = "global.airp_campaign"
+
+SCHEMA = 2
+
+
+def pair(a: str, b: str) -> str:
+    """The key of what two countries share, in either order: 'AUS|FRA'."""
+    return "|".join(sorted([a, b]))
+
+
+def toward(tag: str, other: str) -> str:
+    """The key of what one country holds toward another: 'FRA>AUS' (France toward Austria)."""
+    return f"{tag}>{other}"
+
 
 _MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
            "October", "November", "December"]
@@ -74,8 +99,27 @@ class Campaign:
             with open(self.path, encoding="utf-8") as f:
                 self.data.update(json.load(f))
         self.data["player"] = player
+        self._migrate()
         if "refusals" not in self.data:
             self.data["refusals"] = self._past_refusals()
+
+    def _migrate(self) -> None:
+        """Campaigns from before relationships were pairs: everything was between a country and the player."""
+        d, p = self.data, self.data["player"]
+        if d.get("schema", 1) >= SCHEMA:
+            return
+        d["letters"] = {(k if "|" in k else pair(k, p)): v for k, v in d.get("letters", {}).items()}
+        if "policies" in d:
+            d["policies"] = {(k if ">" in k else toward(k, p)): v for k, v in d["policies"].items()}
+        for t in d.get("treaties", []):
+            t.setdefault("me", p)
+        for u in d.get("ultimatums", []):
+            u.setdefault("to", p)
+        for r in d.get("refusals", []):
+            r.setdefault("to", p)
+        for x in (d.get("reputation") or {}).get("deeds", []):
+            x.setdefault("by", p)
+        d["schema"] = SCHEMA
 
     def _past_refusals(self) -> List[Dict]:
         """Campaigns from before refusals were stored: rebuild them from 'declined' answers and the
@@ -85,12 +129,13 @@ class Campaign:
             if e.get("type") != "offer_answer" or " declined " not in e["text"] or not e["tags"]:
                 continue
             tag = e["tags"][0]
-            letters = [x for x in self.data["letters"].get(tag, []) if x.get("proposal") or x.get("offer")]
+            letters = [x for x in self.letters_with(tag) if x.get("proposal") or x.get("offer")]
             letters = [x for x in letters if x["date"] <= e["date"]]
             if not letters:
                 continue
             p = letters[-1].get("proposal") or f"give:{letters[-1]['offer']}"
-            out.append({"from": tag, "keys": p if isinstance(p, list) else [p], "date": e["date"]})
+            out.append({"from": tag, "to": self.data["player"], "keys": p if isinstance(p, list) else [p],
+                        "date": e["date"]})
         return out
 
     # ------------------------------------------------------------ persistence
@@ -169,11 +214,38 @@ class Campaign:
         return [e for e in self.data["events"] if tag in e["tags"] or e.get("major")]
 
     # ------------------------------------------------------------ letters
-    def letters_with(self, tag: str) -> List[Dict]:
-        return self.data["letters"].setdefault(tag, [])
+    def letters_with(self, tag: str, other: str = "") -> List[Dict]:
+        """The correspondence between `tag` and `other` (the player by default)."""
+        return self.data["letters"].setdefault(pair(tag, other or self.data["player"]), [])
 
-    def add_letter(self, tag: str, sender: str, text: str, key: str) -> None:
-        self.letters_with(tag).append({"date": key, "when": date_words(key), "from": sender, "text": text})
+    def add_letter(self, tag: str, sender: str, text: str, key: str, other: str = "") -> None:
+        self.letters_with(tag, other).append({"date": key, "when": date_words(key), "from": sender, "text": text})
+
+    def threads(self, of: str = "") -> Dict[str, List[Dict]]:
+        """Every correspondence of `of` (the player by default): the other country -> its letters."""
+        of = of or self.data["player"]
+        out = {}
+        for k, letters in self.data["letters"].items():
+            a, _, b = k.partition("|")
+            if of in (a, b):
+                out[b if a == of else a] = letters
+        return out
+
+    # ------------------------------------------------------------ policies
+    def policy_of(self, tag: str, other: str = "") -> Optional[Dict]:
+        """`tag`'s stored policy toward `other` (the player by default), as stored (see policy.current)."""
+        return self.data.setdefault("policies", {}).get(toward(tag, other or self.data["player"]))
+
+    def set_policy(self, tag: str, p: Dict, other: str = "") -> None:
+        self.data.setdefault("policies", {})[toward(tag, other or self.data["player"])] = p
+
+    def drop_policy(self, tag: str, other: str = "") -> None:
+        self.data.setdefault("policies", {}).pop(toward(tag, other or self.data["player"]), None)
+
+    def policies_toward(self, other: str = "") -> Dict[str, Dict]:
+        """Every stored policy toward `other` (the player by default): country -> policy."""
+        end = ">" + (other or self.data["player"])
+        return {k[:-len(end)]: p for k, p in self.data.get("policies", {}).items() if k.endswith(end)}
 
 
 def read_id(player: str) -> int:

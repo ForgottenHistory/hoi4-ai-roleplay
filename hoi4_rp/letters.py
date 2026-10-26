@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from . import (actions, bridge, campaign, chronicle, game, gamestate, leaders, llm, origins, peace, policy, reputation,
-               story, style, subjects, treaties, ultimatums, war, world)
+               steering, story, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -435,6 +435,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                                                        offers + asks), key, terms)
     _dropped(to, proposals, items)
     outcomes += _set_ultimatum(camp, to, player, rel, ultimatum, items, key, them.name, me.name)
+    outcomes += [n] if (n := steering.take_notice(camp, to, them.name)) else []
     camp.save()
     print(f"{to} replies{' (proposes ' + ', '.join(items) + ')' if items else ''}:\n{reply}")
     if commands:
@@ -757,6 +758,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
                                                            offers + asks), key, terms)
     _dropped(sender, proposals, items)
     outcomes += _set_ultimatum(camp, sender, player, rel, ultimatum, items, key, them.name, me.name)
+    outcomes += [n] if (n := steering.take_notice(camp, sender, them.name)) else []
     camp.save()
     print(f"\n{sender} writes to {player}{' about: ' + reason if reason else ''}"
           f"{' (proposes ' + ', '.join(items) + ')' if items else ''}\n{text}")
@@ -899,6 +901,7 @@ class _Session:
     def __init__(self) -> None:
         self.camp: Optional[campaign.Campaign] = None
         self.resumed: Dict[tuple, float] = {}   # (campaign id, country) -> when its waiting letter was resumed
+        self.steered = 0                         # campaign whose game AI strategies were last brought in line
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
         self.pool = ThreadPoolExecutor(max_workers=1)  # policy refreshes: the slow LLM part runs here
@@ -955,7 +958,8 @@ class _Session:
         if snap["date"] != self.date_seen:
             self.date_seen, self.active_at = snap["date"], now
         camp = self.campaign_for(player, snap["campaign"])
-        if camp.at(snap["date"]):
+        rewound = camp.at(snap["date"])
+        if rewound:
             print(f"{campaign.date_words(snap['date'])}: an earlier save was loaded; later memories dropped")
         old = camp.snapshot
         if old is None or snap["date"] > old["date"]:
@@ -974,6 +978,9 @@ class _Session:
                 for tag, why in treaties.tick(camp, player) + ultimatums.tick(camp, player):
                     if active(snap, tag) and settings().letters.incoming:
                         self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()
+        if rewound or self.steered != camp.id:      # the game's AI follows the policies (steering.py)
+            self.steered = camp.id
+            steering.sync_all(camp)
         if not self.idle() and time.monotonic() >= self.retry_at:
             self.ultimatum_decision(camp, player)
             self.policies(camp, player, snap)
@@ -1156,6 +1163,8 @@ class _Session:
             if p.get("war"):
                 print(f"    war stance {p['war']} (situation: {p['war_baseline']}): {p.get('war_why', '')} "
                       f"Terms: {p.get('terms', '')}")
+            for line in steering.sync(camp, tag):
+                print(line)
             return
         try:
             me = gamestate.country(player)

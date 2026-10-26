@@ -37,6 +37,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/origins.py     how the wars began: who declared on whom and when, from the game, and why
     hoi4_rp/story.py       story events: your country reacts to your letter deals and deeds
     hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
+    hoi4_rp/steering.py    policies steer HOI4's own AI toward the player (add_ai_strategy)
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
@@ -174,6 +175,24 @@ Proposals stay occasional: only an urgent policy (3) makes one the point of a le
 `proposal_gap_days` between proposals from anyone, and an item you declined is off the table for that
 country for `refusal_days` unless something happens in the world between you (war, territory,
 factions, governments). Answering a proposal doesn't refresh the country's policy; world events do.
+
+## The game's AI follows the letters
+
+A country's policy toward you also steers HOI4's own AI (`hoi4_rp/steering.py`), so what it says it does:
+
+- How it answers your own diplomatic requests (military access, docking, market access, a call to arms, joining its
+  faction): friendly +40, cordial +15, wary -20, hostile -50 on the game's acceptance score (shown as "Strategic
+  reasons"), +30 more for what its policy says it would grant.
+- What it wants with you: a friendly country befriends you (its diplomats improve relations), protects and supports
+  you; a cordial one befriends you mildly; a wary one contains you; a hostile one contains and antagonizes you.
+  Protecting, supporting and antagonizing act only within the game's rules (a democracy guarantees from 25% world
+  tension, lend-leases from 50%; a non-aligned country justifies war goals from 50%).
+- Subjects, overlords and faction members only answer your requests (above all a call to arms). At war with you,
+  nothing: the war is the game's. War threats stay with ultimatums.
+
+Each change follows a policy refresh; only the difference is pushed and every push is kept, so it can be taken
+back exactly, and loading an earlier save forgets what came after. When a country's stance toward your requests
+changes, its next letter says so.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)
 

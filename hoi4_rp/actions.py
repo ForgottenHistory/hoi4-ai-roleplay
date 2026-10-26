@@ -1598,16 +1598,29 @@ def outcome_text(shown: List[Tuple[str, bool]]) -> str:
     return "\n".join(f"§{'R' if hostile else 'G'}{line}§!" for line, hostile in shown)
 
 
-MAX_PACKAGE = 3
+MAX_PACKAGE = 6
 
 
 def package(proposals: List[str], allowed: List[str]) -> List[str]:
-    """The proposal items to keep: allowed ones, each once, at most MAX_PACKAGE."""
-    kept = list(dict.fromkeys(p for p in proposals if factory_base(p) in allowed))[:MAX_PACKAGE]
+    """The proposal items to keep: allowed ones, each once, at most MAX_PACKAGE. The resource rights or
+    demilitarization of a state that changes hands in the same package go (the state carries them). Over the limit,
+    gives and asks are kept in turn, so a cut never leaves one side's half alone (Italy's 8 items once came down
+    to the 3 it gave)."""
+    kept = list(dict.fromkeys(p for p in proposals if factory_base(p) in allowed))
     for alone in ("give:peace", "give:submit", "ask:submit", "give:annex"):         # offered on their own, never bundled
         if alone in kept:
             return [alone]
-    return kept
+    moved = {(k.split(":")[0], k.rsplit(":", 1)[1]) for k in kept if is_state(k)}
+    kept = [k for k in kept if not ((is_rights(k) or is_dmz(k)) and (k.split(":")[0], k.rsplit(":", 1)[1]) in moved)]
+    if len(kept) <= MAX_PACKAGE:
+        return kept
+    gives, asks = [k for k in kept if k.startswith("give:")], [k for k in kept if not k.startswith("give:")]
+    chosen = []
+    while len(chosen) < MAX_PACKAGE and (gives or asks):
+        for side in (gives, asks):
+            if side and len(chosen) < MAX_PACKAGE:
+                chosen.append(side.pop(0))
+    return [k for k in kept if k in chosen]                        # in the letter's order
 
 
 def package_text(keys: List[str], who: str = "they") -> str:

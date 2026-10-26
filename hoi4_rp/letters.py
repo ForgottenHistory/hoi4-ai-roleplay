@@ -544,7 +544,8 @@ def _dropped(about: str, proposals: List[str], items: List[str]) -> None:
     """Log proposal items the letter made that weren't allowed or possible, so a lost deal shows in the log."""
     lost = [p for p in proposals if p not in items]
     if lost:
-        print(f"  {about}'s proposal items not possible now, dropped: {', '.join(lost)}")
+        print(f"  {about}'s proposal items dropped (not possible now, already carried by a state in the deal, or past "
+              f"the {actions.MAX_PACKAGE}-item limit): {', '.join(lost)}")
 
 
 _COUNTER = ("You are answering their letter, so you may make a counter-offer: a package that answers what they "

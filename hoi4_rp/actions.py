@@ -23,10 +23,11 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
                               instantly in the receiver's core states at random; [[civ N]] grants them when asked
     [[faction]] [[join]] [[end faction]]   factions (FACTION_NOTE): I join them's faction / them joins mine (also as
                               offer/ask items); them leaves the faction we share, or as its leader expels me
+    [[offer leave]] [[ask leave]]   them leaves its own faction / asks me to leave mine (not one we share)
     [[war TAG]] [[offer war TAG]] [[ask war TAG]]   joining a war (WAR_NOTE): them joins mine against TAG, or asks me
                               to join its war against TAG
-    [[offer attack TAG]] [[ask attack TAG]] [[attack TAG]]   an attack pledge, kept by treaties.py: them joins
-                              the war when I declare war on TAG, or asks me to join when it does
+    [[offer pledge TAG]] [[ask pledge TAG]] [[pledge TAG]]   a war pledge, kept by treaties.py: them joins my
+                              war whenever I go to war with TAG, or asks me to pledge the same
     [[offer rifles N]] [[ask artillery N]] [[trucks N]]   stockpiled equipment as currency (EQUIPMENT)
     Terms over time ([[for 12 months]], instalments [[offer civ 2 x3]]) and [[end treaty]]: treaties.py
 
@@ -151,7 +152,7 @@ class Relation:
     me_in_faction: bool = False
     me_enemies: Dict[str, str] = None     # my enemies them could join a war against: tag -> name (war_gives)
     them_enemies: Dict[str, str] = None   # them's enemies I could join a war against
-    third: Dict[str, Dict] = None         # countries an attack pledge may name: tag -> {name, flags} (attack_*)
+    third: Dict[str, Dict] = None         # countries a war pledge may name: tag -> {name, flags} (pledge_*)
     them_equipment: Dict[str, int] = None  # stockpiles: "rifles"/"artillery"/"trucks" -> amount
     me_equipment: Dict[str, int] = None
 
@@ -320,6 +321,14 @@ DEALS: List[Deal] = [
     Deal("ask:join", "faction", False, True, "ask {me_name} to join your faction", "our membership of their "
          "faction", "{them} = {{ add_to_faction = {me} }}",
          "We joined {them_name}'s faction.", "{me_name} joined {them_name}'s faction.", True),
+    # Leaving a faction at the other's wish (not one they share: that is end:faction). A leader can't leave its own.
+    #     X = { leave_faction = yes }      (checked in game)
+    Deal("give:leave", "leave", False, True, "leave your faction, so that you no longer stand with its members against "
+         "{me_name}", "to leave their faction", "{them} = {{ leave_faction = yes }}",
+         "{them_name} left its faction.", "{them_name} left its faction at {me_name}'s wish."),
+    Deal("ask:leave", "leave", False, True, "ask {me_name} to leave its faction", "our leaving our faction",
+         "{me} = {{ leave_faction = yes }}",
+         "We left our faction.", "{me_name} left its faction at {them_name}'s wish.", True),
     # them acts alone
     Deal("end:faction", "faction", True, False, "leave the faction you share with {me_name} (as its leader: "
          "expel them from it)", "the faction",
@@ -474,15 +483,17 @@ def rights_asks(rel: "Relation") -> List[str]:
     return keys
 
 
-# ---------------------------------------------------------------- joining a war, and attack pledges
+# ---------------------------------------------------------------- joining a war, and war pledges
 # "give:war:ETH": them joins my war against Ethiopia; "ask:war:ETH": them asks me to join its war against Ethiopia.
-# "give:attack:GER": an attack pledge: when I declare war on Germany, them joins it (treaties.py keeps it and carries
-# it out); "ask:attack:GER": them asks me to pledge the same for its own attack. Only between countries at peace.
-# (Joining a war when the other is attacked is what a guarantee already does.)
+# "give:pledge:GER": a war pledge: whenever I go to war with Germany, them joins (treaties.py keeps it and carries
+# it out); "ask:pledge:GER": them asks me to pledge the same. Only between countries at peace. "Goes to war" is any
+# war: declaring it, being attacked, or being called in (the UK and France "declared war" on Germany in 1939 by
+# joining Poland's defensive war, which the game doesn't count as an offensive war). Unlike a guarantee it binds the
+# pledger to the other's own attacks too, and it is aimed at one country.
 #     JOINER = { add_to_war = { targeted_alliance = SIDE enemy = ENEMY hostility_reason = asked_to_join } }
 #                                                                       (checked in game; undone by white_peace)
 
-_COUNTRY_NAMES: Dict[str, str] = {}     # tag -> name, for war and attack keys
+_COUNTRY_NAMES: Dict[str, str] = {}     # tag -> name, for war and pledge keys
 
 
 def joinable_enemies(side: str, joiner: str) -> Dict[str, str]:
@@ -502,7 +513,7 @@ def joinable_enemies(side: str, joiner: str) -> Dict[str, str]:
 
 
 def third_countries(them: str, me: str) -> Dict[str, Dict]:
-    """Countries an attack pledge between them and me may name: the major powers and both sides' neighbours, with
+    """Countries a war pledge between them and me may name: the major powers and both sides' neighbours, with
     whether they are at war with or allied to either side."""
     out: Dict[str, Dict] = {}
     for line in gamestate.query(
@@ -530,19 +541,19 @@ def third_countries(them: str, me: str) -> Dict[str, Dict]:
 WAR_NOTE = ("Joining a war is the gravest commitment short of submission: your soldiers die in another's cause, and "
             "the enemy will treat you as one. A government joins only where its own interests are at stake (an enemy "
             "it fears or covets, a friend it cannot let fall) or for a great price, and only if it can fight; it asks "
-            "it of a country able to help. An attack pledge is a promise for later: when one side declares war on "
-            "the named country, the other joins the war at once, as Italy pledged to join Germany. It turns one "
-            "side's war plans into a shared one: give it only to a power whose war you want, against an enemy you "
-            "would fight anyway. The game holds you to the pledges you give for as long as the treaty stands. "
-            "(Defence against attack is a guarantee's business, not a pledge's.)")
+            "it of a country able to help. A war pledge is a promise for later: whenever one side goes to war with "
+            "the named country (declaring war itself, being attacked, or called in by an ally or guarantee), the "
+            "other joins at once, as Italy pledged itself to Germany in the Pact of Steel. Unlike a guarantee it "
+            "binds you to that side's own attacks too: give it only to a power whose wars against that enemy you "
+            "want to share. The game holds you to the pledges you give for as long as the treaty stands.")
 
 
 def is_war(key: str) -> bool:
     return key.startswith(("give:war:", "ask:war:"))
 
 
-def is_attack(key: str) -> bool:
-    return key.startswith(("give:attack:", "ask:attack:"))
+def is_pledge(key: str) -> bool:
+    return key.startswith(("give:pledge:", "ask:pledge:"))
 
 
 def war_gives(rel: "Relation") -> List[str]:
@@ -554,19 +565,19 @@ def war_asks(rel: "Relation") -> List[str]:
 
 
 def _targetable(info: Dict, attacker: str, joiner: str) -> bool:
-    """May an attack pledge name this country, `attacker` ("me"/"them") attacking it and `joiner` joining? A major
-    power or the attacker's neighbour, at peace with both and allied to neither."""
+    """May a war pledge name this country, `attacker` ("me"/"them") the side going to war with it and `joiner` the
+    side pledging to join? A major power or the attacker's neighbour, at peace with both and allied to neither."""
     f = info["flags"]
     return bool({"major", f"near_{attacker}"} & f) and not (
         {f"war_{attacker}", f"war_{joiner}", f"ally_{attacker}", f"ally_{joiner}", "bound"} & f)
 
 
-def attack_gives(rel: "Relation") -> List[str]:
-    return [f"give:attack:{t}" for t, i in (rel.third or {}).items() if _targetable(i, "me", "them")]
+def pledge_gives(rel: "Relation") -> List[str]:
+    return [f"give:pledge:{t}" for t, i in (rel.third or {}).items() if _targetable(i, "me", "them")]
 
 
-def attack_asks(rel: "Relation") -> List[str]:
-    return [f"ask:attack:{t}" for t, i in (rel.third or {}).items() if _targetable(i, "them", "me")]
+def pledge_asks(rel: "Relation") -> List[str]:
+    return [f"ask:pledge:{t}" for t, i in (rel.third or {}).items() if _targetable(i, "them", "me")]
 
 
 def war_script(joiner: str, side: str, enemy: str) -> str:
@@ -761,6 +772,13 @@ def state_asks(rel: Relation) -> List[str]:
     return keys
 
 
+def _amount(n: str, plural: str) -> str:
+    """'1 civilian factory', '3 civilian factories', '1 truck'."""
+    if n != "1":
+        return f"{n} {plural}"
+    return "1 " + plural.replace("factories", "factory").replace("pieces", "piece").replace("trucks", "truck")
+
+
 def get_deal(key: str) -> Optional[Deal]:
     if is_govt_key(key):
         verb, _, ideology = key.split(":")
@@ -791,7 +809,7 @@ def get_deal(key: str) -> Optional[Deal]:
                     f"We demilitarized {name}.", f"{{me_name}} demilitarized {name} at {{them_name}}'s demand.", True)
     if key.startswith(("give:dismantle", "ask:dismantle")):
         n = (key + ":N").split(":")[2]
-        what = f"{n} military factories"
+        what = _amount(n, "military factories")
         if key.startswith("give:"):
             return Deal(key, "dismantle", False, True, f"dismantle {what} of yours (destroyed, not handed over)",
                         f"dismantling {what}", "", f"{{them_name}} dismantled {what}.",
@@ -799,7 +817,7 @@ def get_deal(key: str) -> Optional[Deal]:
         return Deal(key, "dismantle", False, True, f"demand that {{me_name}} dismantle {what} of its own "
                     f"(destroyed, not handed over)", f"dismantling {what}", "", f"We dismantled {what}.",
                     f"{{me_name}} dismantled {what} at {{them_name}}'s demand.", True)
-    if is_war(key) or is_attack(key):
+    if is_war(key) or is_pledge(key):
         verb, what, tag = key.split(":")
         name = _COUNTRY_NAMES.get(tag, tag)
         if what == "war":
@@ -813,17 +831,17 @@ def get_deal(key: str) -> Optional[Deal]:
                         f"We joined {{them_name}}'s war against {name}.",
                         f"{{me_name}} joined {{them_name}}'s war against {name}.", True)
         if verb == "give":
-            return Deal(key, "attack", False, True, f"pledge to join {{me_name}}'s war at once when {{me_name}} "
-                        f"declares war on {name} ({tag})", f"a pledge to join our attack on {name}", "",
-                        f"{{them_name}} pledged to join us when we declare war on {name}.",
-                        f"{{them_name}} pledged to join {{me_name}} when {{me_name}} declares war on {name}.")
-        return Deal(key, "attack", False, True, f"ask {{me_name}} to pledge to join your war at once when you "
-                    f"declare war on {name} ({tag})", f"our pledge to join their attack on {name}", "",
-                    f"We pledged to join {{them_name}} when it declares war on {name}.",
-                    f"{{me_name}} pledged to join {{them_name}} when {{them_name}} declares war on {name}.", True)
+            return Deal(key, "pledge", False, True, f"pledge to join {{me_name}} at once whenever {{me_name}} goes "
+                        f"to war with {name} ({tag}), whoever starts it", f"a pledge to join our wars with {name}", "",
+                        f"{{them_name}} pledged to join us whenever we go to war with {name}.",
+                        f"{{them_name}} pledged to join {{me_name}} whenever {{me_name}} goes to war with {name}.")
+        return Deal(key, "pledge", False, True, f"ask {{me_name}} to pledge to join you at once whenever you go to "
+                    f"war with {name} ({tag}), whoever starts it", f"our pledge to join their wars with {name}", "",
+                    f"We pledged to join {{them_name}} whenever it goes to war with {name}.",
+                    f"{{me_name}} pledged to join {{them_name}} whenever {{them_name}} goes to war with {name}.", True)
     if is_equipment_key(key):
         verb, kind, n = (key + ":0").split(":")[:3]
-        what = f"{n if n != '0' else 'N'} {EQUIPMENT[kind][1]}"
+        what = _amount(n if n != '0' else 'N', EQUIPMENT[kind][1])
         if verb == "give":
             return Deal(key, "equipment", False, True, f"send {{me_name}} {what} from your stockpile", what, "",
                         f"{{them_name}} sent us {what}.", f"{{them_name}} sent {{me_name}} {what}.")
@@ -831,7 +849,7 @@ def get_deal(key: str) -> Optional[Deal]:
                     f"We sent {{them_name}} {what}.", f"{{me_name}} sent {{them_name}} {what}.", True)
     if is_factory_key(key) or key in FACTORY_KEYS:
         verb, kind, n = (key + ":0").split(":")[:3]
-        what = f"{n} {FACTORIES[kind][1]}" if n != "0" else f"N {FACTORIES[kind][1]}"
+        what = _amount(n if n != "0" else "N", FACTORIES[kind][1])
         if verb == "give":
             return Deal(key, "factories", False, True, f"give {{me_name}} {what} of yours", what, "",
                         f"{{them_name}} gave us {what}.", f"{{them_name}} gave {{me_name}} {what}.")
@@ -907,7 +925,7 @@ def possible(rel: Relation, key: str) -> bool:
         joiner_subject = rel.them_subject if verb == "give" else rel.me_subject
         enemies = (rel.me_enemies if verb == "give" else rel.them_enemies) or {}
         return not rel.at_war and not joiner_subject and tag in enemies
-    if is_attack(key):
+    if is_pledge(key):
         verb, _, tag = key.split(":")
         info = (rel.third or {}).get(tag)
         joiner_subject = rel.them_subject if verb == "give" else rel.me_subject
@@ -922,6 +940,10 @@ def possible(rel: Relation, key: str) -> bool:
                 and not rel.me_subject and not rel.them_subject)
     if key == "end:faction":
         return rel.bound == "faction"
+    if key == "give:leave":                                    # them leaves its own faction (not ours)
+        return not rel.at_war and rel.bound != "faction" and rel.them_in_faction and not rel.them_leader
+    if key == "ask:leave":                                     # I leave mine
+        return not rel.at_war and rel.bound != "faction" and rel.me_in_faction and not rel.me_leader
     if key in FACTORY_KEYS:                                                # the amount comes with the command
         side = rel.them_factories if key.startswith("give:") else rel.me_factories
         kind = key.split(":")[1]
@@ -986,7 +1008,7 @@ def described(key: str) -> str:
         return f"{word(key)} ({get_deal(key).label})"
     if is_subject_key(key):
         return f"subject {key.rsplit(':', 1)[1]} ({_SUBJECT_NAMES.get(key.rsplit(':', 1)[1], '')})"
-    if is_war(key) or is_attack(key):
+    if is_war(key) or is_pledge(key):
         return f"{word(key)} ({_COUNTRY_NAMES.get(key.rsplit(':', 1)[1], '')})"
     if key in ("give:faction", "ask:join"):
         return f"{word(key)} (they would join your faction)"
@@ -1012,10 +1034,10 @@ def _fmt(them_name: str, me_name: str) -> Dict[str, str]:
 
 
 def _item_lines(verb: str, keys: List[str], f: Dict[str, str]) -> List[str]:
-    """One help line per deal item; war and attack items, one per country, are folded into one line each."""
+    """One help line per deal item; war and pledge items, one per country, are folded into one line each."""
     lines, groups = [], {}
     for k in keys:
-        if is_war(k) or is_attack(k):
+        if is_war(k) or is_pledge(k):
             groups.setdefault(k.rsplit(":", 1)[0], []).append(k.rsplit(":", 1)[1])
             continue
         lines.append(f"- [[{verb}{word(k)}{' N' if k in AMOUNT_KEYS else ''}]]: "
@@ -1050,7 +1072,7 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
     gives = (possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
              + possible_keys(rel, govt_gives(rel)) + possible_keys(rel, rights_gives(rel))
              + possible_keys(rel, dmz_gives(rel) + ["give:dismantle"])
-             + possible_keys(rel, EQUIPMENT_GIVES + war_gives(rel) + attack_gives(rel)))
+             + possible_keys(rel, EQUIPMENT_GIVES + war_gives(rel) + pledge_gives(rel)))
     if gives:
         lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
                      f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
@@ -1088,11 +1110,11 @@ FACTION_NOTE = ("A faction is a standing alliance: its members are called into e
 
 
 def _new_goods_notes(keys: List[str]) -> List[str]:
-    """Notes for war, attack pledge, faction and equipment items among `keys`."""
+    """Notes for war, war pledge, faction and equipment items among `keys`."""
     out = []
-    if any(is_war(k) or is_attack(k) for k in keys):
+    if any(is_war(k) or is_pledge(k) for k in keys):
         out.append(WAR_NOTE)
-    if any(k in ("give:faction", "give:join", "ask:faction", "ask:join") for k in keys):
+    if any(k in ("give:faction", "give:join", "ask:faction", "ask:join", "give:leave", "ask:leave") for k in keys):
         out.append(FACTION_NOTE)
     if any(is_equipment_key(k) for k in keys):
         out.append(f"{EQUIPMENT_NOTE} N is a whole number of pieces, at most what the sender has in stock. "
@@ -1150,11 +1172,11 @@ _CEDE = re.compile(r"\[\[\s*state\s+(\d+)\s+to\s+([^\]]+?)\s*\]\]", re.I)   # [[
 _SUBJECT_DEAL = re.compile(r"\[\[\s*(offer|ask)\s+subject\s+([A-Za-z0-9]{3})\s*\]\]", re.I)
 _GOVT = re.compile(r"\[\[\s*(offer\s+|ask\s+)?govt\s+([a-z_]+)\s*\]\]", re.I)   # [[ask govt fascism]]
 _SUBJECT = re.compile(r"\[\[\s*(free|transfer)\s+([^\]]+?)\s*\]\]", re.I)        # [[free Slovakia]]
-_WAR = re.compile(r"\[\[\s*(offer\s+|ask\s+)?(war|attack)\s+(?:against\s+)?([^\]]+?)\s*\]\]", re.I)
+_WAR = re.compile(r"\[\[\s*(offer\s+|ask\s+)?(war|pledge)\s+(?:against\s+)?([^\]]+?)\s*\]\]", re.I)
 
 
 def _country_tag(text: str) -> str:
-    """A country named in a war or attack command: its tag, or the name if it isn't a known one (the command is
+    """A country named in a war or pledge command: its tag, or the name if it isn't a known one (the command is
     then not possible and ignored)."""
     text = re.sub(r"\(.*?\)", "", text).strip()
     tag = _recipient(text, {t: {"name": n} for t, n in _COUNTRY_NAMES.items()})
@@ -1303,7 +1325,7 @@ def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
                             for m in _SUBJECT_DEAL.finditer(text)]
     proposals += [f"{'give' if m.group(1).strip().lower() == 'offer' else 'ask'}:govt:{m.group(2).lower()}"
                   for m in _GOVT.finditer(text) if m.group(1)]
-    for m in _WAR.finditer(text):                      # [[offer war ETH]], [[ask attack Germany]], [[war ETH]]
+    for m in _WAR.finditer(text):                      # [[offer war ETH]], [[ask pledge Germany]], [[war ETH]]
         verb = (m.group(1) or "").strip().lower()
         key = f"{'ask' if verb == 'ask' else 'give'}:{m.group(2).lower()}:{_country_tag(m.group(3))}"
         if verb:
@@ -1367,7 +1389,7 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
         deal = get_deal(key)
         if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)
                         and not is_factory_key(key) and not is_govt_key(key) and not is_rights(key)
-                        and not is_dmz(key) and not is_war(key) and not is_attack(key)):
+                        and not is_dmz(key) and not is_war(key) and not is_pledge(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
@@ -1381,7 +1403,7 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
                 (rel.them_parties if verb == "give" else rel.me_parties).pop(ideology, None)
             continue
-        if is_attack(key):                         # a promise for later: treaties.py keeps and carries it out
+        if is_pledge(key):                         # a promise for later: treaties.py keeps and carries it out
             shown.append((deal.shown.format(**fmt), False))
             events.append({"type": key, "tags": [them, me, key.rsplit(":", 1)[1]], "text": deal.remembered.format(**fmt)})
             continue
@@ -1423,7 +1445,7 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             moved = transfer_factories(giver, receiver, kind, int(n))
             if moved:
                 count, frm, to = moved
-                what = f"{count} {FACTORIES[kind][1]}"
+                what = _amount(str(count), FACTORIES[kind][1])
                 line = (f"{them_name} gave us {what} (from {', '.join(frm[:4])}; built in {', '.join(to[:4])})."
                         if verb == "give" else f"We gave {them_name} {what} (from {', '.join(frm[:4])}).")
                 shown.append((line, verb == "ask"))
@@ -1487,19 +1509,21 @@ def package_text(keys: List[str], who: str = "they") -> str:
     s = lambda verb: verb if plural else verb + "s"
     their = "their" if plural else "its"
     for k in keys:
-        if is_war(k) or is_attack(k):
+        if is_war(k) or is_pledge(k):
             name = _COUNTRY_NAMES.get(k.rsplit(":", 1)[1], k.rsplit(":", 1)[1])
             parts.append({"give:war": f"{who} {s('offer')} to join our war against {name}",
                           "ask:war": f"{who} {s('ask')} us to join {their} war against {name}",
-                          "give:attack": f"{who} {s('pledge')} to join us when we declare war on {name}",
-                          "ask:attack": f"{who} {s('ask')} us to pledge to join {'them' if plural else 'it'} when "
-                                        f"{'they declare' if plural else 'it declares'} war on {name}"}[k.rsplit(":", 1)[0]])
+                          "give:pledge": f"{who} {s('pledge')} to join us whenever we go to war with {name}",
+                          "ask:pledge": f"{who} {s('ask')} us to pledge to join {'them' if plural else 'it'} whenever "
+                                        f"{'they go' if plural else 'it goes'} to war with {name}"}[k.rsplit(":", 1)[0]])
             continue
-        if k in ("give:faction", "give:join", "ask:faction", "ask:join"):
+        if k in ("give:faction", "give:join", "ask:faction", "ask:join", "give:leave", "ask:leave"):
             parts.append({"give:faction": f"{who} {s('offer')} to take us into {their} faction",
                           "give:join": f"{who} {s('offer')} to join our faction",
                           "ask:faction": f"{who} {s('ask')} to join our faction",
-                          "ask:join": f"{who} {s('ask')} us to join {their} faction"}[k])
+                          "ask:join": f"{who} {s('ask')} us to join {their} faction",
+                          "give:leave": f"{who} {s('offer')} to leave {their} faction",
+                          "ask:leave": f"{who} {s('ask')} us to leave our faction"}[k])
             continue
         if is_govt_key(k):
             party = _PARTY_LABELS.get(k, k.rsplit(":", 1)[1])

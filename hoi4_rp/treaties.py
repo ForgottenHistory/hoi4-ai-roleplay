@@ -5,7 +5,7 @@ A deal made by letter may carry terms the mod plays out as the game runs:
                                     membership, resource rights, demilitarized zones) end on their own after this
     [[offer civ 2 x3]]              an amount paid in instalments: 2 now, then 2 every 12 months, 3 payments in all
     [[ask rifles 500 x4 every 6]]   ... every 6 months
-    [[offer attack GER]]            an attack pledge (actions.py): when the other side declares war on Germany,
+    [[offer pledge GER]]            a war pledge (actions.py): whenever the other side goes to war with Germany,
                                     this side joins it
 parse_terms() takes the term and instalment parts out of a letter before actions.parse() reads the rest.
 
@@ -13,7 +13,8 @@ Kept in the campaign (data["treaties"]) and played out by tick() each time the w
     the term ends            -> its agreements end in the game
     an instalment them owes  -> paid automatically (if it can't be paid, it is missed and remembered)
     an instalment I owe      -> the player is asked: Accept pays, Decline refuses (the reply window's buttons)
-    an attack pledge fires   -> them joins the war at once; for my pledge the player is asked to honour it
+    a war pledge is called   -> them joins the war at once; for my pledge the player is asked to honour it
+                                (already at war with that country: honoured as it stands)
     war between the two      -> the treaty lapses
 The player is never bound: refusing is allowed, and it is remembered (the other country sees it, the reputation
 game master judges it, and the country writes about it). The AI keeps its side unless it renounces the treaty in a
@@ -54,15 +55,17 @@ _ENDS = {
 
 _TERM = re.compile(r"\[\[\s*for\s+(\d+)\s*(months?|years?)\s*\]\]", re.I)
 _INSTALMENTS = re.compile(r"\[\[\s*((?:offer|ask)\s+)?(" + "|".join(actions.AMOUNT_KINDS) + r")\s+(\d+)\s*"
-                          r"(?:x|×|times)\s*(\d+)(?:\s*,?\s*every\s+(\d+)\s*(?:months?)?)?\s*\]\]", re.I)
+                          r"(?:(?:x|×|times)\s*(\d+))?(?:\s*,?\s*every\s+(\d+)\s*(?:months?)?)?"
+                          r"(?:\s*,?\s*(?:in|after)\s+(\d+)\s*(months?|years?)?)?\s*\]\]", re.I)
 
 
 # ---------------------------------------------------------------- reading terms from a letter
 
 def parse_terms(text: str) -> Tuple[str, Dict]:
     """Take terms out of the letter: (text with plain commands left, {"months": N, "payments": {key: [count,
-    every]}}). An instalment command becomes the plain one for its first payment: [[offer civ 2 x3]] ->
-    [[offer civ 2]]."""
+    every, start]}}). An instalment command becomes the plain one: [[offer civ 2 x3]] -> [[offer civ 2]], the first
+    payment made now; with "in N months" ([[offer civ 1 in 12 months]]) the first payment waits that long and
+    nothing is paid now (deferred())."""
     terms: Dict = {"months": 0, "payments": {}}
     m = _TERM.search(text)
     if m:
@@ -72,20 +75,32 @@ def parse_terms(text: str) -> Tuple[str, Dict]:
 
     def plain(m: re.Match) -> str:
         verb = (m.group(1) or "").strip().lower()
-        kind, n, count = m.group(2).lower(), int(m.group(3)), int(m.group(4))
+        kind, n, count = m.group(2).lower(), int(m.group(3)), int(m.group(4) or 1)
         every = int(m.group(5) or 12)
-        if count >= 2:
+        start = int(m.group(6) or 0) * (12 if (m.group(7) or "").lower().startswith("year") else 1)
+        if count >= 2 or start:
             key = f"{'ask' if verb == 'ask' else 'give'}:{kind}:{n}"
-            terms["payments"][key] = [min(count, MAX_PAYMENTS), max(EVERY[0], min(EVERY[1], every))]
+            terms["payments"][key] = [min(count, MAX_PAYMENTS), max(EVERY[0], min(EVERY[1], every)),
+                                      min(start, TERM[1])]
         return f"[[{verb + ' ' if verb else ''}{kind} {n}]]"
     return _INSTALMENTS.sub(plain, text), terms
+
+
+def _start(spec: List[int]) -> int:
+    return spec[2] if len(spec) > 2 else 0
+
+
+def deferred(terms: Optional[Dict], key: str) -> bool:
+    """This item is only paid later (its first payment is months away): not to be applied now."""
+    spec = ((terms or {}).get("payments") or {}).get(key)
+    return bool(spec) and _start(spec) > 0
 
 
 def for_items(terms: Optional[Dict], items: List[str]) -> Dict:
     """The part of a letter's terms that concerns these deal items."""
     terms = terms or {}
     pay = {k: v for k, v in (terms.get("payments") or {}).items() if k in items}
-    lasting = any(_endable(k) or actions.is_attack(k) for k in items)
+    lasting = any(_endable(k) or actions.is_pledge(k) for k in items)
     return {"months": terms.get("months", 0) if lasting else 0, "payments": pay}
 
 
@@ -103,10 +118,12 @@ def terms_line(terms: Optional[Dict], items: List[str], them_name: str) -> str:
     parts = []
     if terms["months"]:
         parts.append(f"the agreements last {terms['months']} months, then end")
-    for key, (count, every) in terms["payments"].items():
+    for key, spec in terms["payments"].items():
+        count, every, start = spec[0], spec[1], _start(spec)
         what = actions.get_deal(key).label
-        parts.append(f"{what} paid {count} times, {_every_words(every)}, starting now "
-                     f"({'by ' + them_name if key.startswith('give:') else 'by us'})")
+        when = f"in {start} months" if start else "now"
+        how = f"paid {count} times, {_every_words(every)}, the first {when}" if count > 1 else f"paid {when}"
+        parts.append(f"{what} {how} ({'by ' + them_name if key.startswith('give:') else 'by us'})")
     return f"\n§YTerms: {'; '.join(parts)}.§!" if parts else ""
 
 
@@ -115,11 +132,14 @@ def help_text() -> str:
     return (f"TERMS. A deal can run over time. Add these next to the deal's commands; they apply to the agreements and "
             f"proposal in this letter:\n"
             f"- [[for N months]]: its agreements (pact, access, docking rights, guarantee, faction membership, resource "
-            f"rights, demilitarized zones) and attack pledges last N months ({TERM[0]} to {TERM[1]}), then end on "
+            f"rights, demilitarized zones) and war pledges last N months ({TERM[0]} to {TERM[1]}), then end on "
             f"their own. Without it they last until someone ends them.\n"
             f"- Instalments: add xK to an amount's command, e.g. [[offer civ 2 x3]] = 2 now and 2 every year, 3 "
             f"payments in all, or [[ask rifles 1000 x4 every 6]] for every 6 months (up to {MAX_PAYMENTS} payments, "
-            f"every {EVERY[0]} to {EVERY[1]} months). Later instalments fall due on their own; a side that stops "
+            f"every {EVERY[0]} to {EVERY[1]} months). Add 'in N months' for a payment that starts later, with "
+            f"nothing now: 2 factories now and 1 more in a year is [[offer civ 2]] [[offer civ 1 in 12 months]] "
+            f"(the same amount now and later is [[offer civ 1 x2]]). Later instalments fall due on their own; a side "
+            f"that stops "
             f"paying breaks the treaty, and it is remembered.\n"
             f"Use terms where they make a deal fairer or more believable (access for a year, aid paid over years, a "
             f"price paid in parts), not in every deal.")
@@ -128,7 +148,15 @@ def help_text() -> str:
 # ---------------------------------------------------------------- keeping treaties
 
 def _all(camp: campaign.Campaign) -> List[Dict]:
-    return camp.data.setdefault("treaties", [])
+    out = camp.data.setdefault("treaties", [])
+    for t in out:                                   # war pledges were "attack" keys at first
+        if any(":attack:" in k for k in t["items"]):
+            fix = lambda k: k.replace(":attack:", ":pledge:")
+            t["items"] = [fix(k) for k in t["items"]]
+            t["labels"] = {fix(k): v for k, v in t["labels"].items()}
+            for c in t["clauses"]:
+                c["key"] = fix(c["key"])
+    return out
 
 
 def _due(camp: campaign.Campaign) -> List[Dict]:
@@ -146,13 +174,16 @@ def _add_months(key: str, months: int) -> str:
 
 
 def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optional[Dict], key: str,
-           them_name: str) -> Optional[Dict]:
-    """A deal with `tag` was just put in place (`applied`: the deal keys that took effect). Keep it as a treaty
-    if it runs over time: a term, instalments still to come, or an attack pledge."""
+           them_name: str, later: List[str] = ()) -> Optional[Dict]:
+    """A deal with `tag` was just put in place (`applied`: the deal keys that took effect now; `later`: payments
+    agreed to start later, see deferred()). Keep it as a treaty if it runs over time: a term, instalments still to
+    come, or a war pledge."""
+    applied = list(applied) + [k for k in later if k not in applied]
     terms = for_items(terms, applied)
-    payments = [{"key": k, "count": c, "every": e, "paid": [key], "missed": []}
-                for k, (c, e) in terms["payments"].items()]
-    clauses = [{"key": k, "fired": "", "asked": ""} for k in applied if actions.is_attack(k)]
+    payments = [{"key": k, "count": spec[0], "every": spec[1], "start": _start(spec),
+                 "paid": [] if _start(spec) else [key], "missed": []}
+                for k, spec in terms["payments"].items()]
+    clauses = [{"key": k, "fired": "", "asked": ""} for k in applied if actions.is_pledge(k)]
     until = _add_months(key, terms["months"]) if terms["months"] else ""
     if not (payments or clauses or (until and any(_endable(k) for k in applied))):
         return None
@@ -168,14 +199,15 @@ def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optiona
     _all(camp).append(t)
     print(f"  treaty {t['id']} with {tag}: {t['text']}"
           + (f"; until {campaign.date_words(until)}" if until else "")
-          + "".join(f"; {p['key']} x{p['count']} every {p['every']} months" for p in payments))
+          + "".join(f"; {p['key']} x{p['count']} every {p['every']} months"
+                    + (f", the first in {p['start']} months" if p["start"] else "") for p in payments))
     return t
 
 
-def _event(camp: campaign.Campaign, kind: str, tags: List[str], text: str) -> None:
+def _event(camp: campaign.Campaign, kind: str, tags: List[str], text: str, **extra) -> None:
     key = camp.data.get("last_date") or ""
     camp.add_events([{"date": key, "when": campaign.date_words(key), "type": f"treaty:{kind}", "tags": tags,
-                      "text": text, "major": False}])
+                      "text": text, "major": False, **extra}])
     print(f"  [treaty] {text}")
 
 
@@ -188,7 +220,7 @@ def _left(p: Dict) -> int:
 
 
 def _next_due(t: Dict, p: Dict) -> str:
-    return _add_months(t["date"], p["every"] * (len(p["paid"]) + len(p["missed"])))
+    return _add_months(t["date"], p.get("start", 0) + p["every"] * (len(p["paid"]) + len(p["missed"])))
 
 
 def _done(t: Dict) -> bool:
@@ -281,22 +313,30 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
             if c["fired"] or c["asked"]:
                 continue
             verb, _, enemy = c["key"].split(":")
-            attacker = player if verb == "give" else tag
-            if not bridge.trigger(f"{attacker} = {{ has_offensive_war_with = {enemy} }}"):
-                continue
+            side, joiner = (player, tag) if verb == "give" else (tag, player)
+            if not bridge.trigger(f"{side} = {{ has_war_with = {enemy} }}"):
+                continue                                # the pledge isn't called yet
             enemy_name = countries.get(enemy, {}).get("name", enemy)
-            if verb == "give":                          # them keeps its word
-                if bridge.trigger(f"{tag} = {{ has_war_with = {enemy} }}") or \
-                        actions._effect(actions.war_script(tag, player, enemy)):
+            side_name, joiner_name = (me_name, them_name) if verb == "give" else (them_name, me_name)
+            changed = True
+            if bridge.trigger(f"{joiner} = {{ has_war_with = {enemy} }}"):
+                c["fired"] = today                      # already in that war: the pledge is kept as it stands
+                _event(camp, "clause", [tag, player, enemy], f"{joiner_name} stands at war with {enemy_name} beside "
+                                                             f"{side_name}, as it pledged in the treaty of {t['when']}.", joiner=joiner)
+            elif verb == "give":                        # them keeps its word
+                if actions._effect(actions.war_script(tag, player, enemy)) and \
+                        bridge.trigger(f"{tag} = {{ has_war_with = {enemy} }}"):
                     c["fired"] = today
-                    text = (f"Honouring the treaty of {t['when']}, {them_name} joined {me_name}'s war on "
+                    text = (f"Honouring the treaty of {t['when']}, {them_name} joined {me_name}'s war with "
                             f"{enemy_name}, as it had pledged.")
-                    _event(camp, "clause", [tag, player, enemy], text)
+                    _event(camp, "clause", [tag, player, enemy], text, joiner=tag)
                     letters.append((tag, text))
+                else:
+                    c["asked"] = today                  # the game wouldn't let it join: don't try every tick
+                    print(f"  treaty {t['id']}: {tag} could not join the war with {enemy}")
             else:
                 c["asked"] = today
                 _due(camp).append({"treaty": t["id"], "kind": "clause", "key": c["key"], "date": today, "n": 0})
-            changed = True
         if _done(t):
             _close(t, "fulfilled", today, "all of it was carried out")
             changed = True
@@ -336,9 +376,10 @@ def next_prompt(camp: campaign.Campaign, player: str) -> Optional[Tuple[Dict, st
         else:
             enemy = d["key"].rsplit(":", 1)[1]
             enemy_name = (camp.snapshot or {}).get("countries", {}).get(enemy, {}).get("name", enemy)
-            text = (f"§Y{them_name} has declared war on {enemy_name}. Under the treaty of {t['when']}, {me_name} "
-                    f"pledged to join it.§!\n\nAccept honours the treaty: we go to war with {enemy_name} at once. "
-                    f"Decline breaks our word: {them_name} and the world will remember it.")
+            text = (f"§Y{them_name} is at war with {enemy_name}. Under the treaty of {t['when']}, {me_name} "
+                    f"pledged to join {them_name} whenever it goes to war with {enemy_name}.§!\n\nAccept honours "
+                    f"the treaty: we go to war with {enemy_name} at once. Decline breaks our word: {them_name} and the "
+                    f"world will remember it.")
         return d, t["with"], text
     return None
 
@@ -385,12 +426,12 @@ def answer(camp: campaign.Campaign, player: str, due: Dict, accepted: bool) -> s
                 if c:
                     c["fired"] = today
                 _event(camp, "clause", [tag, player, enemy], f"Honouring the treaty of {t['when']}, {me_name} joined "
-                                                             f"{them_name}'s war against {enemy_name}.")
+                                                             f"{them_name}'s war against {enemy_name}.", joiner=player)
             if _done(t):
                 _close(t, "fulfilled", today, "all of it was carried out")
             camp.save()
             return ""
-        deed = (f"{them_name} declared war on {enemy_name}, and {me_name} refused to join it as it had pledged in "
+        deed = (f"{them_name} went to war with {enemy_name}, and {me_name} refused to join it as it had pledged in "
                 f"the treaty of {t['when']} ({t['text']}), breaking its word.")
     _close(t, "broken", today, f"broken by {me_name}")
     _event(camp, "broken", [tag, player], deed)
@@ -402,8 +443,14 @@ def answer(camp: campaign.Campaign, player: str, due: Dict, accepted: bool) -> s
 
 # ---------------------------------------------------------------- the AI's side
 
+def standing(camp: campaign.Campaign, tag: str) -> set:
+    """War pledges between `tag` and the player that stand now (not called yet): not to be made twice."""
+    return {c["key"] for t in _all(camp) if t["with"] == tag and t["status"] == "active"
+            for c in t["clauses"] if not c["fired"]}
+
+
 def owes(camp: campaign.Campaign, tag: str) -> List[Dict]:
-    """Active treaties in which `tag` still owes the player something (instalments or an attack pledge)."""
+    """Active treaties in which `tag` still owes the player something (instalments or a war pledge)."""
     return [t for t in _all(camp) if t["with"] == tag and t["status"] == "active"
             and (any(p["key"].startswith("give:") and _left(p) > 0 for p in t["payments"])
                  or any(c["key"].startswith("give:") and not c["fired"] for c in t["clauses"]))]
@@ -448,7 +495,7 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
                 enemy = (camp.snapshot or {}).get("countries", {}).get(c["key"].rsplit(":", 1)[1], {}).get(
                     "name", c["key"].rsplit(":", 1)[1])
                 who, whom = (them_name, me_name) if c["key"].startswith("give:") else (me_name, them_name)
-                bits.append(f"Attack pledge: {who} joins the war when {whom} declares war on {enemy}"
+                bits.append(f"War pledge: {who} joins {whom} whenever {whom} goes to war with {enemy}"
                             + (f" (honoured {campaign.date_words(c['fired'])})." if c["fired"] else " (stands)."))
         else:
             bits.append(f"{t['status'].upper()} on {campaign.date_words(t['closed'])}: {t['how']}.")

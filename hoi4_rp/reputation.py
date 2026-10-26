@@ -50,6 +50,7 @@ def _rep(camp: campaign.Campaign) -> Dict:
     rep.setdefault("deeds", [])
     rep.setdefault("promises", [])
     rep.setdefault("threats", [])
+    rep["threats"] = [t for t in rep["threats"] if not _none(t["text"])]   # "none — no threats made", read as one
     return rep
 
 
@@ -76,6 +77,16 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
 
     attacked: List[str] = []                      # countries the player went to war with as the attacker
     defended: Dict[str, List[str]] = {}           # a ward it guaranteed -> the countries it fights for it
+    # Wars the player chose to enter beside someone else, by a letter deal ([[ask war X]]) or by honouring a war
+    # pledge: not offensive in the game's eyes (it joins the other's side), but its own choice all the same.
+    since = campaign.shift(new["date"], -30)
+    joined_with: Dict[str, str] = {}              # enemy -> the country whose war it joined
+    for x in camp.data["events"]:
+        kind = x.get("type", "")
+        if x["date"] >= since and len(x["tags"]) >= 3 and (
+                kind.startswith("ask:war:") or (kind == "treaty:clause" and x.get("joiner") == player)):
+            joined_with[x["tags"][2]] = x["tags"][0]
+    joined: Dict[str, List[str]] = {}             # ally -> enemies the player joined its war against
     for e in events:
         if player not in e["tags"]:
             continue
@@ -85,6 +96,8 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
         if e["type"] == "war" and other:
             if bridge.trigger(f"{player} = {{ has_offensive_war_with = {other} }}"):
                 attacked.append(other)
+            elif other in joined_with:
+                joined.setdefault(joined_with[other], []).append(other)
             else:
                 # Called to defend a country it guaranteed?
                 for ward, kinds in old_ties.items():
@@ -98,6 +111,9 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
 
     if attacked:
         deeds.append(_war_deed(camp, player, p, new, attacked, batch, lord_of, old_ties, name))
+    for ally, enemies in joined.items():
+        deeds.append(_war_deed(camp, player, p, new, enemies, batch, lord_of, old_ties, name,
+                               how=f"entered the war, by its own choice, joining {name(ally)}'s war against"))
     for ward, enemies in defended.items():
         deeds.append(_deed(new, [player, ward] + enemies,
                            f"{p} went to war against {', '.join(name(t) for t in enemies)} in defence of "
@@ -120,9 +136,10 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
 
 
 def _war_deed(camp: campaign.Campaign, player: str, p: str, new: Dict, attacked: List[str], batch, lord_of,
-              old_ties: Dict[str, List[str]], name) -> Dict:
-    """One deed for every war the player started at one moment: a declaration on one country brings in its
-    subjects, faction and guarantors, all of whom are listed, and the war is judged once, not once per country."""
+              old_ties: Dict[str, List[str]], name, how: str = "went to war, as the attacker, against") -> Dict:
+    """One deed for every war the player started (or chose to join: `how`) at one moment: a declaration on one
+    country brings in its subjects, faction and guarantors, all of whom are listed, and the war is judged once, not
+    once per country."""
     drawn = [t for (kind, t) in batch if kind == "war" and lord_of(t) in attacked and t not in attacked]
     party = attacked + drawn
     countries = (camp.snapshot or {}).get("countries", {})
@@ -140,7 +157,7 @@ def _war_deed(camp: campaign.Campaign, player: str, p: str, new: Dict, attacked:
                + ", all at the same moment: one declaration brings in the target's faction, guarantors and "
                  "subjects, so most of these were drawn in rather than chosen. Judge it as one war, by whom "
                  f"{p} meant to attack and why")
-    facts = (f"{p} went to war, as the attacker, against {who}."
+    facts = (f"{p} {how} {who}."
              + (f" Just before, there was {'; '.join(ties)}." if ties else " Nothing bound them by treaty just before.")
              + (f" Deals between them in the last two years: {' '.join(deals)}" if deals else "")
              + " " + _war_goals(player, p, party, old_ties, name)
@@ -204,7 +221,9 @@ def promise_messages(player_name: str, to_name: str, letter: Dict) -> List[Dict[
 
 
 def _none(s: str) -> bool:
-    return s.strip(" .*()[]").lower() in ("", "none", "nothing", "n/a", "no promises", "no threats")
+    s = s.strip(" .*()[]").lower()
+    # "none", but also "none — no threats made", "nothing of the kind"
+    return s in ("", "no promises", "no threats") or bool(re.match(r"(none|nothing|n/a)\b", s))
 
 
 def read_promises(text: str) -> List[str]:

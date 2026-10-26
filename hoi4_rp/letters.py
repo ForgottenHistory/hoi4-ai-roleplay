@@ -1022,10 +1022,26 @@ class _Session:
         write_first(self.camp, player, tag, reason)
 
 
+def _wait_for_game() -> str:
+    """The player's tag, once HOI4 is running with a game loaded (main menu or loading screen: wait)."""
+    said = ""
+    while True:
+        try:
+            return bridge.player_tag()
+        except bridge.BridgeUnavailable:
+            msg = "waiting for HOI4 / the bridge..."
+        except RuntimeError:
+            msg = "waiting for a game to be loaded..."
+        if msg != said:
+            print(msg)
+            said = msg
+        time.sleep(3)
+
+
 def story_now() -> int:
     """`python -m hoi4_rp story`: write a story event about the latest telling moment now (ignoring the gap and
     how fresh it is), show it, wait for the pick and apply it. For trying events out."""
-    player = bridge.player_tag()
+    player = _wait_for_game()
     camp = campaign.Campaign(campaign.read_id(player), player)
     found = sorted([m for m in story.moments(camp, player) if m.weight >= 2], key=lambda m: m.date)
     if not found:

@@ -743,6 +743,8 @@ def _commit_ok(kind: str, info: Dict, actor: str, ben: str) -> bool:
         return f"threat_{ben}" in f and not (kind == "sanction" and f"embargoed_{actor}" in f)
     if {f"threat_{ben}", f"war_{ben}", f"ally_{actor}", f"embargoed_{actor}"} & f:
         return False
+    if kind == "befriend" and f"friend_{actor}" in f:
+        return False            # a guarantee either way already binds them (Czechoslovakia "courting" France, 1936)
     # and one that matters to the side it is for: its neighbour or friend, or a major on its continent
     near_ben = bool({f"near_{ben}", f"friend_{ben}", f"ally_{ben}"} & f)
     if kind == "back":

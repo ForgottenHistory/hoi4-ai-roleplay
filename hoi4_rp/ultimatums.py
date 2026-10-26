@@ -9,10 +9,13 @@ Python checks it may (allowed(): at peace, not bound, its policy not friendly, n
 Accepting the proposal meets it. At the deadline (tick()), if every demanded item has happened it is met; otherwise
 the country decides in a background LLM call (decision_messages() / read_decision()):
     MET     the demands were met after all: it is satisfied
-    WAR     it declares war now. Only if it is at peace with everyone and its army is the stronger
-            (strength_ratio); otherwise it becomes READY: a war it can't start now waits for the game's AI
-    READY   a war goal on the player (create_wargoal) and the game's AI told to declare when it judges itself ready
-            (add_ai_strategy declare_war); the war comes when it comes
+    WAR     it declares war now. Only if it is at peace with everyone else and its side would be the stronger
+            (balance(): both sides as they would fight, allies, subjects, guarantors and pledges included);
+            otherwise it becomes READY
+    READY   a war goal on the player (create_wargoal) and its armies readied (add_ai_strategy prepare_for_war), but
+            no push to declare: that once made HOI4's AI strike within the hour, against the government's own
+            judgement (Italy, alone against Austria's guarantors, 1939). Every REVIEW_MONTHS it reconsiders (the
+            same decision: WAR if the balance allows, READY to keep waiting, DROP to stand down)
     EXTEND  more time, once, up to MAX_EXTENSION months
     DROP    it backs down: the strategies are withdrawn, and the threat came to nothing
 Effects checked in game: create_wargoal (take_state_focus with a generator of state ids, or annex_everything),
@@ -31,11 +34,12 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-from . import actions, bridge, campaign
+from . import actions, bridge, campaign, gamestate
 
 MAX_MONTHS = 12          # the longest deadline an ultimatum may set
 MIN_MONTHS = 1
 MAX_EXTENSION = 6
+REVIEW_MONTHS = 3        # a readied country reconsiders this often
 STRATEGY = 150           # weight given to the game's AI strategies against the player
 
 _ULTIMATUM = re.compile(r"\[\[\s*ultimatum\s+(\d+)\s*(months?|weeks?|days?)?\s*[:\-–,]?\s*([^\]]*)\]\]", re.I)
@@ -247,13 +251,17 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
                 u["deciding"] = True
                 print(f"  ultimatum {u['id']} from {tag}: deadline passed, deciding")
             changed = True
+        elif u["status"] == "ready" and not u["deciding"] and today >= u.get("review", u["deadline"]):
+            u["deciding"] = True
+            print(f"  ultimatum {u['id']} from {tag}: readied for war, reconsidering")
+            changed = True
     if changed:
         camp.save()
     return letters
 
 
 def next_decision(camp: campaign.Campaign) -> Optional[Dict]:
-    return next((u for u in _all(camp) if u["status"] == "open" and u["deciding"]), None)
+    return next((u for u in _all(camp) if u["status"] in ("open", "ready") and u["deciding"]), None)
 
 
 def decision_messages(camp: campaign.Campaign, u: Dict, context: str, them_name: str, me_name: str,
@@ -264,20 +272,23 @@ def decision_messages(camp: campaign.Campaign, u: Dict, context: str, them_name:
              if e["date"] >= u["date"] and u["from"] in e["tags"] and camp.data["player"] in e["tags"]]
     letters = [f"--- {x['when']}, {them_name if x['from'] == u['from'] else me_name} wrote:\n{x['text'][:1500]}"
                for x in camp.letters_with(u["from"]) if x["date"] >= u["date"]]
+    review = u["status"] == "ready"
     options = ("MET (the demands were met after all: you are satisfied), WAR (declare war now), READY (keep your "
-               "armies on the border and strike when your generals judge the moment right), "
-               + ("" if u["extended"] else f"EXTEND (give them up to {MAX_EXTENSION} more months, once), ")
-               + "or DROP (back down)")
+               f"armies on the border and wait; you reconsider in {REVIEW_MONTHS} months), "
+               + ("" if u["extended"] or review else f"EXTEND (give them up to {MAX_EXTENSION} more months, once), ")
+               + ("or DROP (stand down: withdraw your war goal and armies)" if review else "or DROP (back down)"))
     return [{"role": "system", "content":
              f"{context}\n\nYOUR ULTIMATUM: on {u['when']} you gave {me_name} an ultimatum: {u['demand']}, by "
-             f"{campaign.date_words(u['deadline'])}, or war. That deadline has passed.\n"
+             f"{campaign.date_words(u['deadline'])}, or war. That deadline has passed"
+             + (f"; you readied for war ({campaign.date_words(u['closed'])}): you hold a war goal on {me_name} and "
+                f"your armies prepare. You now reconsider whether to strike.\n" if review else ".\n")
              + (f"Demanded items done: {', '.join(label(k) for k in done) or 'none'}. Still outstanding: "
                 f"{', '.join(label(k) for k in left) or 'none'}.\n" if u["items"] else "")
              + f"Since then, between you:\n" + ("\n".join(since) or "- nothing recorded") + "\n\n"
              + "Letters since:\n" + ("\n\n".join(letters) or "none") + f"\n\n{strength}\n\n"
              f"Decide as {them_name}'s government now would, as a shrewd player of your country: war is costly "
-             f"and can be lost, but an ultimatum you don't carry out costs you all credibility with {me_name} and "
-             f"the world. Your options: {options}."},
+             f"and can be lost, above all against a stronger coalition; but an ultimatum you don't carry out costs "
+             f"you credibility with {me_name} and the world. Your options: {options}."},
             {"role": "user", "content":
              "Answer with exactly these lines:\nDECISION: one of MET, WAR, READY, EXTEND, DROP\n"
              "MONTHS: for EXTEND, how many more months; otherwise 0\nWHY: one sentence"}]
@@ -292,15 +303,61 @@ def read_decision(text: str) -> Tuple[str, int, str]:
     return step, int(m.group(1)) if m else 0, (w.group(1).strip(" *") if w else "")
 
 
-def strength_line(tag: str, player: str, them_name: str, me_name: str) -> str:
-    """For the decision: who would win, and what else the country is fighting."""
-    stronger = bridge.trigger(f"{tag} = {{ strength_ratio = {{ tag = {player} ratio > 1 }} }}")
-    far = bridge.trigger(f"{tag} = {{ strength_ratio = {{ tag = {player} ratio > 2 }} }}")
-    busy = bridge.trigger(f"{tag} = {{ has_war = yes }}")
-    return (f"STRENGTH: {them_name}'s army is " + ("far stronger than" if far else "stronger than" if stronger
-                                                 else "not stronger than") + f" {me_name}'s"
-            + (f"; {them_name} is already fighting another war, so a new one would wait for its generals"
-               if busy else "") + ".")
+def _side(tag: str) -> List[str]:
+    """A country, its faction, its subjects and its overlord: who fights its war."""
+    lines = gamestate.query(
+        f'{tag} = {{ log = "AIRPS|[THIS.GetTag]" '
+        f'if = {{ limit = {{ is_in_faction = yes }} every_faction_member = {{ log = "AIRPS|[THIS.GetTag]" }} }} '
+        f'every_other_country = {{ limit = {{ OR = {{ is_subject_of = {tag} {tag} = {{ is_subject_of = PREV }} }} }} '
+        f'log = "AIRPS|[THIS.GetTag]" }} }}')
+    return list(dict.fromkeys(x[6:].strip() for x in lines if x.startswith("AIRPS|")))
+
+
+def balance(camp: campaign.Campaign, tag: str, player: str, them_name: str, me_name: str) -> Tuple[str, bool]:
+    """Both sides as they would fight a war between `tag` and the player, from the game: theirs (faction, subjects,
+    overlord, and whoever already fights the player) against the player's (the same, its guarantors, and countries
+    pledged to it by treaty). Returns (the section for the decision, whether `tag`'s side is the stronger)."""
+    from . import treaties
+    mine = _side(player)
+    q = gamestate.query
+    guards = [x[6:].strip() for x in q(f'{player} = {{ every_other_country = {{ limit = {{ has_guaranteed = {player} }} '
+                                       f'log = "AIRPG|[THIS.GetTag]" }} }}') if x.startswith("AIRPG|")]
+    pledged = [t["with"] for t in treaties._all(camp) if t["status"] == "active"
+               and any(c["key"] == f"give:pledge:{tag}" and not c["fired"] for c in t["clauses"])]
+    foes = [x[6:].strip() for x in q(f'{player} = {{ every_other_country = {{ limit = {{ has_war_with = {player} }} '
+                                     f'log = "AIRPF|[THIS.GetTag]" }} }}') if x.startswith("AIRPF|")]
+    theirs = _side(tag) + foes
+    both = set(theirs) & set(mine + guards + pledged)
+    theirs = [t for t in dict.fromkeys(theirs) if t not in both]
+    allies = [t for g in dict.fromkeys(guards + pledged) for t in _side(g)]     # a guarantor brings its faction
+    helpers = [t for t in dict.fromkeys(allies) if t not in both and t not in mine and t not in theirs]
+    everyone = theirs + mine + helpers
+    stats: Dict[str, Tuple[str, float, float, float]] = {}
+    for line in q('every_country = { limit = { OR = { ' + " ".join(f"tag = {t}" for t in everyone) + ' } '
+                  'has_capitulated = no } log = "AIRPB|[THIS.GetTag]|[THIS.GetName]|[?THIS.num_divisions]|'
+                  '[?THIS.deployed_army_manpower_k]|[?THIS.num_of_military_factories]" }'):
+        f = line.split("|")
+        if f[0] == "AIRPB" and len(f) >= 6:
+            try:
+                stats[f[1].strip()] = (f[2].strip(), float(f[3]), float(f[4]), float(f[5]))
+            except ValueError:
+                pass
+    total = lambda tags: [sum(stats[t][i] for t in tags if t in stats) for i in (1, 2, 3)]
+    names = lambda tags: ", ".join(stats[t][0] for t in tags if t in stats) or "none"
+    a, b = total(theirs), total(mine + helpers)
+    ratio = (a[1] / max(b[1], 1) + a[2] / max(b[2], 1)) / 2           # soldiers and arms industry
+    busy = bridge.trigger(f"{tag} = {{ has_war = yes }}") and not bridge.trigger(f"{tag} = {{ has_war_with = {player} }}")
+    word = ("far stronger" if ratio >= 2 else "stronger" if ratio > 1 else "weaker" if ratio > 0.5 else "far weaker")
+    text = (f"THE BALANCE IF IT COMES TO WAR (from the game: who would fight on each side):\n"
+            f"- Your side: {names(theirs)}: {a[0]:.0f} divisions, {a[1]:.0f}k soldiers deployed, {a[2]:.0f} military "
+            f"factories.\n"
+            f"- {me_name}'s side: {names(mine)}"
+            + (f", with its guarantors and treaty allies {names(helpers)}" if helpers else "")
+            + f": {b[0]:.0f} divisions, {b[1]:.0f}k soldiers, {b[2]:.0f} military factories.\n"
+            f"A guarantor usually honours its guarantee, a faction is called in, a treaty pledge is kept. Your side "
+            f"is {word} (about {ratio:.1f} to 1 in soldiers and arms industry)."
+            + (f" You are already fighting another war: a new one waits until your generals are free." if busy else ""))
+    return text, ratio > 1 and not busy
 
 
 def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -> str:
@@ -309,11 +366,16 @@ def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -
     tag = u["from"]
     them_name, me_name = _names(camp, tag)
     u["deciding"] = False
-    if step == "extend" and u["extended"]:
+    review = u["status"] == "ready"                    # a readied country reconsidering
+    if step == "extend" and (u["extended"] or review):
         step = "ready"
-    if step == "war" and (bridge.trigger(f"{tag} = {{ has_war = yes }}")
-                          or not bridge.trigger(f"{tag} = {{ strength_ratio = {{ tag = {player} ratio > 1 }} }}")):
-        step = "ready"                                 # it can't strike now: its generals choose the moment
+    if step == "war" and not balance(camp, tag, player, them_name, me_name)[1]:
+        step = "ready"                                 # its side is the weaker, or busy: it can't strike now
+    if review and step == "ready":
+        from . import treaties
+        u["review"] = treaties._add_months(camp.data.get("last_date") or u["deadline"], REVIEW_MONTHS)
+        camp.save()
+        return ""                                      # still waiting: nothing new to write about
     reason = f" ({why})" if why else ""
     if step == "met":
         _close(camp, u, "met", f"{them_name} judged its demands met")
@@ -334,7 +396,8 @@ def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -
         _event(camp, "dropped", [tag, player], text)
     else:
         wargoal = _wargoal(u)
-        actions._effect(f"{tag} = {{ create_wargoal = {{ {wargoal} target = {player} }} }}")
+        if not review:
+            actions._effect(f"{tag} = {{ create_wargoal = {{ {wargoal} target = {player} }} }}")
         if step == "war" and actions._effect(f"{tag} = {{ declare_war_on = {{ target = {player} "
                                              f"{wargoal.split(' generator')[0]} }} }}") \
                 and bridge.trigger(f"{tag} = {{ has_war_with = {player} }}"):
@@ -343,8 +406,10 @@ def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -
             text = f"{them_name}'s ultimatum to {me_name} ran out, and {them_name} declared war{reason}."
             _event(camp, "war", [tag, player], text)
         else:
+            from . import treaties
             _close(camp, u, "ready", f"{them_name} readied for war")
-            _push(camp, u, ("antagonize", "prepare_for_war", "declare_war", "conquer"), STRATEGY * 2)
+            u["review"] = treaties._add_months(camp.data.get("last_date") or u["deadline"], REVIEW_MONTHS)
+            _push(camp, u, ("prepare_for_war",), STRATEGY)
             text = (f"{them_name}'s ultimatum to {me_name} ran out unmet. {them_name} holds a war goal against "
                     f"{me_name} and readies its armies to strike when it judges the moment right{reason}.")
             _event(camp, "ready", [tag, player], text)

@@ -134,9 +134,12 @@ policy, and one at a time per country.
 - Accepting the proposal meets it. Giving what was demanded some other way before the deadline does too; it's
   checked in the game (the state is theirs, the access exists, the party rules...).
 - At the deadline the country decides in the background, as a shrewd player of that country: satisfied, war now,
-  ready (a war goal on you, and HOI4's AI told to declare when it judges itself ready), more time (once), or back
-  down. War now only if it is at peace with everyone else and its army is the stronger; otherwise it waits for
-  its generals, so Germany won't turn on you in the middle of Poland.
+  ready (a war goal on you and its armies readied), more time (once), or back down. It sees the balance as the
+  war would be fought, from the game: its faction and subjects (and whoever already fights you) against yours,
+  your guarantors with their factions, and countries pledged to you by treaty. War now only if its side is the
+  stronger and it isn't fighting another war, so Germany won't turn on you in the middle of Poland. A readied
+  country reconsiders every 3 months (strike, keep waiting, or stand down); HOI4's AI isn't pushed to declare
+  on its own, which once had Italy attack Austria and all its guarantors within the hour.
 - Every step goes into the chronicle and the country writes to you about it. Its prompts remember its ultimatums
   and whether it backed down, so an empty threat costs it credibility with you.
 

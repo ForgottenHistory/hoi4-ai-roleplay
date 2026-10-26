@@ -995,7 +995,7 @@ class _Session:
             if not fut.done():
                 return
             self.ultimatum_job = None
-            if cid != camp.id or u not in ultimatums._all(camp) or u["status"] != "open":
+            if cid != camp.id or u not in ultimatums._all(camp) or u["status"] not in ("open", "ready"):
                 return
             try:
                 text = fut.result()
@@ -1010,7 +1010,7 @@ class _Session:
                 return
             print(f"  ultimatum {u['id']} from {u['from']}: {step.upper()} {months or ''} {why}")
             happened = ultimatums.decide(camp, u, step, months, why)
-            if active(camp.snapshot, u["from"]) and settings().letters.incoming:
+            if happened and active(camp.snapshot, u["from"]) and settings().letters.incoming:
                 self.pending[u["from"]] = (self.pending.get(u["from"], "") + " " + happened).strip()
             return
         u = ultimatums.next_decision(camp)
@@ -1021,7 +1021,7 @@ class _Session:
         except gamestate.StateError:
             return
         msgs = ultimatums.decision_messages(camp, u, _context(them, me, camp), them.name, me.name,
-                                            ultimatums.strength_line(them.tag, player, them.name, me.name))
+                                            ultimatums.balance(camp, them.tag, player, them.name, me.name)[0])
         self.ultimatum_job = (u, self.war_pool.submit(llm.chat, msgs, None, 0.5, None, "ultimatum", them.tag),
                               camp.id)
 

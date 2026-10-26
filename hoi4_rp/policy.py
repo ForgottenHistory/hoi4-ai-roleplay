@@ -88,18 +88,18 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
         + (f"\n\nStates are listed with their number (state N). {actions.TERRITORY_NOTE} {actions.RIGHTS_NOTE}"
            if rel.them_border or rel.me_border else "")
         + (f"\n\n{actions.bound_note(them_name, me_name, rel.bound)}" if rel.bound else "")
-        + (f"\n\n{actions.WAR_NOTE}" if any(actions.is_war(k) or actions.is_defend(k) for k in gives + asks) else "")
+        + (f"\n\n{actions.WAR_NOTE}" if any(actions.is_war(k) or actions.is_attack(k) for k in gives + asks) else "")
         + war_part
     )
 
 
 def _war_gives(rel: "actions.Relation") -> List[str]:
-    """Joining the player's wars, and defence clauses for it."""
-    return actions.war_gives(rel) + actions.defend_gives(rel)
+    """Joining the player's wars, and pledges to join its attacks."""
+    return actions.war_gives(rel) + actions.attack_gives(rel)
 
 
 def _war_asks(rel: "actions.Relation") -> List[str]:
-    return actions.war_asks(rel) + actions.defend_asks(rel)
+    return actions.war_asks(rel) + actions.attack_asks(rel)
 
 
 def _days(key: str) -> int:
@@ -115,8 +115,8 @@ def _keys(value: str, allowed: List[str]) -> List[str]:
     """Map a comma-separated line of policy words to deal keys, keeping only `allowed` ones."""
     out = []
     for part in re.split(r"[,;/]|\band\b", value.lower()):
-        wr = re.search(r"\b(war|defend)\s+([a-z0-9]{3})\b", part)
-        if wr:                                  # "war ETH (Ethiopia)", "defend GER (German Reich)"
+        wr = re.search(r"\b(war|attack)\s+([a-z0-9]{3})\b", part)
+        if wr:                                  # "war ETH (Ethiopia)", "attack GER (German Reich)"
             tag = wr.group(2).upper()
             out += [c for c in (f"give:{wr.group(1)}:{tag}", f"ask:{wr.group(1)}:{tag}") if c in allowed][:1]
             continue

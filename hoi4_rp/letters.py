@@ -364,7 +364,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                                      allowed=["opinion"] + actions.GIVES + actions.UNILATERAL + actions.state_gives(rel)
                                      + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel)
                                      + actions.rights_gives(rel) + actions.dmz_gives(rel)
-                                     + actions.EQUIPMENT_GIVES + actions.war_gives(rel) + actions.defend_gives(rel))
+                                     + actions.EQUIPMENT_GIVES + actions.war_gives(rel) + actions.attack_gives(rel))
     if not rel.at_war:                                  # land for a third country, at the player's request
         more_shown, more_events = actions.apply_cedes(to, player, them.name, me.name, commands,
                                                       (camp.snapshot or {}).get("countries", {}))
@@ -527,10 +527,10 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
         offers = (actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel)
                   + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel) + actions.rights_gives(rel)
                   + actions.dmz_gives(rel) + actions.EQUIPMENT_GIVES + actions.war_gives(rel)
-                  + actions.defend_gives(rel))
+                  + actions.attack_gives(rel))
         asks = (actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel)
                 + ["ask:civ", "ask:mil", "ask:dismantle"] + actions.govt_asks(rel) + actions.rights_asks(rel)
-                + actions.dmz_asks(rel) + actions.EQUIPMENT_ASKS + actions.war_asks(rel) + actions.defend_asks(rel))
+                + actions.dmz_asks(rel) + actions.EQUIPMENT_ASKS + actions.war_asks(rel) + actions.attack_asks(rel))
         ok = lambda k: k != "give:peace" and actions.possible(rel, k)
         return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
     proposed = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("proposal")]
@@ -616,7 +616,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
 
 def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
     """The player clicked Accept (1) or Decline (2) on a proposal package (offers and requests), or on an
-    obligation under a treaty (an instalment, a defence clause). Returns why the other country should write (a
+    obligation under a treaty (an instalment, an attack pledge). Returns why the other country should write (a
     broken treaty), else ''."""
     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_offer_answer clear_variable = airp_offer }}")
     offer = camp.data.get("pending_offer")
@@ -1038,7 +1038,7 @@ class _Session:
             self.pending[random.choices(candidates, weights)[0]] = ""
 
     def treaty_prompt(self, player: str, block: str) -> bool:
-        """Ask the player about an obligation that fell due under a treaty (an instalment, a defence clause), in
+        """Ask the player about an obligation that fell due under a treaty (an instalment, an attack pledge), in
         the reply window with Accept/Decline, when no window is open and no proposal waits. True if one was shown."""
         camp = self.camp
         if not camp or camp.data.get("pending_offer") or not camp.data.get("treaty_due"):

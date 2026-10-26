@@ -32,7 +32,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/gamestate.py   live game state (names, parties, factions, wars, states, ideas, focuses)
     hoi4_rp/chronicle.py   one-query world snapshots; their differences become dated events
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; offers
-    hoi4_rp/treaties.py    deals over time: terms that end, instalments, defence clauses
+    hoi4_rp/treaties.py    deals over time: terms that end, instalments, attack pledges
     hoi4_rp/story.py       story events: your country reacts to your letter deals and deeds
     hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
@@ -84,9 +84,9 @@ news, red bad) and the agreements are remembered in the chronicle.
   too; `[[end faction]]` on their own (they leave, or as leader expel you). Only between independent countries
   at peace, the admitting side leading a faction, the joining side in none.
 - Wars: `[[war TAG]]` / `[[offer war TAG]]` (they join your war against TAG), `[[ask war TAG]]` (they ask you
-  to join theirs). Defence clauses: `[[offer defend TAG]]` (they join the war if TAG attacks you),
-  `[[ask defend TAG]]` (they ask you to promise the same), kept by `treaties.py`. TAG: a major power or a
-  neighbour of the protected side, at peace with both.
+  to join theirs). Attack pledges: `[[offer attack TAG]]` (they join your war when you declare war on TAG),
+  `[[ask attack TAG]]` (they ask you to pledge the same for their attack), kept by `treaties.py`. TAG: a major
+  power or a neighbour of the attacking side, at peace with both. (Defence is what guarantees are for.)
 - Equipment from the stockpile: `[[offer rifles N]]`, `[[ask artillery N]]`, `[[trucks N]]` (vanilla equipment
   archetypes, so mods that keep them work).
 
@@ -95,16 +95,16 @@ news, red bad) and the agreements are remembered in the chronicle.
 A letter deal can run over time (`hoi4_rp/treaties.py`):
 
 - `[[for 12 months]]`: its agreements (pact, access, docking, guarantee, faction, resource rights,
-  demilitarized zones) and defence clauses end on their own when the term runs out.
+  demilitarized zones) and attack pledges end on their own when the term runs out.
 - Instalments: `[[offer civ 2 x3]]` = 2 now, then 2 every year, 3 payments in all; `[[ask rifles 500 x4 every 6]]`
   for every 6 months (up to 5 payments, every 3 to 24 months).
 
-The game plays them out as you play: what the other country owes (instalments, joining a war when its clause is
-called) happens on its own; it can only get out by renouncing the treaty in a letter (`[[end treaty]]`), which is
+The game plays them out as you play: what the other country owes (instalments, joining your war when you
+attack the country it pledged against) happens on its own; it can only get out by renouncing the treaty in a letter (`[[end treaty]]`), which is
 remembered. What you owe comes up in the reply window: Accept pays or honours it, Decline refuses and breaks the
 treaty. You're never forced, but a broken treaty goes into the chronicle, the reputation game master judges it,
 and the other country writes about it. A war between the two ends their treaties. Every country's prompts show
-its treaties with you: terms, payments made and missed, clauses standing or honoured, treaties broken.
+its treaties with you: terms, payments made and missed, pledges standing or honoured, treaties broken.
 
 ## Story events
 

@@ -393,11 +393,13 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     camp.data["sent"] = (camp.data.get("sent", []) + [{"to": to, "text": text, "date": key}])[-SENT_KEPT:]
     camp.save()
     rel = actions.relation(to, player)
+    rel.pledged = frozenset(treaties.standing(camp, to))   # a commitment standing already isn't granted again
     actions.set_parties(rel, them, me)
     offers, asks = _proposals(camp, to, rel, key, reply=True)
     actions.economy(them.name, me.name, rel)
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
-                 + actions.proposal_help(them.name, me.name, offers, asks, expected=False)
+                 + actions.proposal_help(them.name, me.name, offers, asks, expected=False,
+                                         grants=actions.reply_grants(rel))
                  + (f"\n{_COUNTER}" if offers or asks else "")
                  + ("\n\n" + _peace_note(them, me, camp, offers, reply=True) if rel.at_war else "")
                  + ("\n\n" + actions.cede_help(them.name, me.name, actions.own_states(to))

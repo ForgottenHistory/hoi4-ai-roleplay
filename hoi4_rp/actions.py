@@ -1270,20 +1270,77 @@ def _fmt(them_name: str, me_name: str) -> Dict[str, str]:
     return {"me_name": me_name, "them_name": them_name}
 
 
-def _item_lines(verb: str, keys: List[str], f: Dict[str, str]) -> List[str]:
-    """One help line per deal item; war and pledge items, one per country, are folded into one line each."""
-    lines, groups = [], {}
+def _near(key: str) -> bool:
+    """A state or resource-rights item worth a line of its own: on the border, or where the other side holds a core
+    or claim. The rest (a great power's far-off provinces and colonies) are listed compactly (_far)."""
+    info = _BORDER_INFO.get(key)
+    return info is None or info.border or info.core or info.claim
+
+
+def _far(key: str) -> str:
+    """'412 Tunisia (3c 0m, 2,100k, steel 4, colony)': a state in a few words."""
+    info = _BORDER_INFO.get(key)
+    sid = key.rsplit(":", 1)[1]
+    if not info:
+        return sid
+    bits = [f"{info.civ}c {info.mil}m", f"{info.pop_k:,}k"] + ([info.resources] if info.resources else []) \
+        + ([] if info.own_core else ["colony"])
+    return f"{sid} {info.name} ({', '.join(bits)})"
+
+
+# One line for the far-off states of a kind (_near): what the command does, N the state's number
+_FAR_TEXT = {"give:state": "cede one of these states of yours to {me_name}",
+             "ask:state": "ask {me_name} to cede one of these states of its own to you",
+             "give:rights": "give {me_name} the resource rights of one of these states of yours (its output for "
+                            "good, the land stays yours)",
+             "ask:rights": "ask {me_name} for the resource rights of one of these states of its own"}
+
+
+def _item_lines(verb: str, keys: List[str], f: Dict[str, str], grants=()) -> List[str]:
+    """One help line per deal item. War, pledge and commitment items, one per country, are folded into one line
+    per kind, and so are states and resource rights away from the border (_near). `grants`: items that may also be
+    granted at once in a reply; their line names the plain command too."""
+    lines, groups, far = [], {}, {}
+    pre = "offer to " if verb == "offer " else ""
+    grant = lambda cmd, ks: f" or grant now [[{cmd}]]" if any(k in grants for k in ks) else ""
     for k in keys:
         if is_war(k) or is_third(k):
-            groups.setdefault(k.rsplit(":", 1)[0], []).append(k.rsplit(":", 1)[1])
-            continue
-        lines.append(f"- [[{verb}{word(k)}{' N' if k in AMOUNT_KEYS else ''}]]: "
-                     f"{'offer to ' if verb == 'offer ' else ''}{get_deal(k).prompt.format(**f)}")
-    for base, tags in groups.items():
+            groups.setdefault(k.rsplit(":", 1)[0], []).append(k)
+        elif (is_state(k) or is_rights(k)) and not _near(k):
+            far.setdefault(k.rsplit(":", 1)[0], []).append(k)
+        else:
+            cmd = f"{word(k)}{' N' if k in AMOUNT_KEYS else ''}"
+            lines.append(f"- [[{verb}{cmd}]]{grant(cmd, [k])}: {pre}{get_deal(k).prompt.format(**f)}")
+    for base, ks in groups.items():
         prompt = get_deal(f"{base}:TAG").prompt.replace("TAG (TAG)", "TAG").format(**f)
-        lines.append(f"- [[{verb}{word(base)} TAG]]: {'offer to ' if verb == 'offer ' else ''}{prompt}; TAG one "
-                     f"of: " + ", ".join(f"{t} ({_COUNTRY_NAMES.get(t, t)})" for t in tags))
+        cmd = f"{word(base)} TAG"
+        lines.append(f"- [[{verb}{cmd}]]{grant(cmd, ks)}: {pre}{prompt}; TAG one of: "
+                     + ", ".join(f"{t} ({_COUNTRY_NAMES.get(t, t)})" for t in (k.rsplit(":", 1)[1] for k in ks)))
+    for base, ks in far.items():
+        cmd = f"{word(base)} N"
+        lines.append(f"- [[{verb}{cmd}]]{grant(cmd, ks)}: {pre}{_FAR_TEXT[base].format(**f)}; N one of (civilian "
+                     f"and military factories, people): " + "; ".join(_far(k) for k in ks))
     return lines
+
+
+def _notes(keys: List[str]) -> List[str]:
+    """The background notes the items among `keys` need, each once."""
+    out = []
+    if any(k in FACTORY_KEYS or is_factory_key(k) for k in keys):
+        out.append(FACTORY_NOTE + f" N is a whole number up to {MAX_FACTORIES}, at most what the giver has.")
+    if any(is_state(k) for k in keys):
+        out.append(TERRITORY_NOTE)
+    if any(is_rights(k) for k in keys):
+        out.append(RIGHTS_NOTE)
+    if any(is_dmz(k) or factory_base(k) in ("give:dismantle", "ask:dismantle") for k in keys):
+        out.append(DISARM_NOTE)
+    if any(is_state(k) or is_rights(k) or k in FACTORY_KEYS for k in keys) and ECONOMY.get("text"):
+        out.append(ECONOMY["text"])
+    if any(k in keys for k in ("give:submit", "ask:submit", "give:annex")):
+        out.append(SUBMIT_NOTE)
+    if any(is_govt_key(k) for k in keys):
+        out.append(GOVT_NOTE)
+    return out + _new_goods_notes(keys)
 
 
 def _unilateral_lines(them_name: str, me_name: str, keys: List[str], when: str) -> List[str]:
@@ -1297,8 +1354,16 @@ def _unilateral_lines(them_name: str, me_name: str, keys: List[str], when: str) 
     return lines
 
 
+def reply_grants(rel: Relation) -> List[str]:
+    """What them could grant at once in a reply, when asked."""
+    return (possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
+            + possible_keys(rel, govt_gives(rel)) + possible_keys(rel, rights_gives(rel))
+            + possible_keys(rel, dmz_gives(rel) + ["give:dismantle"])
+            + possible_keys(rel, EQUIPMENT_GIVES + war_gives(rel) + third_gives(rel)))
+
+
 def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
-    """Rules for a reply to the player's letter."""
+    """Rules for a reply to the player's letter (the items themselves are in proposal_help, with `grants`)."""
     f = _fmt(them_name, me_name)
     lines = [
         "ACTIONS. Your reply can have real consequences in the game. After the letter, you may add these "
@@ -1306,29 +1371,10 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
         f"- [[opinion N]]: how this letter changed {them_name}'s opinion of {me_name}, N from -20 to +20. "
         "Use it when the letter was notably friendly or offensive; leave it out for ordinary letters.",
     ]
-    gives = (possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
-             + possible_keys(rel, govt_gives(rel)) + possible_keys(rel, rights_gives(rel))
-             + possible_keys(rel, dmz_gives(rel) + ["give:dismantle"])
-             + possible_keys(rel, EQUIPMENT_GIVES + war_gives(rel) + third_gives(rel)))
-    if gives:
-        lines.append(f"Agreements you can grant at once, ONLY if {me_name} asked for that in their letter and you "
-                     f"agree (if they didn't ask but you want it, make it a proposal instead, see below):")
-        lines += _item_lines("", gives, f)
-        if any(is_govt_key(k) for k in gives):
-            lines.append(GOVT_NOTE)
-        if any(k in FACTORY_KEYS for k in gives):
-            have = rel.them_factories or {}
-            lines.append(f"{FACTORY_NOTE} You have {have.get('civ', 0)} civilian and {have.get('mil', 0)} military "
-                         f"factories.")
-        if any(is_state(k) for k in gives):
-            lines.append(TERRITORY_NOTE)
-        if any(is_rights(k) for k in gives):
-            lines.append(RIGHTS_NOTE)
-        if any(is_dmz(k) or k == "give:dismantle" for k in gives):
-            lines.append(DISARM_NOTE)
-        if "give:submit" in gives or "give:annex" in gives:
-            lines.append(SUBMIT_NOTE)
-        lines += _new_goods_notes(gives)
+    if reply_grants(rel):
+        lines.append(f"GRANTING. An item below marked 'or grant now [[X]]' can also be granted at once, with that plain "
+                     f"command, ONLY if {me_name} asked for it in their letter and you agree; if they didn't ask but "
+                     f"you want it, propose it instead with its [[offer ...]] command.")
     lines += _unilateral_lines(them_name, me_name, possible_keys(rel, UNILATERAL),
                                "only when your policy calls for it or their letter gives serious cause")
     lines.append("Decide as your government would, considering your interests, ideology, alliances and your "
@@ -1361,14 +1407,20 @@ def _new_goods_notes(keys: List[str]) -> List[str]:
     return out
 
 
-def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[str], expected: bool) -> str:
+def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[str], expected: bool,
+                  grants: List[str] = ()) -> str:
     """One proposal (offer or request) the player answers with Accept/Decline.
-    expected: the letter is written because of the policy, so a proposal is its point."""
+    expected: the letter is written because of the policy, so a proposal is its point.
+    grants (a reply): what may also be granted at once when asked, marked on its line (reply_help explains)."""
     f = _fmt(them_name, me_name)
+    grants = list(grants)
     if not (offers or asks):
-        return (f"Make no formal proposal in this letter, and offer or ask for no specific agreement in its text "
-                f"either: none can be agreed now. Speak of friendship or intentions in general if you like; a "
-                f"concrete deal waits for a later letter, or for {me_name} to ask for it.")
+        out = (f"Make no formal proposal in this letter, and offer or ask for no specific agreement in its text "
+               f"either: none can be agreed now. Speak of friendship or intentions in general if you like; a "
+               f"concrete deal waits for a later letter, or for {me_name} to ask for it.")
+        if grants:
+            out += "\nWhat you could grant if asked:\n" + "\n".join(_item_lines("", grants, f) + _notes(grants))
+        return out
     when = ("Your policy is to make such a proposal now: make it the purpose of this letter, unless the "
             "situation has changed so much that it no longer suits you."
             if expected else
@@ -1383,22 +1435,11 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
              f"MUST have its command, or it has no effect; propose nothing in the text that isn't listed here. "
              f"Say plainly what the proposal holds and what it doesn't: if you won't give something {me_name} asked "
              f"for, say no clearly, never as a hint ('we can scarcely spare one') that reads like a promise."]
-    lines += _item_lines("offer ", offers, f) + _item_lines("ask ", asks, f)
-    if any(k in FACTORY_KEYS for k in offers + asks):
-        lines.append(FACTORY_NOTE + f" N is a whole number up to {MAX_FACTORIES}, at most what the giver has.")
-    if any(is_state(k) for k in offers + asks):
-        lines.append(TERRITORY_NOTE)
-    if any(is_rights(k) for k in offers + asks):
-        lines.append(RIGHTS_NOTE)
-    if any(is_dmz(k) or factory_base(k) in ("give:dismantle", "ask:dismantle") for k in offers + asks):
-        lines.append(DISARM_NOTE)
-    if any(is_state(k) or is_rights(k) or k in FACTORY_KEYS for k in offers + asks) and ECONOMY.get("text"):
-        lines.append(ECONOMY["text"])
-    if any(k in offers + asks for k in ("give:submit", "ask:submit", "give:annex")):
-        lines.append(SUBMIT_NOTE)
-    if any(is_govt_key(k) for k in offers + asks):
-        lines.append(GOVT_NOTE)
-    lines += _new_goods_notes(offers + asks)
+    only = [g for g in grants if g not in offers and factory_base(g) not in offers]   # grantable, not offered
+    lines += _item_lines("offer ", offers, f, grants) + _item_lines("ask ", asks, f)
+    if only:
+        lines += ["Also grantable if asked (not to be proposed):"] + _item_lines("", only, f)
+    lines += _notes(offers + asks + only)
     return "\n".join(lines)
 
 

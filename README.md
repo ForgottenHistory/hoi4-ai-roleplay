@@ -48,7 +48,9 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
 Open another country in the diplomacy view and pick **Write Letter** from its diplomatic actions.
 Click the page, write your letter and press Send. With `python -m hoi4_rp run` running, the
 country writes back in a reply window. The letter is a real text box; Python reads it through the
-bridge's `bridge.editbox` command, so the bridge DLL must be up to date.
+bridge's `bridge.editbox` command, so the bridge DLL must be up to date. A save made while a reply was
+being written still waits for it when loaded: `run` answers the letter again from its own copy (or shows the reply
+again, if it was written before the save).
 
 ## Memory
 

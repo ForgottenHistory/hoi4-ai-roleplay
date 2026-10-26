@@ -40,6 +40,8 @@ from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
 POLL_SECONDS = 0.5
+SENT_KEPT = 20            # copies of the player's latest letters, for a reply a loaded save still waits on
+RESUME_SECONDS = 120      # a resumed letter whose reply didn't arrive is tried again after this long
 CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded when the date moved)
 IDLE_SECONDS = 600        # game date still this long (paused, player away): no background LLM work, no letters
 EVENT_LETTERS = 2          # countries that may write about one batch of events
@@ -50,6 +52,37 @@ def read_outbox(block: str) -> Optional[str]:
     """Recipient tag if a letter was just sent, else None."""
     m = re.search(r"\bairp_outbox_to=(-?[\d.]+)", block)
     return bridge.decode_country(float(m.group(1))) if m else None
+
+
+def read_awaiting(block: str) -> Optional[str]:
+    """The country the player's letter waits on a reply from (the reply window shows it as on its way), else None."""
+    m = re.search(r"\bairp_awaiting_from=(-?[\d.]+)", block)
+    return bridge.decode_country(float(m.group(1))) if m else None
+
+
+def resume_letter(camp: campaign.Campaign, player: str, to: str) -> None:
+    """The game waits on a reply no letter is being answered for: a save made while the reply was being written,
+    then loaded. Answer the letter sent to `to` by then (kept in camp.data["sent"]); with no copy, close the wait."""
+    now = camp.data.get("last_date") or ""
+    sent = [x for x in camp.data.get("sent", []) if x["to"] == to and (not now or x["date"] <= now)]
+    thread = camp.letters_with(to)
+    text = sent[-1]["text"] if sent else ""
+    if text and len(thread) >= 2 and thread[-1]["from"] == to and thread[-2]["from"] == player \
+            and thread[-2]["text"] == text:
+        # The save is from after the reply was written (it's still remembered): show it again, not a second one
+        print(f"\nthe loaded save waits on a reply from {to}: showing it again")
+        offer = camp.data.get("pending_offer") or {}
+        _show_reply(player, to, thread[-1]["text"], offer=offer.get("from") == to)
+        return
+    if thread and thread[-1]["from"] == player and (not text or thread[-1]["text"] == text):
+        text = thread.pop()["text"]                              # unanswered in memory: answered anew below
+    if text:
+        print(f"\nthe loaded save waits on a reply from {to}: answering the letter sent "
+              f"{campaign.date_words(sent[-1]['date']) if sent else 'before'}")
+        handle_letter(camp, player, to, text)
+    else:
+        print(f"\nthe loaded save waits on a reply from {to}, but no copy of the letter is kept")
+        _show_reply(player, to, "(Your letter was lost on the way, and no copy survives. Write again.)")
 
 
 def read_letter_box() -> str:
@@ -334,6 +367,9 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     key = campaign.date_key(them.date)
     camp.at(key)
     camp.add_letter(to, player, text, key)
+    # A copy that loading an earlier save doesn't drop: a save made while the reply was being written still waits
+    # for it, and the letter box isn't saved (resume_letter)
+    camp.data["sent"] = (camp.data.get("sent", []) + [{"to": to, "text": text, "date": key}])[-SENT_KEPT:]
     camp.save()
     rel = actions.relation(to, player)
     actions.set_parties(rel, them, me)
@@ -825,6 +861,7 @@ class _Session:
 
     def __init__(self) -> None:
         self.camp: Optional[campaign.Campaign] = None
+        self.resumed: Dict[tuple, float] = {}   # (campaign id, country) -> when its waiting letter was resumed
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
         self.pool = ThreadPoolExecutor(max_workers=1)  # policy refreshes: the slow LLM part runs here
@@ -1307,6 +1344,12 @@ def run() -> int:
                 else:
                     print("empty letter; nothing to answer")
                     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from }}")
+            elif (waiting := read_awaiting(block)) and session.camp:
+                # Letters are answered here, in this loop, so a wait with no letter in hand came from a loaded save
+                mark = (session.camp.id, waiting)
+                if time.monotonic() - session.resumed.get(mark, -RESUME_SECONDS) >= RESUME_SECONDS:
+                    session.resumed[mark] = time.monotonic()
+                    resume_letter(session.chronicle(player, force=True), player, waiting)
             else:
                 answer = re.search(r"\bairp_offer_answer=(\d)", block)
                 if answer and session.camp:

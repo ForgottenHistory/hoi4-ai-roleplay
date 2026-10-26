@@ -46,12 +46,17 @@ OPINION_STEPS = [-10, -5, 5, 10]
 # How telling each kind of letter deal is (event types from actions.apply); unlisted kinds count 1.
 _DEAL_WEIGHTS = [
     (3, ("give:state", "ask:state", "cede:", "give:annex", "give:submit", "ask:submit", "give:subject",
-         "ask:subject", "subject:", "give:govt", "ask:govt", "give:peace")),
+         "ask:subject", "subject:", "give:govt", "ask:govt", "give:peace", "give:war", "ask:war", "give:faction",
+         "ask:faction", "give:join", "ask:join", "end:faction", "treaty:broken", "treaty:renounced",
+         "treaty:clause")),
     (2, ("give:civ", "ask:civ", "give:mil", "ask:mil", "give:dismantle", "ask:dismantle", "give:dmz", "ask:dmz",
-         "give:rights", "ask:rights", "embargo")),
+         "give:rights", "ask:rights", "embargo", "give:defend", "ask:defend", "give:rifles", "ask:rifles",
+         "give:artillery", "ask:artillery", "give:trucks", "ask:trucks")),
 ]
 # Plain agreements (pacts, guarantees, access, docking, market) count 1: no event of their own, they make dull news.
-_DEALS = ("give:", "ask:", "end:", "cede:", "subject:", "embargo")
+# Of a treaty's later steps only the dramatic ones count (paid instalments and expired terms are routine).
+_DEALS = ("give:", "ask:", "end:", "cede:", "subject:", "embargo", "treaty:broken", "treaty:renounced",
+          "treaty:clause")
 
 
 # ---------------------------------------------------------------- what an event can be about

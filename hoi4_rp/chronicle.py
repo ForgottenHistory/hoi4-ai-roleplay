@@ -122,7 +122,9 @@ def front(tags: List[str]) -> Dict[str, Dict]:
 # (agreements granted, proposals answered). Only these refresh policies or lift a refusal.
 WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_left", "faction_founded",
                "faction_joined", "independence", "subject", "capitulation", "war", "peace", "territory",
-               "justification", "wargoal"}
+               "justification", "wargoal",
+               # treaties.py: a treaty broken, renounced, called on or lapsing changes what the two are to each other
+               "treaty:broken", "treaty:renounced", "treaty:clause", "treaty:lapsed"}
 
 
 def snapshot(player: str) -> Dict:

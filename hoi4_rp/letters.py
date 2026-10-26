@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from . import (actions, bridge, campaign, chronicle, game, gamestate, leaders, llm, peace, policy, reputation, story,
-               style, subjects, war, world)
+               style, subjects, treaties, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -231,6 +231,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")
         + (f"{pol}\n\n" if pol else "")
         + (f"{rep}\n\n" if rep else "")
+        + (f"{deals}\n\n" if (deals := treaties.describe(camp, them.tag, them.name, me.name)) else "")
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
         f"{me.name}, or the major powers):\n{_memory(camp, them, me)}"
     )
@@ -344,7 +345,8 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                     if not rel.at_war and not rel.them_subject else "")
                  + ("\n\n" + actions.subject_help(them.name, me.name, actions.subjects_of(to)) if not rel.at_war else "")
                  + ("\n\n" + actions.subject_note(them.name, them.name_of(them.overlord))
-                    if them.overlord and them.overlord != player else ""))
+                    if them.overlord and them.overlord != player else "")
+                 + ("\n\n" + treaties.help_text() if not rel.at_war else ""))
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
                   + _conversation(camp, them, me, f"(Reply in {style.current().length}.)"))
@@ -353,13 +355,16 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         print("  LLM error:", e)
         _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
         return
+    raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
+    commands, renounced = treaties.take_renounce(commands)
     reply = _clean_for_game(letter)
     camp.add_letter(to, to, reply, key)
     outcomes, events = actions.apply(to, player, them.name, me.name, commands,
                                      allowed=["opinion"] + actions.GIVES + actions.UNILATERAL + actions.state_gives(rel)
                                      + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel)
-                                     + actions.rights_gives(rel) + actions.dmz_gives(rel))
+                                     + actions.rights_gives(rel) + actions.dmz_gives(rel)
+                                     + actions.EQUIPMENT_GIVES + actions.war_gives(rel) + actions.defend_gives(rel))
     if not rel.at_war:                                  # land for a third country, at the player's request
         more_shown, more_events = actions.apply_cedes(to, player, them.name, me.name, commands,
                                                       (camp.snapshot or {}).get("countries", {}))
@@ -367,17 +372,21 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         outcomes, events = outcomes + more_shown + sub_shown, events + more_events + sub_events
     for e in events:
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False}])
+    treaties.record(camp, to, [e["type"] for e in events], terms, key, them.name)
+    if renounced:
+        outcomes += treaties.renounce(camp, to, player)
     # Proposal items are only kept if still possible after what was just applied.
     after = actions.relation(to, player) if events else rel
     items = _attach_proposal(camp, to, actions.package([p for p in proposals if actions.possible(after, p)],
-                                                       offers + asks), key)
+                                                       offers + asks), key, terms)
     camp.save()
     print(f"{to} replies{' (proposes ' + ', '.join(items) + ')' if items else ''}:\n{reply}")
     if commands:
         print(f"  commands: {commands} -> {[o for o, _ in outcomes] or 'nothing applied'}")
     shown = reply + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
     if items:
-        shown += "\n\n" + actions.proposal_line(items, them.name) + _peace_line(items, me, them)
+        shown += ("\n\n" + actions.proposal_line(items, them.name) + treaties.terms_line(terms, items, them.name)
+                  + _peace_line(items, me, them))
     _show_reply(player, to, shown, offer=bool(items))
 
 
@@ -386,11 +395,14 @@ def _peace_line(items: List[str], me: gamestate.CountryState, them: gamestate.Co
     return "\n§Y" + peace.estimate(me, them)[1] + "§!" if "give:peace" in items else ""
 
 
-def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: str) -> List[str]:
-    """Remember the proposal package on the letter just added and as the pending Accept/Decline."""
+def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: str,
+                     terms: Optional[Dict] = None) -> List[str]:
+    """Remember the proposal package on the letter just added and as the pending Accept/Decline, with the terms
+    that concern it (treaties.py)."""
     if items:
         camp.letters_with(tag)[-1]["proposal"] = items
-        camp.data["pending_offer"] = {"from": tag, "keys": items, "date": key}
+        camp.data["pending_offer"] = {"from": tag, "keys": items, "date": key,
+                                      "terms": treaties.for_items(terms, items)}
     return items
 
 
@@ -514,10 +526,11 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
             return peace_offer, []
         offers = (actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel)
                   + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel) + actions.rights_gives(rel)
-                  + actions.dmz_gives(rel))
+                  + actions.dmz_gives(rel) + actions.EQUIPMENT_GIVES + actions.war_gives(rel)
+                  + actions.defend_gives(rel))
         asks = (actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel)
                 + ["ask:civ", "ask:mil", "ask:dismantle"] + actions.govt_asks(rel) + actions.rights_asks(rel)
-                + actions.dmz_asks(rel))
+                + actions.dmz_asks(rel) + actions.EQUIPMENT_ASKS + actions.war_asks(rel) + actions.defend_asks(rel))
         ok = lambda k: k != "give:peace" and actions.possible(rel, k)
         return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
     proposed = [x["date"] for ls in camp.data["letters"].values() for x in ls if x.get("proposal")]
@@ -536,9 +549,9 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
     if not pol and policy.stale(camp, tag):
         return [], []                                      # its old aims no longer apply; wait for the new ones
     offers = pol["offers"] if pol else (actions.GIVES + actions.state_gives(rel) + actions.rights_gives(rel)
-                                        + actions.dmz_gives(rel))
+                                        + actions.dmz_gives(rel) + actions.war_gives(rel))
     asks = pol["asks"] if pol else (actions.ASKS + actions.state_asks(rel) + actions.rights_asks(rel)
-                                    + actions.dmz_asks(rel))
+                                    + actions.dmz_asks(rel) + actions.war_asks(rel))
     ok = lambda k: k not in refused and k != "give:peace" and actions.possible(rel, k)
     return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
 
@@ -565,7 +578,8 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     task = (_initiative_task(them, me, reason) + "\n\n"
             + actions.letter_help(them.name, me.name, offers, asks, steps, expected)
             + ("\n\n" + actions.bound_note(them.name, me.name, rel.bound) if rel.bound else "")
-            + ("\n\n" + _peace_note(them, me, camp, offers, reply=False) if rel.at_war else ""))
+            + ("\n\n" + _peace_note(them, me, camp, offers, reply=False) if rel.at_war else "")
+            + ("\n\n" + treaties.help_text() if (offers or asks) and not rel.at_war else ""))
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
               + _conversation(camp, them, me)
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
@@ -575,15 +589,19 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     except llm.LLMError as e:
         print(f"  {sender} could not write (LLM error): {e}")
         return
+    raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
+    commands, renounced = treaties.take_renounce(commands)
     text = _clean_for_game(letter)
     camp.add_letter(sender, sender, text, key)
     camp.letters_with(sender)[-1]["initiated"] = True
     outcomes, events = actions.apply(sender, player, them.name, me.name, commands, allowed=steps)
     camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
+    if renounced:
+        outcomes += treaties.renounce(camp, sender, player)
     after = actions.relation(sender, player) if events else rel
     items = _attach_proposal(camp, sender, actions.package([p for p in proposals if actions.possible(after, p)],
-                                                           offers + asks), key)
+                                                           offers + asks), key, terms)
     camp.save()
     print(f"\n{sender} writes to {player}{' about: ' + reason if reason else ''}"
           f"{' (proposes ' + ', '.join(items) + ')' if items else ''}\n{text}")
@@ -591,17 +609,22 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
         print(f"  steps: {[o for o, _ in outcomes]}")
     shown = text + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
     if items:
-        shown += "\n\n" + actions.proposal_line(items, them.name) + _peace_line(items, me, them)
+        shown += ("\n\n" + actions.proposal_line(items, them.name) + treaties.terms_line(terms, items, them.name)
+                  + _peace_line(items, me, them))
     _show_reply(player, sender, shown, offer=bool(items))
 
 
-def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> None:
-    """The player clicked Accept (1) or Decline (2) on a proposal package (offers and requests)."""
+def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
+    """The player clicked Accept (1) or Decline (2) on a proposal package (offers and requests), or on an
+    obligation under a treaty (an instalment, a defence clause). Returns why the other country should write (a
+    broken treaty), else ''."""
     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_offer_answer clear_variable = airp_offer }}")
     offer = camp.data.get("pending_offer")
     camp.data["pending_offer"] = None
     if not offer:
-        return
+        return ""
+    if offer.get("treaty_due"):
+        return treaties.answer(camp, player, offer["treaty_due"], answer == 1)
     tag = offer["from"]
     items = (offer.get("keys") or ([offer["key"]] if offer.get("key") else None)   # older saves: one item,
              or [f"give:{offer['command']}"])                                     # or only the word
@@ -616,6 +639,7 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> None:
     if answer == 1:
         outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in items], allowed=items)
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
+        treaties.record(camp, tag, [e["type"] for e in events], offer.get("terms"), key, them_name)
         missed = len(items) - len(events)
         text = (f"{me_name} accepted the proposal ({what})."
                 + (f" {missed} part(s) could no longer be put in place." if missed else ""))
@@ -628,6 +652,7 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> None:
     camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "offer_answer",
                       "tags": [tag, player], "text": text, "major": False}])
     camp.save()
+    return ""
 
 
 def _days(key: str) -> int:
@@ -781,6 +806,9 @@ class _Session:
             camp.save()
             if old is not None:
                 self.plan_letters(camp, player, snap, events, old)
+                for tag, why in treaties.tick(camp, player):
+                    if active(snap, tag) and settings().letters.incoming:
+                        self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()
         if not self.idle() and time.monotonic() >= self.retry_at:
             self.policies(camp, player, snap)
             self.game_master(camp, player, snap)
@@ -1009,6 +1037,26 @@ class _Session:
             weights = [relevance(me, t) * (1 + pols.get(t, {}).get("urgency", 0)) for t in candidates]
             self.pending[random.choices(candidates, weights)[0]] = ""
 
+    def treaty_prompt(self, player: str, block: str) -> bool:
+        """Ask the player about an obligation that fell due under a treaty (an instalment, a defence clause), in
+        the reply window with Accept/Decline, when no window is open and no proposal waits. True if one was shown."""
+        camp = self.camp
+        if not camp or camp.data.get("pending_offer") or not camp.data.get("treaty_due"):
+            return False
+        if re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
+            return False
+        found = treaties.next_prompt(camp, player)
+        if not found:
+            camp.save()
+            return False
+        due, tag, text = found
+        camp.data["pending_offer"] = {"from": tag, "keys": [due["key"]], "date": camp.data.get("last_date") or "",
+                                      "treaty_due": due}
+        camp.save()
+        print(f"  treaty: asking the player about {due['kind']} {due['key']} owed to {tag}")
+        _show_reply(player, tag, _clean_for_game(text), offer=True)
+        return True
+
     def deliver(self, player: str, block: str) -> None:
         """Let one waiting country write, if the player isn't reading or awaiting a letter."""
         if not self.pending or not self.camp or self.idle():
@@ -1132,8 +1180,11 @@ def run() -> int:
             else:
                 answer = re.search(r"\bairp_offer_answer=(\d)", block)
                 if answer and session.camp:
-                    resolve_offer(session.camp, player, int(answer.group(1)))
-                else:
+                    offer = session.camp.data.get("pending_offer") or {}
+                    broken = resolve_offer(session.camp, player, int(answer.group(1)))
+                    if broken and settings().letters.incoming and active(session.camp.snapshot, offer.get("from")):
+                        session.pending[offer["from"]] = broken
+                elif not session.treaty_prompt(player, block):
                     session.story_tick(player, block)
                     session.deliver(player, block)
         except bridge.BridgeUnavailable:

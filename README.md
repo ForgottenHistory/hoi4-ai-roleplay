@@ -86,7 +86,7 @@ now (another proposal came recently, or you refused it lately), it's told not to
 - Anytime, on their own: `[[end pact]]`, `[[end access]]`, `[[end docking]]`, `[[end guarantee]]`,
   `[[embargo]]`, `[[end embargo]]` (replies: only for serious cause; letters they start: when their
   policy calls for it)
-- In any letter, one proposal answered with a single Accept/Decline: a package of up to 6 items, each
+- In any letter, one proposal answered with a single Accept/Decline: a package of items (no limit), each
   `[[offer X]]` (they grant you X) or `[[ask X]]` (they ask you for military access, docking rights or
   a guarantee), e.g. a guarantee in return for access. Neighbours propose what their policy lists;
   other countries anything currently possible.

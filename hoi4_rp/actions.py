@@ -1204,9 +1204,10 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
             "situation has changed so much that it no longer suits you."
             if expected else
             "Propose only what your government actually wants, and only if it suits this letter.")
-    lines = [f"PROPOSAL. You may attach ONE formal proposal to {me_name}: a package of up to {MAX_PACKAGE} items, "
-             f"offers and requests mixed (for example something you give in return for something you ask). "
-             f"{me_name} accepts or declines the whole package with one Accept/Decline. {when} Write the proposal "
+    lines = [f"PROPOSAL. You may attach ONE formal proposal to {me_name}: a package of items, offers and requests "
+             f"mixed (for example something you give in return for something you ask), as many as the deal needs. "
+             f"{me_name} accepts or declines the whole package with one Accept/Decline, so one item they'd refuse "
+             f"sinks all of it. {when} Write the proposal "
              f"into the letter, then add one command per item after the letter. Every item the letter proposes "
              f"MUST have its command, or it has no effect; propose nothing in the text that isn't listed here. "
              f"Say plainly what the proposal holds and what it doesn't: if you won't give something {me_name} asked "
@@ -1598,29 +1599,16 @@ def outcome_text(shown: List[Tuple[str, bool]]) -> str:
     return "\n".join(f"§{'R' if hostile else 'G'}{line}§!" for line, hostile in shown)
 
 
-MAX_PACKAGE = 6
-
-
 def package(proposals: List[str], allowed: List[str]) -> List[str]:
-    """The proposal items to keep: allowed ones, each once, at most MAX_PACKAGE. The resource rights or
-    demilitarization of a state that changes hands in the same package go (the state carries them). Over the limit,
-    gives and asks are kept in turn, so a cut never leaves one side's half alone (Italy's 8 items once came down
-    to the 3 it gave)."""
+    """The proposal items to keep: allowed ones, each once, as many as the letter proposes (no limit: a cut once
+    left Italy's 8-item deal with only the 3 things it gave). The resource rights or demilitarization of a state
+    that changes hands in the same package go (the state carries them)."""
     kept = list(dict.fromkeys(p for p in proposals if factory_base(p) in allowed))
     for alone in ("give:peace", "give:submit", "ask:submit", "give:annex"):         # offered on their own, never bundled
         if alone in kept:
             return [alone]
     moved = {(k.split(":")[0], k.rsplit(":", 1)[1]) for k in kept if is_state(k)}
-    kept = [k for k in kept if not ((is_rights(k) or is_dmz(k)) and (k.split(":")[0], k.rsplit(":", 1)[1]) in moved)]
-    if len(kept) <= MAX_PACKAGE:
-        return kept
-    gives, asks = [k for k in kept if k.startswith("give:")], [k for k in kept if not k.startswith("give:")]
-    chosen = []
-    while len(chosen) < MAX_PACKAGE and (gives or asks):
-        for side in (gives, asks):
-            if side and len(chosen) < MAX_PACKAGE:
-                chosen.append(side.pop(0))
-    return [k for k in kept if k in chosen]                        # in the letter's order
+    return [k for k in kept if not ((is_rights(k) or is_dmz(k)) and (k.split(":")[0], k.rsplit(":", 1)[1]) in moved)]
 
 
 def package_text(keys: List[str], who: str = "they") -> str:

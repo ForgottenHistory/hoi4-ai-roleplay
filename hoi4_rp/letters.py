@@ -34,8 +34,8 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import (actions, bridge, campaign, chronicle, game, gamestate, leaders, llm, peace, policy, reputation, story,
-               style, subjects, treaties, ultimatums, war, world)
+from . import (actions, bridge, campaign, chronicle, game, gamestate, leaders, llm, origins, peace, policy, reputation,
+               story, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -229,6 +229,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
         + (f"{sec}\n\n" if (sec := _security(them, me)) else "")
         + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")
+        + (f"{began}\n\n" if (began := origins.text(camp, them, me)) else "")
         + (f"{pol}\n\n" if pol else "")
         + (f"{rep}\n\n" if rep else "")
         + (f"{deals}\n\n" if (deals := treaties.describe(camp, them.tag, them.name, me.name)) else "")

@@ -34,6 +34,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; offers
     hoi4_rp/treaties.py    deals over time: terms that end, instalments, war pledges
     hoi4_rp/ultimatums.py  AI threats of war that can come true: deadline, then war, readiness or backing down
+    hoi4_rp/origins.py     how the wars began: who declared on whom and when, from the game, and why
     hoi4_rp/story.py       story events: your country reacts to your letter deals and deeds
     hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
@@ -61,6 +62,12 @@ save files. Its memory lives in `data/campaigns/<id>.json`:
 
 When a country answers a letter it sees your whole correspondence and the events it took part in, plus
 those involving you or the major powers. Loading an earlier save drops memories dated after it.
+
+How the wars began comes from the game itself, not the chronicle (`hoi4_rp/origins.py`): for every war either
+country is in, who declared war on whom and when, to the hour, and why where it can be told (honouring a
+guarantee, called in by a faction, a letter deal or a war pledge). The chronicle notes a war only when a snapshot
+first sees it, which can be days late; the game's own record says, for instance, that France declared war on
+Germany an hour after Germany declared on Poland.
 
 ## Consequences
 

@@ -39,6 +39,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/story.py       story events: your country reacts to your letter deals and deeds
     hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
     hoi4_rp/steering.py    policies and commitments steer HOI4's own AI (add_ai_strategy)
+    hoi4_rp/diplomacy.py   AI-to-AI diplomacy: who talks to whom, short dispatches and answers (dry run)
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
@@ -220,6 +221,22 @@ A country's policy toward you also steers HOI4's own AI (`hoi4_rp/steering.py`),
 Each change follows a policy refresh; only the difference is pushed and every push is kept, so it can be taken
 back exactly, and loading an earlier save forgets what came after. When a country's stance toward your requests
 changes, its next letter says so.
+
+## AI-to-AI diplomacy (dry run)
+
+Countries other than you write to each other (`hoi4_rp/diplomacy.py`, `[ai_diplomacy]` in config.ini). For now
+only as a dry run (`mode = dry`): the exchanges are written and logged to `data/logs/ai_diplomacy.txt`, nothing
+reaches the game, and no country you write to knows of them.
+
+- Each game month a few pairs are drawn (`exchanges_per_month`, default 3), weighted by what ties them: neighbours,
+  the same continent, major powers, factions, guarantees, recent events between them and commitments made by
+  letter, more on your own continent. Two minor powers far away from you rarely talk; the player is never drawn.
+  A pair waits `cooldown_days` (90) before talking again, a country starts at most one exchange a month.
+- An exchange is two short LLM calls (under 1k tokens of prompt each): a dispatch with the writer's stance and at
+  most one proposal (pact, access, guarantee, market, faction, joining a war, oppose/befriend/back, sanction), and
+  the other side's answer, accept or decline. The stances are kept per pair; the letters too, marked as dry.
+- It runs only while the game runs and nothing of yours is waiting (letters to you, policy refreshes, judgements).
+  `python -m hoi4_rp usage` shows its calls as `ai:dispatch` and `ai:answer`.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)
 

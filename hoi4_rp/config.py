@@ -44,6 +44,11 @@ DEFAULTS = {
         "events": "yes",
         "gap_days": "60",
     },
+    "ai_diplomacy": {
+        "mode": "off",
+        "exchanges_per_month": "3",
+        "cooldown_days": "90",
+    },
     "world": {
         "setting": "auto",
         "lore_file": "",
@@ -90,11 +95,19 @@ class WorldSettings:
 
 
 @dataclass(frozen=True)
+class AIDiplomacySettings:
+    mode: str                 # off | dry (exchanges written and logged, nothing reaches the game) (diplomacy.py)
+    exchanges_per_month: int  # AI-to-AI exchanges started per game month
+    cooldown_days: int        # game days before the same two countries talk again
+
+
+@dataclass(frozen=True)
 class Settings:
     llm: LLMSettings
     letters: LetterSettings
     story: StorySettings
     world: WorldSettings
+    ai: AIDiplomacySettings
 
 
 @lru_cache(maxsize=None)
@@ -105,7 +118,7 @@ def settings() -> Settings:
     cp = configparser.ConfigParser()
     cp.read_dict(DEFAULTS)
     cp.read(CONFIG_PATH, encoding="utf-8")   # silently skipped if the file is missing
-    s, lt, st, w = cp["llm"], cp["letters"], cp["story"], cp["world"]
+    s, lt, st, w, ai = cp["llm"], cp["letters"], cp["story"], cp["world"], cp["ai_diplomacy"]
     return Settings(
         llm=LLMSettings(
             base_url=s.get("base_url").rstrip("/"),
@@ -135,5 +148,10 @@ def settings() -> Settings:
             setting=(w.get("setting") or "auto").strip().lower(),
             lore_file=(w.get("lore_file") or "").strip(),
             game_dir=(w.get("game_dir") or "").strip(),
+        ),
+        ai=AIDiplomacySettings(
+            mode=(ai.get("mode") or "off").strip().lower(),
+            exchanges_per_month=ai.getint("exchanges_per_month"),
+            cooldown_days=ai.getint("cooldown_days"),
         ),
     )

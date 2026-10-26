@@ -125,6 +125,9 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
             continue
         if {"faction", "subject"} & set(new_ties.get(other, [])):
             continue                     # joined the player's faction or became its subject: nothing was broken
+        if nc[other].get("overlord") and nc[other]["overlord"] != (oc.get(other) or {}).get("overlord", ""):
+            continue                     # became another's subject: the game ends guarantees of it (Yugoslavia
+                                         # under Italy, 1938), the player didn't
         # A guarantee only the player ends. (A non-aggression pact either side, or the game, can end, and which
         # can't be told: not held against the player.)
         if "my_guarantee" in kinds and "my_guarantee" not in new_ties.get(other, []):

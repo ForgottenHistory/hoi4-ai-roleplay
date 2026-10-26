@@ -241,7 +241,9 @@ def _initiative_task(them: gamestate.CountryState, me: gamestate.CountryState, r
     st = style.current()
     voice = st.voice.format(name=them.name, leader=them.leader, other=me.name)
     return (f"{them.name} now writes a new letter to {me.name} on its own initiative, {voice}, true to "
-            f"{them.name}'s interests, ideology and situation. {why} {st.manner}")
+            f"{them.name}'s interests, ideology and situation. {why} Your earlier letters are above: say something "
+            f"new (a development, a question, a concern, a demand), not what you already said in other words. Don't "
+            f"keep announcing an offer for later: propose it when you can, or let it rest. {st.manner}")
 
 
 OWN_FOCUSES = 8       # completed focuses told in full in a country's own description (the rest by name)

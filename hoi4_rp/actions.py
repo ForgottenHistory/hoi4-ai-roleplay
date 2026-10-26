@@ -1428,8 +1428,29 @@ def apply_cedes(them: str, me: str, them_name: str, me_name: str, commands: List
     return shown, events
 
 
+_BARE = re.compile(r"^[ \t]*((?:offer|ask|end)[ \t]+[a-z_]+(?:[ \t]+[A-Za-z0-9_]+)?)[ \t]*$", re.I)
+
+
+def _bracket_bare(text: str) -> str:
+    """Commands written without their brackets on lines of their own after the letter ("offer guarantee BEL" once
+    stood under a French letter): bracket them, dropping a trailing country tag. Only in the last lines, so a line
+    of prose is never taken for one."""
+    lines = text.rstrip().split("\n")
+    i = len(lines)
+    while i > 0 and (not lines[i - 1].strip() or "[[" in lines[i - 1] or _BARE.match(lines[i - 1])):
+        i -= 1
+    def bracket(m: re.Match) -> str:
+        words = m.group(1).split()
+        if len(words) == 3 and re.fullmatch(r"[A-Z][A-Z0-9]{2}", words[2]) and words[1].lower() not in ("war", "pledge"):
+            words = words[:2]                                  # "offer guarantee BEL": the tag is the letter's
+        return f"[[{' '.join(words)}]]"
+    tail = [(bracket(m) if (m := _BARE.match(x)) else x) for x in lines[i:]]
+    return "\n".join(lines[:i] + tail)
+
+
 def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     """Strip all commands. Returns (clean text, immediate [(key or 'opinion', number)], proposals [key])."""
+    text = _bracket_bare(text)
     immediate: List[Tuple[str, int]] = [(f"cede:{m.group(1)}:{m.group(2)}", 0) for m in _CEDE.finditer(text)]
     immediate += [(f"{m.group(1).lower()}:{m.group(2)}", 0) for m in _SUBJECT.finditer(text)]
     immediate += [(f"give:govt:{m.group(2).lower()}", 0) for m in _GOVT.finditer(text) if not m.group(1)]

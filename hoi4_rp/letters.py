@@ -116,6 +116,21 @@ def _clean_for_game(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()
 
 
+def _ties(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    """The agreements between the two as the game has them, however they came about: at the start (France's
+    guarantee of Belgium), by a focus or event, by the game's own diplomacy, or by letter."""
+    t, m = them.name, me.name
+    words = {"pact": "a non-aggression pact", "market": "market access both ways",
+             "they_guarantee": f"{t} guarantees {m}'s independence", "my_guarantee": f"{m} guarantees {t}'s independence",
+             "they_access": f"{t} gives {m} military access", "my_access": f"{m} gives {t} military access",
+             "they_docking": f"{t} gives {m} docking rights", "my_docking": f"{m} gives {t} docking rights",
+             "embargo": f"{t} embargoes {m}"}
+    try:
+        return "; ".join(w for k, w in words.items() if actions._CHECKS[k](them.tag, me.tag))
+    except Exception:
+        return ""
+
+
 def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
     facts = []
     if me.tag in them.enemies:
@@ -124,6 +139,8 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         facts.append(f"Both are members of the {them.faction}.")
     if me.tag in them.neighbors:
         facts.append("They share a border.")
+    if (ties := _ties(them, me)):        # from the game: those of the start and of focuses too, not only letter deals
+        facts.append(f"In force between them now: {ties}. Don't offer or ask for what already stands.")
     def subject(sub: gamestate.CountryState, lord: gamestate.CountryState) -> str:
         level = sub.autonomy.get(lord.tag) or lord.autonomy.get(sub.tag) or ""
         detail = subjects.relation_text(sub.tag, sub.name, lord.tag, lord.name, level) if level else ""

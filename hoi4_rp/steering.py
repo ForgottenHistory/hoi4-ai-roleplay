@@ -113,7 +113,7 @@ def sync(camp: campaign.Campaign, tag: str) -> List[str]:
     entry["pushes"].extend([key, kind, extra, v] for (kind, extra), v in diff.items())
     stance = p["stance"] if want else ""
     if stance != entry.get("stance"):
-        if stance or entry.get("stance"):
+        if entry.get("stance"):                  # a change, not the first stance of a new game
             entry["notice"] = stance or "indifferent"
         entry["stance"] = stance
     camp.save()

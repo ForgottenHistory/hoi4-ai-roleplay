@@ -359,6 +359,8 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
         return
     raw, ultimatum = ultimatums.parse(raw)
+    if extra := _missing_commands(prompt, raw, to, grants=True):
+        raw += "\n\n" + extra
     raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
     commands, renounced = treaties.take_renounce(commands)
@@ -390,6 +392,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     after = actions.relation(to, player) if events else rel
     items = _attach_proposal(camp, to, actions.package([p for p in proposals if actions.possible(after, p)],
                                                        offers + asks), key, terms)
+    _dropped(to, proposals, items)
     outcomes += _set_ultimatum(camp, to, player, rel, ultimatum, items, key, them.name, me.name)
     camp.save()
     print(f"{to} replies{' (proposes ' + ', '.join(items) + ')' if items else ''}:\n{reply}")
@@ -438,6 +441,43 @@ def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: s
         camp.data["pending_offer"] = {"from": tag, "keys": items, "date": key,
                                       "terms": treaties.for_items(terms, items)}
     return items
+
+
+# A letter that speaks of a deal but carries no command for it leaves nothing to accept. The LLM sometimes writes the
+# offer into the text and forgets the commands; one short follow-up asks for them.
+_DEAL_WORDS = re.compile(r"\b(offer|propos|in return|in exchange|pact|guarantee|access|passage|market|trade|"
+                         r"factor|pledge|alliance|faction|docking|rifles|artillery|trucks|equipment|cede)", re.I)
+_REPAIR_KINDS = re.compile(r"\[\[\s*(offer|ask|for)\b", re.I)
+
+
+def _missing_commands(prompt: List[Dict], raw: str, about: str, grants: bool) -> str:
+    """`raw` has no commands but its text speaks of a deal: the commands its text makes ('' if none). Proposal
+    commands only (offer, ask, terms), and with `grants` (a reply) also what it grants outright; never a step of
+    its own (ending an agreement, an embargo, an ultimatum), which the letter would have to mean."""
+    if "[[" in raw or not _DEAL_WORDS.search(raw):
+        return ""
+    ask = (f"Your letter above has no commands, so nothing in it takes effect. If its text proposes a deal"
+           f"{' or grants something' if grants else ''}, answer with exactly the commands for it, as the instructions "
+           f"describe, one per item. If it proposes nothing concrete, answer NONE. Commands only, no other text.")
+    try:
+        answer = llm.chat(prompt + [{"role": "assistant", "content": raw}, {"role": "user", "content": ask}],
+                          kind="commands", about=about)
+    except llm.LLMError as e:
+        print(f"  commands for {about}'s letter failed: {e}")
+        return ""
+    found = [c for c in re.findall(r"\[\[[^\[\]]+\]\]", answer)
+             if _REPAIR_KINDS.match(c) or (grants and not re.match(r"\[\[\s*(end|embargo|ultimatum|opinion)\b",
+                                                                       c, re.I))]
+    if found:
+        print(f"  {about}'s letter spoke of a deal without commands; added {' '.join(found)}")
+    return " ".join(found)
+
+
+def _dropped(about: str, proposals: List[str], items: List[str]) -> None:
+    """Log proposal items the letter made that weren't allowed or possible, so a lost deal shows in the log."""
+    lost = [p for p in proposals if p not in items]
+    if lost:
+        print(f"  {about}'s proposal items not possible now, dropped: {', '.join(lost)}")
 
 
 _COUNTER = ("You are answering their letter, so you may make a counter-offer: a package that answers what they "
@@ -627,6 +667,8 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
         print(f"  {sender} could not write (LLM error): {e}")
         return
     raw, ultimatum = ultimatums.parse(raw)
+    if (offers or asks) and (extra := _missing_commands(prompt, raw, sender, grants=False)):
+        raw += "\n\n" + extra
     raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
     commands, renounced = treaties.take_renounce(commands)
@@ -640,6 +682,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     after = actions.relation(sender, player) if events else rel
     items = _attach_proposal(camp, sender, actions.package([p for p in proposals if actions.possible(after, p)],
                                                            offers + asks), key, terms)
+    _dropped(sender, proposals, items)
     outcomes += _set_ultimatum(camp, sender, player, rel, ultimatum, items, key, them.name, me.name)
     camp.save()
     print(f"\n{sender} writes to {player}{' about: ' + reason if reason else ''}"

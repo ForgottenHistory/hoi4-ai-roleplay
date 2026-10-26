@@ -1172,7 +1172,9 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
     expected: the letter is written because of the policy, so a proposal is its point."""
     f = _fmt(them_name, me_name)
     if not (offers or asks):
-        return "Make no formal proposal in this letter."
+        return (f"Make no formal proposal in this letter, and offer or ask for no specific agreement in its text "
+                f"either: none can be agreed now. Speak of friendship or intentions in general if you like; a "
+                f"concrete deal waits for a later letter, or for {me_name} to ask for it.")
     when = ("Your policy is to make such a proposal now: make it the purpose of this letter, unless the "
             "situation has changed so much that it no longer suits you."
             if expected else

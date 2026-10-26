@@ -1205,9 +1205,11 @@ def proposal_help(them_name: str, me_name: str, offers: List[str], asks: List[st
             if expected else
             "Propose only what your government actually wants, and only if it suits this letter.")
     lines = [f"PROPOSAL. You may attach ONE formal proposal to {me_name}: a package of items, offers and requests "
-             f"mixed (for example something you give in return for something you ask), as many as the deal needs. "
-             f"{me_name} accepts or declines the whole package with one Accept/Decline, so one item they'd refuse "
-             f"sinks all of it. {when} Write the proposal "
+             f"mixed (for example something you give in return for something you ask). Keep it to what a real "
+             f"treaty of this kind would hold: usually one to four items; more only for a grand settlement (a "
+             f"border treaty, an alliance), never every agreement you could think of. {me_name} accepts or declines "
+             f"the whole package with one Accept/Decline, so one item they'd refuse sinks all of it. {when} "
+             f"Write the proposal "
              f"into the letter, then add one command per item after the letter. Every item the letter proposes "
              f"MUST have its command, or it has no effect; propose nothing in the text that isn't listed here. "
              f"Say plainly what the proposal holds and what it doesn't: if you won't give something {me_name} asked "

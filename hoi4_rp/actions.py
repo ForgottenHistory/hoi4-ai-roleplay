@@ -233,7 +233,7 @@ def relation(them: str, me: str) -> Relation:
                     them_in_faction=bridge.trigger(f"{them} = {{ is_in_faction = yes }}"),
                     me_in_faction=bridge.trigger(f"{me} = {{ is_in_faction = yes }}"),
                     me_enemies=joinable_enemies(me, them), them_enemies=joinable_enemies(them, me),
-                    third=third_countries(them, me),
+                    third=third_countries(them, me) if PLEDGES else {},
                     them_equipment=equipment_counts(them), me_equipment=equipment_counts(me))
 
 
@@ -571,10 +571,15 @@ def third_countries(them: str, me: str) -> Dict[str, Dict]:
     return out
 
 
-WAR_NOTE = ("Joining a war is the gravest commitment short of submission: your soldiers die in another's cause, and "
-            "the enemy will treat you as one. A government joins only where its own interests are at stake (an enemy "
-            "it fears or covets, a friend it cannot let fall) or for a great price, and only if it can fight; it asks "
-            "it of a country able to help. A war pledge is a promise for later: whenever one side goes to war with "
+# New war pledges are off: the AI asked for them too often and against enemies that made no sense. Pledges already
+# made are still kept by treaties.py. True brings them back (pledge_gives/asks, PLEDGE_NOTE in WAR_NOTE).
+PLEDGES = False
+
+_WAR_JOIN = ("Joining a war is the gravest commitment short of submission: your soldiers die in another's cause, and "
+             "the enemy will treat you as one. A government joins only where its own interests are at stake (an "
+             "enemy it fears or covets, a friend it cannot let fall) or for a great price, and only if it can fight; "
+             "it asks it of a country able to help.")
+PLEDGE_NOTE = ("A war pledge is a promise for later: whenever one side goes to war with "
             "the named country (declaring war itself, being attacked, or called in by an ally or guarantee), the "
             "other joins at once, as Italy pledged itself to Germany in the Pact of Steel. Unlike a guarantee it "
             "binds you to that side's own attacks too: give it only to a power whose wars against that enemy you "
@@ -582,6 +587,7 @@ WAR_NOTE = ("Joining a war is the gravest commitment short of submission: your s
             "rare: a country seeks one only against an enemy both sides expect to fight, when the other's army would "
             "count in that war, and most often as a mutual pledge between allies; asking a country to join your wars "
             "while pledging nothing back is what a patron asks of a client. Most policies and letters have none.")
+WAR_NOTE = _WAR_JOIN + (" " + PLEDGE_NOTE if PLEDGES else "")
 
 
 def is_war(key: str) -> bool:
@@ -968,6 +974,8 @@ def possible(rel: Relation, key: str) -> bool:
         enemies = (rel.me_enemies if verb == "give" else rel.them_enemies) or {}
         return not rel.at_war and not joiner_subject and tag in enemies
     if is_pledge(key):
+        if not PLEDGES:
+            return False
         verb, _, tag = key.split(":")
         info = (rel.third or {}).get(tag)
         joiner_subject = rel.them_subject if verb == "give" else rel.me_subject

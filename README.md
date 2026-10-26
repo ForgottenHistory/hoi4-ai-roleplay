@@ -95,12 +95,9 @@ now (another proposal came recently, or you refused it lately), it's told not to
   at peace, the admitting side leading a faction, the joining side in none. `[[offer leave]]` / `[[ask leave]]`:
   they leave their own faction, or ask you to leave yours (not a faction you share; a leader can't leave).
 - Wars: `[[war TAG]]` / `[[offer war TAG]]` (they join your war against TAG), `[[ask war TAG]]` (they ask you
-  to join theirs). War pledges: `[[offer pledge TAG]]` (they join you whenever you go to war with TAG, whoever
-  starts it), `[[ask pledge TAG]]` (they ask you to pledge the same), kept by `treaties.py`. TAG: a common enemy,
-  a threat to both sides: a quarrel over land or a war goal, or a major power of another ideology next door (or,
-  for a major, on its continent); at peace with both and no ally or guarantor of either. Any war counts, because the game doesn't call
-  joining a guarantee's war "offensive" (the UK and France in 1939); unlike a guarantee, a pledge also covers
-  the other side's own attacks.
+  to join theirs). War pledges (join whenever the other goes to war with TAG) are switched off for now
+  (`PLEDGES` in actions.py): the AI asked for them too often and against enemies that made no sense. Pledges
+  made before are still kept.
 - Equipment from the stockpile: `[[offer rifles N]]`, `[[ask artillery N]]`, `[[trucks N]]` (vanilla equipment
   archetypes, so mods that keep them work).
 

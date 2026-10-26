@@ -234,7 +234,8 @@ def current(camp, tag: str) -> Optional[Dict]:
         p.setdefault("asks", [])
         p.setdefault("breaks", [])
         given = treaties.standing(camp, tag)        # a pledge made since the policy was set isn't wanted again
-        p = {**p, "offers": [k for k in p["offers"] if k not in given], "asks": [k for k in p["asks"] if k not in given]}
+        keep = lambda k: k not in given and (actions.PLEDGES or not actions.is_pledge(k))   # pledges switched off
+        p = {**p, "offers": [k for k in p["offers"] if keep(k)], "asks": [k for k in p["asks"] if keep(k)]}
     return p
 
 

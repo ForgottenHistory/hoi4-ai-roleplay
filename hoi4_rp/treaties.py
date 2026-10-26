@@ -132,7 +132,7 @@ def help_text() -> str:
     return (f"TERMS. A deal can run over time. Add these next to the deal's commands; they apply to the agreements and "
             f"proposal in this letter:\n"
             f"- [[for N months]]: its agreements (pact, access, docking rights, guarantee, faction membership, resource "
-            f"rights, demilitarized zones) and war pledges last N months ({TERM[0]} to {TERM[1]}), then end on "
+            f"rights, demilitarized zones){' and war pledges' if actions.PLEDGES else ''} last N months ({TERM[0]} to {TERM[1]}), then end on "
             f"their own. Without it they last until someone ends them.\n"
             f"- Instalments: add xK to an amount's command, e.g. [[offer civ 2 x3]] = 2 now and 2 every year, 3 "
             f"payments in all, or [[ask rifles 1000 x4 every 6]] for every 6 months (up to {MAX_PAYMENTS} payments, "

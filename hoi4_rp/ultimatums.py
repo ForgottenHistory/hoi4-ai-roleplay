@@ -16,7 +16,7 @@ the country decides in a background LLM call (decision_messages() / read_decisio
     EXTEND  more time, once, up to MAX_EXTENSION months
     DROP    it backs down: the strategies are withdrawn, and the threat came to nothing
 Effects checked in game: create_wargoal (take_state_focus with a generator of state ids, or annex_everything),
-remove_wargoal, declare_war_on, strength_ratio. add_ai_strategy runs, but no trigger can read it back.
+remove_wargoal, declare_war_on, strength_ratio; add_ai_strategy with `imgui show ai_strategy` (no trigger reads it).
 
 Each step goes into the chronicle, and the country writes about it. Its prompts show its ultimatums to the player
 and how they ended (describe()), so it remembers backing down, and a country whose threats come true is taken
@@ -86,6 +86,32 @@ def _strategies(them: str, me: str, kinds: Tuple[str, ...], value: int) -> str:
                                       for k in kinds) + " }"
 
 
+# The game's AI strategies stack (adding 777 twice gives 1554) and are kept in saves (checked in game with
+# `imgui show ai_strategy`; they take effect at the AI's next daily update). So each ultimatum keeps a dated list of
+# what it added (u["pushes"]: [date, kind, value]) and takes back exactly that, and a loaded earlier save forgets
+# the pushes made after it, as the game itself does.
+
+def _push(camp: campaign.Campaign, u: Dict, kinds: Tuple[str, ...], value: int) -> None:
+    if actions._effect(_strategies(u["from"], camp.data["player"], kinds, value)):
+        key = camp.data.get("last_date") or u["date"]
+        u.setdefault("pushes", []).extend([key, k, value] for k in kinds)
+
+
+def _stand_down(camp: campaign.Campaign, u: Dict, wargoal: bool = True) -> None:
+    """Withdraw what the ultimatum added to the game's AI, and (unless at war) the war goal it gave."""
+    tag, player = u["from"], camp.data["player"]
+    total: Dict[str, int] = {}
+    for _, kind, value in u.get("pushes", []):
+        total[kind] = total.get(kind, 0) + value
+    script = " ".join(f"add_ai_strategy = {{ type = {k} id = {player} value = {-v} }}" for k, v in total.items() if v)
+    if wargoal:
+        script += (f" remove_wargoal = {{ type = take_state_focus target = {player} }}"
+                   f" remove_wargoal = {{ type = annex_everything target = {player} }}")
+    if script.strip() and actions._effect(f"{tag} = {{ {script} }}"):
+        key = camp.data.get("last_date") or u["date"]
+        u.setdefault("pushes", []).extend([key, k, -v] for k, v in total.items() if v)
+
+
 def issue(camp: campaign.Campaign, tag: str, player: str, months: int, demand: str, items: List[str], key: str,
           them_name: str, me_name: str) -> Tuple[Dict, str]:
     """Set the ultimatum. Returns it and the line to show under the letter."""
@@ -94,9 +120,9 @@ def issue(camp: campaign.Campaign, tag: str, player: str, months: int, demand: s
     u = {"id": max([x["id"] for x in _all(camp)] or [0]) + 1, "from": tag, "date": key,
          "when": campaign.date_words(key), "deadline": deadline, "demand": demand,
          "items": [k for k in items if k.startswith("ask:")], "status": "open", "closed": "", "how": "",
-         "extended": False, "deciding": False}
+         "extended": False, "deciding": False, "pushes": []}
     _all(camp).append(u)
-    actions._effect(_strategies(tag, player, ("antagonize", "prepare_for_war"), STRATEGY))
+    _push(camp, u, ("antagonize", "prepare_for_war"), STRATEGY)
     _event(camp, "issued", [tag, player], f"{them_name} gave {me_name} an ultimatum: {demand}, by "
                                           f"{campaign.date_words(deadline)}, or war.")
     return u, f"Ultimatum from {them_name}: {demand}, by {campaign.date_words(deadline)}, or war."
@@ -118,7 +144,7 @@ def met_by_deal(camp: campaign.Campaign, tag: str, me_name: str, them_name: str)
     u = open_from(camp, tag)
     if u and u["status"] == "open":
         _close(camp, u, "met", f"{me_name} accepted the demands")
-        _stand_down(tag, camp.data["player"])
+        _stand_down(camp, u)
         _event(camp, "met", [tag, camp.data["player"]], f"{me_name} gave in to {them_name}'s ultimatum: "
                                                         f"{u['demand']}.")
 
@@ -197,12 +223,15 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
         them_name, me_name = _names(camp, tag)
         if tag not in countries or countries[tag].get("capitulated"):
             _close(camp, u, "lapsed", f"{them_name} has fallen")
+            if tag in countries:
+                _stand_down(camp, u)
             changed = True
             continue
         if bridge.trigger(f"{player} = {{ has_war_with = {tag} }}"):
             started = bridge.trigger(f"{tag} = {{ has_offensive_war_with = {player} }}")
             _close(camp, u, "war", f"{them_name} made war on {me_name}" if started
                    else f"war came between them ({me_name} struck first)")
+            _stand_down(camp, u, wargoal=False)    # the war drives its AI now; nothing left over for after the peace
             _event(camp, "war", [tag, player], f"{them_name}'s ultimatum to {me_name} ({u['demand']}) ended in war.")
             changed = True
             continue
@@ -210,7 +239,7 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
             done, left = _items_done(camp, u)
             if u["items"] and not left:
                 _close(camp, u, "met", f"{me_name} gave what was demanded")
-                _stand_down(tag, player)
+                _stand_down(camp, u)
                 text = f"{me_name} met {them_name}'s ultimatum in time: {u['demand']}."
                 _event(camp, "met", [tag, player], text)
                 letters.append((tag, text))
@@ -288,7 +317,7 @@ def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -
     reason = f" ({why})" if why else ""
     if step == "met":
         _close(camp, u, "met", f"{them_name} judged its demands met")
-        _stand_down(tag, player)
+        _stand_down(camp, u)
         text = f"{them_name} declared itself satisfied: its ultimatum to {me_name} is met{reason}."
         _event(camp, "met", [tag, player], text)
     elif step == "extend":
@@ -300,7 +329,7 @@ def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -
         _event(camp, "extended", [tag, player], text)
     elif step == "drop":
         _close(camp, u, "dropped", f"{them_name} backed down")
-        _stand_down(tag, player)
+        _stand_down(camp, u)
         text = f"{them_name} let its ultimatum to {me_name} pass without war{reason}."
         _event(camp, "dropped", [tag, player], text)
     else:
@@ -310,25 +339,17 @@ def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -
                                              f"{wargoal.split(' generator')[0]} }} }}") \
                 and bridge.trigger(f"{tag} = {{ has_war_with = {player} }}"):
             _close(camp, u, "war", f"{them_name} declared war when the deadline passed")
+            _stand_down(camp, u, wargoal=False)
             text = f"{them_name}'s ultimatum to {me_name} ran out, and {them_name} declared war{reason}."
             _event(camp, "war", [tag, player], text)
         else:
             _close(camp, u, "ready", f"{them_name} readied for war")
-            actions._effect(_strategies(tag, player, ("antagonize", "prepare_for_war", "declare_war", "conquer"),
-                                        STRATEGY * 2))
+            _push(camp, u, ("antagonize", "prepare_for_war", "declare_war", "conquer"), STRATEGY * 2)
             text = (f"{them_name}'s ultimatum to {me_name} ran out unmet. {them_name} holds a war goal against "
                     f"{me_name} and readies its armies to strike when it judges the moment right{reason}.")
             _event(camp, "ready", [tag, player], text)
     camp.save()
     return text
-
-
-def _stand_down(tag: str, player: str) -> None:
-    """Withdraw the strategies and any war goal an ultimatum gave."""
-    actions._effect(_strategies(tag, player, ("antagonize", "prepare_for_war", "declare_war", "conquer"),
-                                 -STRATEGY * 3)   # what issue() and READY added
-                    + f" {tag} = {{ remove_wargoal = {{ type = take_state_focus target = {player} }} "
-                      f"remove_wargoal = {{ type = annex_everything target = {player} }} }}")
 
 
 def _wargoal(u: Dict) -> str:
@@ -373,5 +394,6 @@ def drop_after(camp: campaign.Campaign, key: str) -> None:
         if u["closed"] and u["closed"] >= key:
             u["status"], u["closed"], u["how"] = "open", "", ""
         u["deciding"] = False
+        u["pushes"] = [p for p in u.get("pushes", []) if p[0] < key]   # the save holds the AI as it was then
         keep.append(u)
     camp.data["ultimatums"] = keep

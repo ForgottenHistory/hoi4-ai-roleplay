@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from . import (actions, bridge, campaign, chronicle, game, gamestate, leaders, llm, peace, policy, reputation, story,
-               style, subjects, treaties, war, world)
+               style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -232,6 +232,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + (f"{pol}\n\n" if pol else "")
         + (f"{rep}\n\n" if rep else "")
         + (f"{deals}\n\n" if (deals := treaties.describe(camp, them.tag, them.name, me.name)) else "")
+        + (f"{ults}\n\n" if (ults := ultimatums.describe(camp, them.tag, them.name, me.name)) else "")
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
         f"{me.name}, or the major powers):\n{_memory(camp, them, me)}"
     )
@@ -346,7 +347,8 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                  + ("\n\n" + actions.subject_help(them.name, me.name, actions.subjects_of(to)) if not rel.at_war else "")
                  + ("\n\n" + actions.subject_note(them.name, them.name_of(them.overlord))
                     if them.overlord and them.overlord != player else "")
-                 + ("\n\n" + treaties.help_text() if not rel.at_war else ""))
+                 + ("\n\n" + treaties.help_text() if not rel.at_war else "")
+                 + ("\n\n" + ultimatums.help_text(them.name, me.name) if _may_threaten(camp, to, rel) else ""))
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
                   + _conversation(camp, them, me, f"(Reply in {style.current().length}.)"))
@@ -355,6 +357,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         print("  LLM error:", e)
         _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
         return
+    raw, ultimatum = ultimatums.parse(raw)
     raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
     commands, renounced = treaties.take_renounce(commands)
@@ -386,6 +389,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     after = actions.relation(to, player) if events else rel
     items = _attach_proposal(camp, to, actions.package([p for p in proposals if actions.possible(after, p)],
                                                        offers + asks), key, terms)
+    outcomes += _set_ultimatum(camp, to, player, rel, ultimatum, items, key, them.name, me.name)
     camp.save()
     print(f"{to} replies{' (proposes ' + ', '.join(items) + ')' if items else ''}:\n{reply}")
     if commands:
@@ -395,6 +399,28 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         shown += ("\n\n" + actions.proposal_line(items, them.name) + treaties.terms_line(terms, items, them.name)
                   + _peace_line(items, me, them))
     _show_reply(player, to, shown, offer=bool(items))
+
+
+def _may_threaten(camp: campaign.Campaign, tag: str, rel: "actions.Relation") -> bool:
+    """May `tag` set an ultimatum in the letter it writes now (ultimatums.allowed)?"""
+    pol = policy.current(camp, tag) or {}
+    return ultimatums.allowed(camp, tag, rel, pol.get("stance", "indifferent"))
+
+
+def _set_ultimatum(camp: campaign.Campaign, tag: str, player: str, rel: "actions.Relation", ultimatum, items,
+                   key: str, them_name: str, me_name: str) -> List[tuple]:
+    """Set the ultimatum the letter carries, if it may: its proposal's asks are its demands. Returns the line to
+    show under the letter."""
+    if not ultimatum:
+        return []
+    if not _may_threaten(camp, tag, rel):
+        print(f"  ultimatum from {tag} not allowed now, ignored")
+        return []
+    months, demand = ultimatum
+    u, line = ultimatums.issue(camp, tag, player, months, demand, items, key, them_name, me_name)
+    if items and camp.data.get("pending_offer"):
+        camp.data["pending_offer"]["ultimatum"] = u["id"]     # accepting the proposal meets the ultimatum
+    return [(line, True)]
 
 
 def _peace_line(items: List[str], me: gamestate.CountryState, them: gamestate.CountryState) -> str:
@@ -588,7 +614,8 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
             + actions.letter_help(them.name, me.name, offers, asks, steps, expected)
             + ("\n\n" + actions.bound_note(them.name, me.name, rel.bound) if rel.bound else "")
             + ("\n\n" + _peace_note(them, me, camp, offers, reply=False) if rel.at_war else "")
-            + ("\n\n" + treaties.help_text() if (offers or asks) and not rel.at_war else ""))
+            + ("\n\n" + treaties.help_text() if (offers or asks) and not rel.at_war else "")
+            + ("\n\n" + ultimatums.help_text(them.name, me.name) if _may_threaten(camp, sender, rel) else ""))
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
               + _conversation(camp, them, me)
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
@@ -598,6 +625,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     except llm.LLMError as e:
         print(f"  {sender} could not write (LLM error): {e}")
         return
+    raw, ultimatum = ultimatums.parse(raw)
     raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
     commands, renounced = treaties.take_renounce(commands)
@@ -611,6 +639,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     after = actions.relation(sender, player) if events else rel
     items = _attach_proposal(camp, sender, actions.package([p for p in proposals if actions.possible(after, p)],
                                                            offers + asks), key, terms)
+    outcomes += _set_ultimatum(camp, sender, player, rel, ultimatum, items, key, them.name, me.name)
     camp.save()
     print(f"\n{sender} writes to {player}{' about: ' + reason if reason else ''}"
           f"{' (proposes ' + ', '.join(items) + ')' if items else ''}\n{text}")
@@ -655,11 +684,15 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
         text = (f"{me_name} accepted the proposal ({what})."
                 + (f" {missed} part(s) could no longer be put in place." if missed else ""))
         print(f"accepted {tag}'s proposal: {[o for o, _ in outcomes] or 'nothing applied'}")
+        if offer.get("ultimatum"):
+            ultimatums.met_by_deal(camp, tag, me_name, them_name)
     else:
         text = f"{me_name} declined the proposal ({what})."
         camp.data.setdefault("refusals", []).append({"from": tag, "keys": items, "date": key,
                                                      "basis": policy.basis(camp.snapshot, tag, player)})
         print(f"declined {tag}'s proposal: {items}")
+        if offer.get("ultimatum"):
+            ultimatums.rejected(camp, tag, me_name, them_name)
     camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "offer_answer",
                       "tags": [tag, player], "text": text, "major": False}])
     camp.save()
@@ -757,6 +790,8 @@ class _Session:
         self.story_pool = ThreadPoolExecutor(max_workers=1)   # story events are written here
         self.story_job: Optional[tuple] = None    # (future, campaign id, other country, its name, party names)
         self.story_draft: Optional[tuple] = None  # a written event waiting to be shown: (draft, campaign id, ...)
+        self.war_pool = ThreadPoolExecutor(max_workers=1)    # ultimatum decisions
+        self.ultimatum_job: Optional[tuple] = None   # (ultimatum, future, campaign id)
         self.date_seen = ""                       # the game date at the last snapshot
         self.active_at = time.monotonic()         # when the date last moved or the player last wrote
         self.retry_at = 0.0                       # no background LLM call before this (after a failure)
@@ -785,6 +820,7 @@ class _Session:
             self.policy_job = None        # a refresh still running belongs to the previous game: drop it
             self.gm_job = None
             self.story_job = self.story_draft = None
+            self.ultimatum_job = None
             print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
                   f"{sum(len(v) for v in self.camp.data['letters'].values())} letters remembered")
         return self.camp
@@ -817,14 +853,52 @@ class _Session:
             camp.save()
             if old is not None:
                 self.plan_letters(camp, player, snap, events, old)
-                for tag, why in treaties.tick(camp, player):
+                for tag, why in treaties.tick(camp, player) + ultimatums.tick(camp, player):
                     if active(snap, tag) and settings().letters.incoming:
                         self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()
         if not self.idle() and time.monotonic() >= self.retry_at:
+            self.ultimatum_decision(camp, player)
             self.policies(camp, player, snap)
             self.game_master(camp, player, snap)
             self.story(camp, player)
         return camp
+
+    # ---- ultimatums past their deadline: the country decides between war and backing down (in the background)
+    def ultimatum_decision(self, camp: campaign.Campaign, player: str) -> None:
+        if self.ultimatum_job:
+            u, fut, cid = self.ultimatum_job
+            if not fut.done():
+                return
+            self.ultimatum_job = None
+            if cid != camp.id or u not in ultimatums._all(camp) or u["status"] != "open":
+                return
+            try:
+                text = fut.result()
+            except llm.LLMError as e:
+                print(f"  ultimatum decision failed: {e}")
+                self.failed()
+                return
+            step, months, why = ultimatums.read_decision(text)
+            if not step:
+                print(f"  ultimatum decision not readable, asking again later: {text[:300]}")
+                self.failed()
+                return
+            print(f"  ultimatum {u['id']} from {u['from']}: {step.upper()} {months or ''} {why}")
+            happened = ultimatums.decide(camp, u, step, months, why)
+            if active(camp.snapshot, u["from"]) and settings().letters.incoming:
+                self.pending[u["from"]] = (self.pending.get(u["from"], "") + " " + happened).strip()
+            return
+        u = ultimatums.next_decision(camp)
+        if not u:
+            return
+        try:
+            me, them = gamestate.country(player), gamestate.country(u["from"])
+        except gamestate.StateError:
+            return
+        msgs = ultimatums.decision_messages(camp, u, _context(them, me, camp), them.name, me.name,
+                                            ultimatums.strength_line(them.tag, player, them.name, me.name))
+        self.ultimatum_job = (u, self.war_pool.submit(llm.chat, msgs, None, 0.5, None, "ultimatum", them.tag),
+                              camp.id)
 
     # ---- story events: the player's country reacts to its letter deals and deeds (written in the background)
     def story(self, camp: campaign.Campaign, player: str) -> None:

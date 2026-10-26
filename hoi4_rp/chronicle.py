@@ -124,7 +124,9 @@ WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_l
                "faction_joined", "independence", "subject", "capitulation", "war", "peace", "territory",
                "justification", "wargoal",
                # treaties.py: a treaty broken, renounced, called on or lapsing changes what the two are to each other
-               "treaty:broken", "treaty:renounced", "treaty:clause", "treaty:lapsed"}
+               "treaty:broken", "treaty:renounced", "treaty:clause", "treaty:lapsed",
+               # ultimatums.py: a threat of war, and how it ended
+               "ultimatum:issued", "ultimatum:met", "ultimatum:war", "ultimatum:ready", "ultimatum:dropped"}
 
 
 def snapshot(player: str) -> Dict:

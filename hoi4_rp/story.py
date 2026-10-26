@@ -47,7 +47,8 @@ OPINION_STEPS = [-10, -5, 5, 10]
 _DEAL_WEIGHTS = [
     (3, ("give:state", "ask:state", "cede:", "give:annex", "give:submit", "ask:submit", "give:subject",
          "ask:subject", "subject:", "give:govt", "ask:govt", "give:peace", "give:war", "ask:war", "give:faction",
-         "ask:faction", "give:join", "ask:join", "end:faction", "give:leave", "ask:leave", "treaty:broken", "treaty:renounced",
+         "ask:faction", "give:join", "ask:join", "end:faction", "give:leave", "ask:leave", "ultimatum:issued", "ultimatum:war", "ultimatum:ready",
+         "ultimatum:met", "ultimatum:dropped", "treaty:broken", "treaty:renounced",
          "treaty:clause")),
     (2, ("give:civ", "ask:civ", "give:mil", "ask:mil", "give:dismantle", "ask:dismantle", "give:dmz", "ask:dmz",
          "give:rights", "ask:rights", "embargo", "give:pledge", "ask:pledge", "give:rifles", "ask:rifles",
@@ -56,7 +57,8 @@ _DEAL_WEIGHTS = [
 # Plain agreements (pacts, guarantees, access, docking, market) count 1: no event of their own, they make dull news.
 # Of a treaty's later steps only the dramatic ones count (paid instalments and expired terms are routine).
 _DEALS = ("give:", "ask:", "end:", "cede:", "subject:", "embargo", "treaty:broken", "treaty:renounced",
-          "treaty:clause")
+          "treaty:clause", "ultimatum:issued", "ultimatum:war", "ultimatum:ready", "ultimatum:met",
+          "ultimatum:dropped")
 
 
 # ---------------------------------------------------------------- what an event can be about

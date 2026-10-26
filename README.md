@@ -33,6 +33,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/chronicle.py   one-query world snapshots; their differences become dated events
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; offers
     hoi4_rp/treaties.py    deals over time: terms that end, instalments, war pledges
+    hoi4_rp/ultimatums.py  AI threats of war that can come true: deadline, then war, readiness or backing down
     hoi4_rp/story.py       story events: your country reacts to your letter deals and deeds
     hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
@@ -109,6 +110,24 @@ remembered. A pledge whose side is already in that war counts as kept. What you 
 treaty. You're never forced, but a broken treaty goes into the chronicle, the reputation game master judges it,
 and the other country writes about it. A war between the two ends their treaties. Every country's prompts show
 its treaties with you: terms, payments made and missed, pledges standing or honoured, treaties broken.
+
+## Ultimatums
+
+A country you've pushed far enough can threaten war and mean it (`hoi4_rp/ultimatums.py`). Its letter carries
+`[[ultimatum 6 months: what it demands]]`, usually with the demands as asks in its proposal (`[[ask state 34]]`).
+Only at peace, never between a subject and its overlord or faction members, never from a friendly or cordial
+policy, and one at a time per country.
+
+- You see it in red under the letter, with its deadline, and HOI4's own AI turns against you at once
+  (`add_ai_strategy` antagonize and prepare_for_war): it plans for that war itself.
+- Accepting the proposal meets it. Giving what was demanded some other way before the deadline does too; it's
+  checked in the game (the state is theirs, the access exists, the party rules...).
+- At the deadline the country decides in the background, as a shrewd player of that country: satisfied, war now,
+  ready (a war goal on you, and HOI4's AI told to declare when it judges itself ready), more time (once), or back
+  down. War now only if it is at peace with everyone else and its army is the stronger; otherwise it waits for
+  its generals, so Germany won't turn on you in the middle of Poland.
+- Every step goes into the chronicle and the country writes to you about it. Its prompts remember its ultimatums
+  and whether it backed down, so an empty threat costs it credibility with you.
 
 ## Story events
 

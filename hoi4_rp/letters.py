@@ -277,6 +277,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"You are the government of {them.name} in the grand strategy game Hearts of Iron IV. "
         f"The date is {them.date.strip()}.\n\n"
         f"{world.text([p.ideology for p in me.parties + them.parties])}\n\n"
+        + (f"{wt}\n\n" if (wt := world.tension_text({them.tag: them.name, me.tag: me.name})) else "") +
         f"YOUR COUNTRY:\n{gamestate.describe(them, focus_details=OWN_FOCUSES)}\n\n"
         f"THE COUNTRY YOU CORRESPOND WITH:\n"
         f"{gamestate.describe(me, focus_details=OTHER_FOCUSES, spirit_details=False)}\n\n"

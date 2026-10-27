@@ -286,6 +286,10 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
              "THE TWO COUNTRIES:\n" + card(me, w.get(me.tag, {}), other.tag) + "\n"
              + card(other, w.get(other.tag, {}), me.tag),
              f"BETWEEN YOU: {ties(me.tag, other.tag, me.name, other.name)}."]
+    from . import world
+    wt = world.tension_text({me.tag: me.name, other.tag: other.name})
+    if wt:
+        parts.append(wt)
     ev = _pair_events(camp, me.tag, other.tag)
     if ev:
         parts.append("RECENT EVENTS BETWEEN YOU:\n" + "\n".join(ev))

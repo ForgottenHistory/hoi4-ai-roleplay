@@ -2,7 +2,9 @@
 
 [ai_diplomacy] mode = dry: exchanges are written and logged, nothing reaches the game. mode = on: an agreed package of
 live kinds (pacts, market access, guarantees, commitments) takes effect, as chronicle news; anything else stays
-logged.
+logged. A dispatch may also set an ultimatum (ultimatums.py, with `to` another AI country): land demands come only
+this way; the other gives in, counters or lets it stand, and at its deadline the sender decides
+(ultimatum_messages(), ultimatums.decide()).
 One exchange is two short LLM calls: a dispatch from one government (a few sentences, its stance, at most one
 proposal from a short menu) and the other's answer: accept, decline, or counter with a package of its own (often
 theirs without what it refuses), on which the proposer has the last word in a third call. One round only. The prompts are short by
@@ -263,17 +265,41 @@ MENU_ASKS = ("ask:access", "ask:guarantee", "ask:faction", "ask:join")
 STANCES = ("friendly", "cordial", "indifferent", "wary", "hostile")
 
 
-def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str) -> Tuple[List[str], List[str], str]:
-    """What `a` could propose to `b`: (offers, asks, help lines). No land, factories or governments yet."""
+def may_threaten(camp: campaign.Campaign, a: str, b: str, rel) -> bool:
+    """May `a` set `b` an ultimatum? At peace, not bound to each other, `a`'s last stance toward `b` not friendly or
+    cordial, and no ultimatum of `a`'s standing (to anyone): one threat at a time."""
+    from . import ultimatums
+    last = (camp.policy_of(a, b) or {}).get("stance", "")
+    return (not rel.at_war and not rel.bound and last not in ("friendly", "cordial")
+            and not ultimatums.open_from(camp, a, "*"))
+
+
+def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool = False
+         ) -> Tuple[List[str], List[str], str]:
+    """What `a` could propose to `b`: (offers, asks, help lines). No factories or governments yet; land only as an
+    ultimatum's demand (`threat`): `b`'s states where `a` holds a core or a claim."""
     from . import actions
     from . import treaties
     rel = actions.relation(a, b)
     rel.pledged = frozenset(treaties.standing_pair(camp, a, b))   # a commitment standing isn't made twice
     offers = actions.possible_keys(rel, list(MENU_GIVES) + actions.war_gives(rel) + actions.commit_gives(rel))
     asks = actions.possible_keys(rel, list(MENU_ASKS) + actions.war_asks(rel) + actions.commit_asks(rel))
+    if threat:
+        asks += [k for k in actions.state_asks(rel) if actions.possible(rel, k)
+                 and (s := actions._BORDER_INFO.get(k)) and (s.core or s.claim)]
     f = actions._fmt(an, bn)
     lines = actions._item_lines("offer ", offers, f) + actions._item_lines("ask ", asks, f)
     return offers, asks, "\n".join(lines)
+
+
+def _threat_help(an: str, bn: str) -> str:
+    from . import ultimatums
+    return (f"ULTIMATUM. Only if {an} is truly ready to go to war with {bn} over a grave quarrel: add "
+            f"[[ultimatum N months: what you demand]] (N from {ultimatums.MIN_MONTHS} to {ultimatums.MAX_MONTHS}), "
+            f"with your demands as asks above (land only this way: the states listed, where you hold a core or a "
+            f"claim). It is real: your armies turn toward {bn} at once, and when the deadline passes unmet you must "
+            f"choose between war and backing down, before the world. Rare: most dispatches, even hostile ones, set "
+            f"none.")
 
 
 def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: gamestate.CountryState,
@@ -302,29 +328,44 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
                  f"{guarantees.TERM_MONTHS} months. One more would cost {me.name} "
                  f"{guarantees.next_cost(camp, me.tag)} of its {civ(me.tag)}, and {other.name} "
                  f"{guarantees.next_cost(camp, other.tag)} of its {civ(other.tag)}.")
+    from . import ultimatums
+    ul = ultimatums.between(camp, me.tag, other.tag, name)
+    if ul:
+        parts.append("ULTIMATUMS BETWEEN YOU:\n" + "\n".join(ul))
     parts.append(_last_exchange(camp, me.tag, other.tag, name))
     return "\n\n".join(parts)
 
 
 def dispatch_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: gamestate.CountryState,
-                    w: Dict[str, Dict]) -> Tuple[List[Dict], List[str], List[str]]:
-    offers, asks, lines = menu(camp, a.tag, b.tag, a.name, b.name)
+                    w: Dict[str, Dict]) -> Tuple[List[Dict], List[str], List[str], bool]:
+    """`a`'s dispatch to `b`: (messages, offers, asks, whether it may set an ultimatum)."""
+    from . import actions
+    threat = may_threaten(camp, a.tag, b.tag, actions.relation(a.tag, b.tag))
+    offers, asks, lines = menu(camp, a.tag, b.tag, a.name, b.name, threat)
     task = (f"Write a short diplomatic dispatch to {b.name}: 2 to 4 sentences in {a.name}'s own voice, about what "
             f"matters most between you now (no heading, date or place line). Then, on a line of its own:\n"
             f"STANCE: one of {', '.join(STANCES)} (how {a.name} regards {b.name} now)\n"
             + (f"Only if {a.name} really wants a deal now, add a proposal, one command per item (at most three):\n"
-               f"{lines}\n{SHORT_NOTE}" if lines else "No agreement is possible between you now: propose nothing."))
+               f"{lines}\n{SHORT_NOTE}" if lines else "No agreement is possible between you now: propose nothing.")
+            + (f"\n{_threat_help(a.name, b.name)}" if threat else ""))
     return ([{"role": "system", "content": _situation(camp, a, b, w) + "\n\n" + task},
-             {"role": "user", "content": "Write the dispatch now."}], offers, asks)
+             {"role": "user", "content": "Write the dispatch now."}], offers, asks, threat)
 
 
 def answer_prompt(camp: campaign.Campaign, b: gamestate.CountryState, a: gamestate.CountryState,
-                  w: Dict[str, Dict], text: str, items: List[str]) -> Tuple[List[Dict], List[str], List[str]]:
+                  w: Dict[str, Dict], text: str, items: List[str], threat: Optional[Tuple[int, str]] = None
+                  ) -> Tuple[List[Dict], List[str], List[str]]:
     """`b` answers `a`'s dispatch: accept, decline or (with a proposal) counter with a package of its own. Returns
-    (messages, what b could offer a, what b could ask of a) for reading the counter."""
+    (messages, what b could offer a, what b could ask of a) for reading the counter. `threat`: (months, demand) of
+    an ultimatum the dispatch set."""
     from . import actions
     deal = (f"Its proposal, a package you accept or decline as a whole: {actions.package_text(items, a.name)}."
             if items else "It makes no proposal.")
+    if threat:
+        deal += (f"\nTHIS IS AN ULTIMATUM: {threat[1]}, within {threat[0]} months, or war. {a.name}'s armies are "
+                 f"already turning toward you. Accepting gives in now; declining leaves {a.name} to choose between "
+                 f"war and backing down when the deadline passes; a counter offers less, which {a.name} may take "
+                 f"as satisfaction. Weigh the balance of arms and who would stand with you.")
     c_offers, c_asks, lines = menu(camp, b.tag, a.tag, b.name, a.name) if items else ([], [], "")
     answer = ""
     if items:
@@ -378,13 +419,20 @@ def _strip(text: str) -> str:
     return re.sub(r"^[\W_]*(stance|answer)[*_\s]*[:\-–].*$", "", text, flags=re.I | re.M).strip()
 
 
-def read_dispatch(raw: str, offers: List[str], asks: List[str]) -> Tuple[str, str, List[str]]:
-    """(text, stance, proposal items) from a dispatch."""
-    from . import actions
+def read_dispatch(raw: str, offers: List[str], asks: List[str], threat_ok: bool = False
+                  ) -> Tuple[str, str, List[str], Optional[Tuple[int, str]]]:
+    """(text, stance, proposal items, the ultimatum's (months, demand) or None) from a dispatch. Land demands stand
+    only with an ultimatum, and an ultimatum only where it may be set and from a stance that means it."""
+    from . import actions, ultimatums
     stance = next((s for s in STANCES if s in _line(raw, "stance")), "indifferent")
+    raw, threat = ultimatums.parse(raw)
+    if not threat_ok or stance in ("friendly", "cordial"):
+        threat = None
     text, _, proposals = actions.parse(_strip(raw))
-    items = actions.package([p for p in proposals if p in offers + asks], offers + asks)[:3]
-    return _tidy(text), stance, items
+    items = actions.package([p for p in proposals if p in offers + asks], offers + asks)
+    if not threat:
+        items = [k for k in items if not actions.is_state(k)]
+    return _tidy(text), stance, items[:4 if threat else 3], threat
 
 
 def read_answer(raw: str, items: List[str], c_offers: List[str] = (), c_asks: List[str] = ()
@@ -504,15 +552,28 @@ def undo(camp: campaign.Campaign) -> List[str]:
 
 def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, items: List[str], reply: str,
            answer: str, b_stance: str, why: List, usage: str = "", counter: List[str] = (), final: str = "",
-           final_answer: str = "", final_stance: str = "") -> None:
+           final_answer: str = "", final_stance: str = "", threat: Optional[Tuple[int, str]] = None) -> None:
     """Store a finished exchange and log it; with mode = on, put an agreed package of LIVE kinds in place. With a
-    counter-proposal, `final` is `a`'s last word on it."""
-    from . import actions
+    counter-proposal, `final` is `a`'s last word on it. With an ultimatum (`threat`, mode = on) it is set: met at
+    once if its demands (or a counter `a` took instead) were agreed, every item of them taking effect, land
+    included; else it stands until its deadline."""
+    from . import actions, ultimatums
     from .config import settings
     key = camp.data.get("last_date") or ""
+    c = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: c.get(t, {}).get("name", t)
+    on = settings().ai.mode == "on"
     agreed, writer, other = _settled(a, b, items, answer, list(counter), final_answer)
-    is_live = settings().ai.mode == "on" and bool(agreed) and all(live(k) for k in agreed)
+    u = None
+    if threat and on:
+        u, _ = ultimatums.issue(camp, a, b, threat[0], threat[1], items, key, name(a), name(b))
+    is_live = on and bool(agreed) and (bool(u) or all(live(k) for k in agreed))
     news = apply_deal(camp, writer, other, agreed) if is_live else []
+    if u and news:
+        how = f"{name(b)} gave in" if writer == a else f"{name(a)} took {name(b)}'s counter-offer as satisfaction"
+        ultimatums._close(camp, u, "met", how)
+        ultimatums._stand_down(camp, u)
+        ultimatums._event(camp, "met", [a, b], f"{name(b)} met {name(a)}'s ultimatum ({u['demand']}): {how}.")
     dry = not news
     camp.add_letter(a, a, text, key, other=b)
     camp.letters_with(a, b)[-1].update({"dry": dry, "proposal": items, "stance": stance})
@@ -524,13 +585,13 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
         camp.letters_with(a, b)[-1].update({"dry": dry, "answer": final_answer, "stance": final_stance})
     for x, y, s in ((a, b, final_stance or stance), (b, a, b_stance)):
         camp.set_policy(x, {"stance": s, "date": key, "when": campaign.date_words(key), "light": True}, other=y)
-    c = (camp.snapshot or {}).get("countries", {})
-    name = lambda t: c.get(t, {}).get("name", t)
     deal = actions.package_text(items, name(a)) if items else ""
     lines = [f"=== {campaign.date_words(key)}: {name(a)} -> {name(b)}   (score {why[0]}: {', '.join(why[1])})",
              f"{name(a).upper()} ({stance}): {text}"]
+    if threat:
+        lines.append(f"  ULTIMATUM{'' if on else ' (dry run)'}: {threat[1]}, within {threat[0]} months, or war")
     if deal:
-        lines.append(f"  proposes: {deal}")
+        lines.append(f"  {'demands' if threat else 'proposes'}: {deal}")
     lines.append(f"{name(b).upper()} ({b_stance}{', ' + answer.upper() if answer else ''}): {reply}")
     if counter:
         lines += [f"  counters: {actions.package_text(list(counter), name(b))}",
@@ -541,12 +602,50 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
         why_not = ("dry run" if settings().ai.mode != "on" else
                    "not live yet" if not all(live(k) for k in agreed) else "could not be put in place")
         lines.append(f"  [{why_not}] would take effect: {actions.package_text(agreed, name(writer))}")
+    if u:
+        lines.append(f"  [ultimatum] {'met: ' + u['how'] if u['status'] == 'met' else 'stands until ' + campaign.date_words(u['deadline'])}")
     if usage:
         lines.append(f"  ({usage})")
+    log(lines)
+
+
+def log(lines: List[str]) -> None:
+    """Into data/logs/ai_diplomacy.txt and the console."""
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n\n")
     print("\n".join("  [ai] " + x for x in lines))
+
+
+# ---------------------------------------------------------------- an ultimatum's deadline
+
+def ultimatum_messages(camp: campaign.Campaign, u: Dict, a: gamestate.CountryState, b: gamestate.CountryState,
+                       w: Dict[str, Dict]) -> List[Dict]:
+    """`a` decides on its ultimatum to `b` at the deadline (or, readied for war, at a review): short, with the
+    balance of arms as the game would have it."""
+    from . import actions, ultimatums
+    done, left = ultimatums._items_done(camp, u)
+    label = lambda k: actions.get_deal(k).label
+    review = u["status"] == "ready"
+    options = ("MET (the demands were met after all: you are satisfied), WAR (declare war now), READY (keep your "
+               f"armies on the border and wait; you reconsider in {ultimatums.REVIEW_MONTHS} months), "
+               + ("" if u["extended"] or review else f"EXTEND (give them up to {ultimatums.MAX_EXTENSION} more "
+                                                     f"months, once), ")
+               + ("or DROP (stand down: withdraw your war goal and armies)" if review else "or DROP (back down)"))
+    task = (f"YOUR ULTIMATUM: on {u['when']} you gave {b.name} an ultimatum: {u['demand']}, by "
+            f"{campaign.date_words(u['deadline'])}, or war. "
+            + (f"It ran out unmet; you hold a war goal on {b.name} and your armies prepare. You now reconsider "
+               f"whether to strike." if review else "That deadline has passed.")
+            + (f" Demanded items done: {', '.join(label(k) for k in done) or 'none'}; still outstanding: "
+               f"{', '.join(label(k) for k in left) or 'none'}." if u["items"] else "")
+            + f"\n\n{ultimatums.balance(camp, a.tag, b.tag, a.name, b.name)[0]}\n\n"
+            f"Decide as {a.name}'s government now would, a shrewd player of your country: war is costly and can be "
+            f"lost, above all against a stronger coalition; but a threat you don't carry out costs you credibility "
+            f"with {b.name} and the world. Your options: {options}.\nAnswer with exactly these lines:\n"
+            f"DECISION: one of MET, WAR, READY, EXTEND, DROP\nMONTHS: for EXTEND, how many more months; otherwise 0\n"
+            f"WHY: one sentence")
+    return [{"role": "system", "content": _situation(camp, a, b, w) + "\n\n" + task},
+            {"role": "user", "content": "Decide now."}]
 
 
 def drop_after(camp: campaign.Campaign, key: str) -> None:

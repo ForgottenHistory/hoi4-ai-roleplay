@@ -25,7 +25,11 @@ Each step goes into the chronicle, and the country writes about it. Its prompts 
 and how they ended (describe()), so it remembers backing down, and a country whose threats come true is taken
 seriously.
 
-Stored in the campaign: data["ultimatums"] = [{"id", "from", "date", "when", "deadline", "demand", "items",
+Between two AI countries (AI-to-AI diplomacy, diplomacy.py) the same, with "to" another AI country: set in a
+dispatch, met by the other side accepting its demands, followed by tick_ai() and decided in a short call
+(diplomacy.ultimatum_messages()), all as news (no letters).
+
+Stored in the campaign: data["ultimatums"] = [{"id", "from", "to", "date", "when", "deadline", "demand", "items",
 "status": open | met | war | ready | dropped | lapsed, "closed", "how", "extended", "deciding"}].
 """
 
@@ -59,8 +63,11 @@ def _all(camp: campaign.Campaign) -> List[Dict]:
     return [u for u in _store(camp) if u["to"] == camp.data["player"]]
 
 
-def open_from(camp: campaign.Campaign, tag: str) -> Optional[Dict]:
-    return next((u for u in _all(camp) if u["from"] == tag and u["status"] in ("open", "ready")), None)
+def open_from(camp: campaign.Campaign, tag: str, to: str = "") -> Optional[Dict]:
+    """`tag`'s ultimatum to `to` (the player by default; "*": to anyone) still standing."""
+    to = to or camp.data["player"]
+    return next((u for u in _store(camp) if u["from"] == tag and (to == "*" or u["to"] == to)
+                 and u["status"] in ("open", "ready")), None)
 
 
 # ---------------------------------------------------------------- setting one
@@ -105,14 +112,14 @@ def _strategies(them: str, me: str, kinds: Tuple[str, ...], value: int) -> str:
 # the pushes made after it, as the game itself does.
 
 def _push(camp: campaign.Campaign, u: Dict, kinds: Tuple[str, ...], value: int) -> None:
-    if actions._effect(_strategies(u["from"], camp.data["player"], kinds, value)):
+    if actions._effect(_strategies(u["from"], u["to"], kinds, value)):
         key = camp.data.get("last_date") or u["date"]
         u.setdefault("pushes", []).extend([key, k, value] for k in kinds)
 
 
 def _stand_down(camp: campaign.Campaign, u: Dict, wargoal: bool = True) -> None:
     """Withdraw what the ultimatum added to the game's AI, and (unless at war) the war goal it gave."""
-    tag, player = u["from"], camp.data["player"]
+    tag, player = u["from"], u["to"]
     total: Dict[str, int] = {}
     for _, kind, value in u.get("pushes", []):
         total[kind] = total.get(kind, 0) + value
@@ -142,9 +149,12 @@ def issue(camp: campaign.Campaign, tag: str, player: str, months: int, demand: s
 
 
 def _event(camp: campaign.Campaign, kind: str, tags: List[str], text: str) -> None:
+    """News of an ultimatum. One between two AI countries is known to all when a major power is in it."""
     key = camp.data.get("last_date") or ""
+    c = (camp.snapshot or {}).get("countries", {})
+    major = camp.data["player"] not in tags and any(c.get(t, {}).get("major") for t in tags)
     camp.add_events([{"date": key, "when": campaign.date_words(key), "type": f"ultimatum:{kind}", "tags": tags,
-                      "text": text, "major": False}])
+                      "text": text, "major": major}])
     print(f"  [ultimatum] {text}")
 
 
@@ -173,10 +183,10 @@ def rejected(camp: campaign.Campaign, tag: str, me_name: str, them_name: str) ->
 
 # ---------------------------------------------------------------- as time passes
 
-def _names(camp: campaign.Campaign, tag: str) -> Tuple[str, str]:
+def _names(camp: campaign.Campaign, tag: str, to: str = "") -> Tuple[str, str]:
     c = (camp.snapshot or {}).get("countries", {})
-    player = camp.data["player"]
-    return c.get(tag, {}).get("name", tag), c.get(player, {}).get("name", player)
+    to = to or camp.data["player"]
+    return c.get(tag, {}).get("name", tag), c.get(to, {}).get("name", to)
 
 
 _RELATION_DONE = {"ask:access": "my_access", "ask:docking": "my_docking", "ask:guarantee": "my_guarantee"}
@@ -215,7 +225,7 @@ def _items_done(camp: campaign.Campaign, u: Dict) -> Tuple[List[str], List[str]]
     """(demanded items that have happened, items still outstanding), checked in the game."""
     if not u["items"]:
         return [], []
-    them, me = u["from"], camp.data["player"]
+    them, me = u["from"], u["to"]
     rel = actions.relation(them, me)
     actions.state_asks(rel), actions.rights_asks(rel), actions.dmz_asks(rel)    # loads names for the labels
     done = [k for k in u["items"] if _done(rel, them, me, k)]
@@ -232,45 +242,74 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
     for u in _all(camp):
         if u["status"] not in ("open", "ready") or not today:
             continue
-        tag = u["from"]
-        them_name, me_name = _names(camp, tag)
-        if tag not in countries or countries[tag].get("capitulated"):
-            _close(camp, u, "lapsed", f"{them_name} has fallen")
-            if tag in countries:
-                _stand_down(camp, u)
-            changed = True
-            continue
-        if bridge.trigger(f"{player} = {{ has_war_with = {tag} }}"):
-            started = bridge.trigger(f"{tag} = {{ has_offensive_war_with = {player} }}")
-            _close(camp, u, "war", f"{them_name} made war on {me_name}" if started
-                   else f"war came between them ({me_name} struck first)")
-            _stand_down(camp, u, wargoal=False)    # the war drives its AI now; nothing left over for after the peace
-            _event(camp, "war", [tag, player], f"{them_name}'s ultimatum to {me_name} ({u['demand']}) ended in war.")
-            changed = True
-            continue
-        if u["status"] == "open" and not u["deciding"] and today >= u["deadline"]:
-            done, left = _items_done(camp, u)
-            if u["items"] and not left:
-                _close(camp, u, "met", f"{me_name} gave what was demanded")
-                _stand_down(camp, u)
-                text = f"{me_name} met {them_name}'s ultimatum in time: {u['demand']}."
-                _event(camp, "met", [tag, player], text)
-                letters.append((tag, text))
-            else:
-                u["deciding"] = True
-                print(f"  ultimatum {u['id']} from {tag}: deadline passed, deciding")
-            changed = True
-        elif u["status"] == "ready" and not u["deciding"] and today >= u.get("review", u["deadline"]):
-            u["deciding"] = True
-            print(f"  ultimatum {u['id']} from {tag}: readied for war, reconsidering")
-            changed = True
+        moved, text = _follow(camp, u, today, countries)
+        changed |= moved
+        if text:
+            letters.append((u["from"], text))
     if changed:
         camp.save()
     return letters
 
 
+def tick_ai(camp: campaign.Campaign) -> None:
+    """Follow the ultimatums between two AI countries, as news."""
+    today = camp.data.get("last_date") or ""
+    countries = (camp.snapshot or {}).get("countries", {})
+    changed = False
+    for u in _store(camp):
+        if u["to"] != camp.data["player"] and u["status"] in ("open", "ready") and today:
+            changed |= _follow(camp, u, today, countries)[0]
+    if changed:
+        camp.save()
+
+
+def _follow(camp: campaign.Campaign, u: Dict, today: str, countries: Dict) -> Tuple[bool, str]:
+    """One open ultimatum at today's date: (changed, what happened worth a letter from its sender, or '')."""
+    tag, player = u["from"], u["to"]
+    them_name, me_name = _names(camp, tag, player)
+    changed, letter = False, ""
+    if player not in countries:
+        _close(camp, u, "lapsed", f"{me_name} is gone")
+        _stand_down(camp, u)
+        return True, ""
+    if tag not in countries or countries[tag].get("capitulated"):
+        _close(camp, u, "lapsed", f"{them_name} has fallen")
+        if tag in countries:
+            _stand_down(camp, u)
+        return True, ""
+    if bridge.trigger(f"{player} = {{ has_war_with = {tag} }}"):
+        started = bridge.trigger(f"{tag} = {{ has_offensive_war_with = {player} }}")
+        _close(camp, u, "war", f"{them_name} made war on {me_name}" if started
+               else f"war came between them ({me_name} struck first)")
+        _stand_down(camp, u, wargoal=False)    # the war drives its AI now; nothing left over for after the peace
+        _event(camp, "war", [tag, player], f"{them_name}'s ultimatum to {me_name} ({u['demand']}) ended in war.")
+        return True, ""
+    if u["status"] == "open" and not u["deciding"] and today >= u["deadline"]:
+        done, left = _items_done(camp, u)
+        if u["items"] and not left:
+            _close(camp, u, "met", f"{me_name} gave what was demanded")
+            _stand_down(camp, u)
+            letter = f"{me_name} met {them_name}'s ultimatum in time: {u['demand']}."
+            _event(camp, "met", [tag, player], letter)
+        else:
+            u["deciding"] = True
+            print(f"  ultimatum {u['id']} from {tag} to {player}: deadline passed, deciding")
+        changed = True
+    elif u["status"] == "ready" and not u["deciding"] and today >= u.get("review", u["deadline"]):
+        u["deciding"] = True
+        print(f"  ultimatum {u['id']} from {tag} to {player}: readied for war, reconsidering")
+        changed = True
+    return changed, letter
+
+
 def next_decision(camp: campaign.Campaign) -> Optional[Dict]:
     return next((u for u in _all(camp) if u["status"] in ("open", "ready") and u["deciding"]), None)
+
+
+def next_ai_decisions(camp: campaign.Campaign) -> List[Dict]:
+    """Ultimatums between two AI countries waiting for their sender's decision."""
+    return [u for u in _store(camp) if u["to"] != camp.data["player"] and u["status"] in ("open", "ready")
+            and u["deciding"]]
 
 
 def decision_messages(camp: campaign.Campaign, u: Dict, context: str, them_name: str, me_name: str,
@@ -371,9 +410,9 @@ def balance(camp: campaign.Campaign, tag: str, player: str, them_name: str, me_n
 
 def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -> str:
     """Carry out the country's decision (Python's rules first). Returns what happened, for the letter it writes."""
-    player = camp.data["player"]
+    player = u["to"]
     tag = u["from"]
-    them_name, me_name = _names(camp, tag)
+    them_name, me_name = _names(camp, tag, player)
     u["deciding"] = False
     review = u["status"] == "ready"                    # a readied country reconsidering
     if step == "extend" and (u["extended"] or review):
@@ -457,6 +496,20 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
         out += (f"\nYou have backed down from {backed} of them: {me_name} has reason to doubt your threats, and "
                 f"another empty one would make you a laughing stock.")
     return out
+
+
+def between(camp: campaign.Campaign, a: str, b: str, name) -> List[str]:
+    """Ultimatums between two countries, either way, for an AI-to-AI prompt (one line each)."""
+    out = []
+    for u in _store(camp):
+        if {u["from"], u["to"]} != {a, b}:
+            continue
+        state = ("STILL STANDING" if u["status"] == "open" else
+                 "unmet; the sender holds a war goal and readies its armies" if u["status"] == "ready" else
+                 f"{u['status'].upper()}: {u['how']}")
+        out.append(f"- {u['when']}: {name(u['from'])} to {name(u['to'])}: \"{u['demand']}\", by "
+                   f"{campaign.date_words(u['deadline'])} - {state}")
+    return out[-4:]
 
 
 def drop_after(camp: campaign.Campaign, key: str) -> None:

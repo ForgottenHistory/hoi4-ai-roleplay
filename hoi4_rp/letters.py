@@ -1046,7 +1046,8 @@ class _Session:
             camp.save()
             if old is not None:
                 self.plan_letters(camp, player, snap, events, old)
-                treaties.tick_ai(camp)          # treaties between two AI countries: news only
+                treaties.tick_ai(camp)          # treaties and ultimatums between two AI countries: news only
+                ultimatums.tick_ai(camp)
                 for tag, why in treaties.tick(camp, player) + ultimatums.tick(camp, player) + guarantees.tick(camp):
                     if active(snap, tag) and settings().letters.incoming:
                         self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()
@@ -1080,6 +1081,21 @@ class _Session:
                 if nxt:
                     running.append(nxt)
         self.ai_jobs = running
+        # ultimatums between AI countries past their deadline: their senders decide, beside the exchanges
+        deciding = {job[1]["id"] for job in self.ai_jobs if job[0] == "ultimatum"}
+        for u in ultimatums.next_ai_decisions(camp):
+            if len(self.ai_jobs) >= AI_PARALLEL:
+                break
+            if u["id"] in deciding:
+                continue
+            try:
+                msgs = diplomacy.ultimatum_messages(camp, u, gamestate.country(u["from"]), gamestate.country(u["to"]),
+                                                    diplomacy.world())
+            except gamestate.StateError as e:
+                print(f"  [ai] {u['from']} could not decide on its ultimatum to {u['to']}: {e}")
+                continue
+            self.ai_jobs.append(("ultimatum", u, self.ai_pool.submit(llm.chat, msgs, None, 0.5, None, "ai:ultimatum",
+                                                                     u["from"]), camp.id, None))
         if diplomacy.due(camp):
             queued = diplomacy.draw(camp, cfg.exchanges_per_month, cfg.cooldown_days)
             print("  [ai] this month: " + (", ".join(f"{x[0]} -> {x[1]}" for x in queued) or "nobody"))
@@ -1094,18 +1110,37 @@ class _Session:
                 continue                                 # gone, or at war since the draw
             try:
                 w = w or diplomacy.world()
-                msgs, offers, asks = diplomacy.dispatch_prompt(camp, gamestate.country(a), gamestate.country(b), w)
+                msgs, offers, asks, threat_ok = diplomacy.dispatch_prompt(camp, gamestate.country(a),
+                                                                          gamestate.country(b), w)
             except gamestate.StateError as e:
                 print(f"  [ai] {a} could not write to {b}: {e}")
                 continue
             st["pairs"][campaign.pair(a, b)] = st["started"][a] = camp.data.get("last_date") or ""
             camp.save()
             self.ai_jobs.append(("dispatch", item, self.ai_pool.submit(llm.chat, msgs, None, None, None,
-                                                                       "ai:dispatch", a), camp.id, (offers, asks, w)))
+                                                                       "ai:dispatch", a), camp.id,
+                                 (offers, asks, w, threat_ok)))
 
     def _ai_step(self, camp: campaign.Campaign, stage: str, item: List, fut, ctx) -> Optional[tuple]:
         """A finished call of an exchange: the dispatch leads to the answer (returned as the next job), the answer
-        to the record."""
+        to the record; or an ultimatum's sender decided (`item` is then the ultimatum)."""
+        if stage == "ultimatum":
+            u = item
+            try:
+                raw = fut.result()
+            except llm.LLMError as e:
+                print(f"  [ai] {u['from']}'s decision on its ultimatum failed: {e}")
+                self.failed()
+                return None
+            step, months, why = ultimatums.read_decision(raw)
+            if step and u["status"] in ("open", "ready"):
+                happened = ultimatums.decide(camp, u, step, months, why)
+                c = (camp.snapshot or {}).get("countries", {})
+                diplomacy.log([f"=== {campaign.date_words(camp.data.get('last_date') or '')}: "
+                               f"{c.get(u['from'], {}).get('name', u['from'])}'s ultimatum to "
+                               f"{c.get(u['to'], {}).get('name', u['to'])}: {step.upper()}",
+                               happened or f"(still readied; reconsidering in {ultimatums.REVIEW_MONTHS} months: {why})"])
+            return None
         a, b = item[0], item[1]
         try:
             raw = fut.result()
@@ -1114,18 +1149,18 @@ class _Session:
             self.failed()
             return None
         if stage == "dispatch":
-            offers, asks, w = ctx
-            text, stance, items = diplomacy.read_dispatch(raw, offers, asks)
+            offers, asks, w, threat_ok = ctx
+            text, stance, items, threat = diplomacy.read_dispatch(raw, offers, asks, threat_ok)
             try:
                 msgs, c_offers, c_asks = diplomacy.answer_prompt(camp, gamestate.country(b), gamestate.country(a), w,
-                                                                 text, items)
+                                                                 text, items, threat)
             except gamestate.StateError as e:
                 print(f"  [ai] {b} could not answer {a}: {e}")
                 return None
             return ("answer", item, self.ai_pool.submit(llm.chat, msgs, None, None, None, "ai:answer", b), camp.id,
-                    (text, stance, items, w, c_offers, c_asks))
+                    (text, stance, items, w, c_offers, c_asks, threat))
         if stage == "answer":
-            text, stance, items, w, c_offers, c_asks = ctx
+            text, stance, items, w, c_offers, c_asks, threat = ctx
             reply, answer, b_stance, counter = diplomacy.read_answer(raw, items, c_offers, c_asks)
             if answer == "counter":                     # the proposer has the last word on the counter
                 try:
@@ -1135,14 +1170,14 @@ class _Session:
                     print(f"  [ai] {a} could not weigh {b}'s counter: {e}")
                     return None
                 return ("final", item, self.ai_pool.submit(llm.chat, msgs, None, None, None, "ai:final", a), camp.id,
-                        (text, stance, items, reply, b_stance, counter))
-            diplomacy.record(camp, a, b, text, stance, items, reply, answer, b_stance, item[2:4])
+                        (text, stance, items, reply, b_stance, counter, threat))
+            diplomacy.record(camp, a, b, text, stance, items, reply, answer, b_stance, item[2:4], threat=threat)
             camp.save()
             return None
-        text, stance, items, reply, b_stance, counter = ctx
+        text, stance, items, reply, b_stance, counter, threat = ctx
         final, final_answer, final_stance, _ = diplomacy.read_answer(raw, counter)
         diplomacy.record(camp, a, b, text, stance, items, reply, "counter", b_stance, item[2:4], counter=counter,
-                         final=final, final_answer=final_answer, final_stance=final_stance)
+                         final=final, final_answer=final_answer, final_stance=final_stance, threat=threat)
         camp.save()
         return None
 

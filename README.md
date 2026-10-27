@@ -254,7 +254,14 @@ forgets what it did since.
   or with something asked in return), which the proposer accepts or declines in a third short call. The stances
   are kept per pair, and the letters too (marked as dry when nothing took effect).
 - It runs while the game runs, in its own queue beside your letters, up to three exchanges at once.
-  `python -m hoi4_rp usage` shows its calls as `ai:dispatch`, `ai:answer` and `ai:final`.
+  `python -m hoi4_rp usage` shows its calls as `ai:dispatch`, `ai:answer`, `ai:final` and `ai:ultimatum`.
+- Ultimatums between AI countries (`mode = on`): a country at odds with another (no friendly or cordial stance,
+  no ultimatum of its own standing) may set one in its dispatch, demanding land only this way: the other's states
+  where it holds a core or claim (Bulgaria's Dobruja, Lithuania's Wilno). Its AI turns toward the other at once.
+  Accepting gives in (every demand takes effect, land included); a counter it takes satisfies it; otherwise it
+  stands until its deadline, when the sender decides in a short call as yours do: met, war (only if its side is
+  the stronger, allies and guarantors counted), ready (a war goal and its armies prepared, reviewed every three
+  months), more time once, or backing down. All of it is news; both sides' later exchanges remember it.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)
 

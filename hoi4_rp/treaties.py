@@ -202,7 +202,9 @@ def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optiona
                 for k, spec in terms["payments"].items()]
     clauses = [{"key": k, "fired": "", "asked": ""} for k in applied if actions.is_pledge(k)]
     held = standing_pair(camp, tag, me)              # a commitment already standing isn't made twice
-    clauses += [{"key": k, "fired": "", "asked": "", "base": _against(k, tag, me)}
+    countries = (camp.snapshot or {}).get("countries", {})
+    clauses += [{"key": k, "fired": "", "asked": "", "base": _against(k, tag, me),
+                 "ideology": countries.get(k.rsplit(":", 1)[1], {}).get("ideology", "")}
                 for k in applied if actions.is_align(k) and k not in held]
     until = _add_months(key, terms["months"]) if terms["months"] else ""
     if not (payments or clauses or (until and any(_endable(k) for k in applied))):
@@ -258,6 +260,25 @@ def _keep_commitment(camp: campaign.Campaign, t: Dict, c: Dict, player: str, tod
     x_name = countries.get(x, {}).get("name", x)
     if x not in countries:
         c["fired"], c["how"] = today, f"{x_name} no longer exists"
+        return True, ""
+    # A line taken toward a government lapses when another kind of government takes over (Hitler's Germany fell to
+    # a military junta in a 1936 test game): the parties decide afresh. Older clauses take today's as their own.
+    ideology = countries[x].get("ideology", "")
+    if not c.get("ideology"):
+        # the chronicle tells what it was: "the Militärregierung (non-aligned) took power from the NSDAP (fascist)"
+        import re
+        changes = [re.findall(r"\(([a-z -]+)\)", e["text"]) for e in camp.data["events"]
+                   if e.get("type") == "government" and x in e["tags"][:1] and e["date"] > t["date"]]
+        was = next((found[1] for found in changes if len(found) >= 2 and found[0] != found[1]), "")
+        c["ideology"] = was or ideology
+        if not was:
+            return True, ""
+    if ideology and ideology != c["ideology"]:
+        them_name, me_name = _names(camp, player, tag)
+        actor = them_name if c["key"].startswith("give:") else me_name
+        c["fired"], c["how"] = today, f"{x_name}'s government changed"
+        _event(camp, "lapsed", [tag, player, x], f"{actor}'s commitment {_PROMISE[kind].format(x=x_name)} (treaty "
+                                                f"of {t['when']}) lapsed: {x_name} has a {ideology} government now.")
         return True, ""
     now = _against(c["key"], tag, player)
     base = [i for i in c.get("base", []) if i in now]

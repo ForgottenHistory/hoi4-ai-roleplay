@@ -740,7 +740,10 @@ def _commit_ok(kind: str, info: Dict, actor: str, ben: str) -> bool:
     if kind in ("oppose", "sanction"):
         if {f"ally_{actor}", f"friend_{actor}", f"ally_{ben}", f"friend_{ben}"} & f:
             return False
-        return f"threat_{ben}" in f and not (kind == "sanction" and f"embargoed_{actor}" in f)
+        # and a stake of `actor`'s own: its neighbour, a threat to it, or a great power facing a great power (Britain
+        # took no line against Bulgaria for Romania's sake; Romania collected four such lines in a test year)
+        stake = bool({f"near_{actor}", f"threat_{actor}"} & f) or ("major" in f and f"{actor}_major" in f)
+        return f"threat_{ben}" in f and stake and not (kind == "sanction" and f"embargoed_{actor}" in f)
     if {f"threat_{ben}", f"war_{ben}", f"ally_{actor}", f"embargoed_{actor}"} & f:
         return False
     if kind == "befriend" and f"friend_{actor}" in f:

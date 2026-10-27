@@ -131,6 +131,9 @@ def tension_text(names: dict) -> str:
         print(f"  world tension could not be read: {e}")
         return ""
     lines = [tension_line(n, level, rules[t]) for t, n in names.items() if t in rules]
+    if settings().world.tension_rules:
+        lines.append("Deals by letter keep to these rules too: a guarantee only once the guarantor may give one, a "
+                     "faction only once both sides may join one. Offer, ask or promise nothing else of the kind.")
     return (f"WORLD TENSION: {_pct(level)}. It rises with every war goal justified, annexation and war, and falls "
             f"with guarantees and lasting peace; the game ties what governments may do to it (low tension: a quiet "
             f"world that would see guarantees, alliances and war preparations as alarmism; high: a world bracing for "

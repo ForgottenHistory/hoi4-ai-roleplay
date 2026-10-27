@@ -130,6 +130,16 @@ what the guarantee costs whom; every country's prompts know its upkeep and the p
 renews a guarantee at no new cost. One that runs its term ended as agreed and isn't held against anyone. The game's
 own Guarantee button is unchanged.
 
+## World tension
+
+Every prompt (letters, replies, policies, ultimatum decisions, AI-to-AI exchanges) knows the world tension and, for
+both countries, what the game lets them do at it and from what level: guarantee, join or form a faction, lend-lease,
+volunteers, war goals. The thresholds are read live per country, so ideology, national spirits and mods count (the
+USA's neutrality puts a guarantee out of reach; Italy may guarantee at any tension). With `tension_rules = yes`
+in `[world]` (the default) letter deals keep to them too: a guarantee only once the guarantor may give one, a
+faction (joining or admitting) only once both sides may join one, for your deals and AI-to-AI ones alike.
+`tension_rules = no` frees deals of them.
+
 ## Treaties
 
 A letter deal can run over time (`hoi4_rp/treaties.py`):

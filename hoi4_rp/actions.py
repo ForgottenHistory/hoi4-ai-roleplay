@@ -163,6 +163,9 @@ class Relation:
     me_ports: bool = True
     them_navy: bool = True                # has ships to dock
     me_navy: bool = True
+    tension: float = 0.0                  # world tension 0..1, and each side's thresholds (world.tension)
+    them_tension: Dict[str, float] = None
+    me_tension: Dict[str, float] = None
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -221,8 +224,12 @@ def border_states(owner: str, other: str) -> Dict[str, BorderState]:
 
 
 def relation(them: str, me: str) -> Relation:
-    from . import peace
+    from . import peace, world
     at_war = bridge.trigger(f"{me} = {{ has_war_with = {them} }}")
+    try:
+        level, rules = world.tension([them, me])
+    except gamestate.StateError:
+        level, rules = 0.0, {}
     bound = ("subject" if bridge.trigger(f"{them} = {{ is_subject_of = {me} }}") else
              "overlord" if bridge.trigger(f"{me} = {{ is_subject_of = {them} }}") else
              "faction" if bridge.trigger(f"{me} = {{ is_in_faction_with = {them} }}") else "")
@@ -242,7 +249,27 @@ def relation(them: str, me: str) -> Relation:
                     me_enemies=joinable_enemies(me, them), them_enemies=joinable_enemies(them, me),
                     third=third_countries(them, me),
                     them_equipment=equipment_counts(them), me_equipment=equipment_counts(me),
-                    them_ports=_coastal(them), me_ports=_coastal(me), them_navy=_navy(them), me_navy=_navy(me))
+                    them_ports=_coastal(them), me_ports=_coastal(me), them_navy=_navy(them), me_navy=_navy(me),
+                    tension=level, them_tension=rules.get(them), me_tension=rules.get(me))
+
+
+# World tension (config [world] tension_rules): the deal keys the game ties to it, and whose threshold must be
+# reached: a guarantee the guarantor's, a faction both sides' (the one joining and the one admitting). Below it the
+# item isn't possible, as in the game's own diplomacy window.
+TENSION_GATED = {"give:guarantee": (("them", "guarantee_tension"),), "ask:guarantee": (("me", "guarantee_tension"),),
+                 **{k: (("them", "join_faction_tension"), ("me", "join_faction_tension"))
+                    for k in ("give:faction", "give:join", "ask:faction", "ask:join")}}
+
+
+def tension_allows(rel: "Relation", key: str) -> bool:
+    from .config import settings
+    if key not in TENSION_GATED or not settings().world.tension_rules:
+        return True
+    for side, rule in TENSION_GATED[key]:
+        rules = rel.them_tension if side == "them" else rel.me_tension
+        if rules is not None and rel.tension < rules.get(rule, 0):
+            return False
+    return True
 
 
 def _coastal(tag: str) -> bool:
@@ -1104,6 +1131,8 @@ def get_deal(key: str) -> Optional[Deal]:
 
 
 def possible(rel: Relation, key: str) -> bool:
+    if not tension_allows(rel, key):
+        return False
     if is_govt_key(key):
         verb, _, ideology = key.split(":")
         parties = rel.them_parties if verb == "give" else rel.me_parties

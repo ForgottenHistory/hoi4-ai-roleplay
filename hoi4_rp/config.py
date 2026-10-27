@@ -53,6 +53,7 @@ DEFAULTS = {
         "setting": "auto",
         "lore_file": "",
         "game_dir": "",
+        "tension_rules": "yes",
     },
 }
 
@@ -92,6 +93,7 @@ class WorldSettings:
     setting: str          # auto | vanilla | kaiserreich
     lore_file: str        # optional text file with extra setting notes
     game_dir: str         # HOI4 install folder (found automatically when empty)
+    tension_rules: bool   # letter deals keep to the game's world tension rules (guarantees, factions)
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,7 @@ def settings() -> Settings:
             setting=(w.get("setting") or "auto").strip().lower(),
             lore_file=(w.get("lore_file") or "").strip(),
             game_dir=(w.get("game_dir") or "").strip(),
+            tension_rules=w.getboolean("tension_rules"),
         ),
         ai=AIDiplomacySettings(
             mode=(ai.get("mode") or "off").strip().lower(),

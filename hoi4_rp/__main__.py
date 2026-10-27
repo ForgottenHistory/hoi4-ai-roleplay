@@ -10,7 +10,7 @@
    python -m hoi4_rp subjects [TAG]  list the subject levels the game and mods define, or one subject's
                                  level, the levels open to it and its progress
    python -m hoi4_rp ai-undo     end every agreement AI-to-AI diplomacy put in place in the running campaign
-                                 (pacts, market access, guarantees) that still holds (stop `run` first)
+                                 (pacts, market access, guarantees, commitments) that still holds (stop `run` first)
 """
 
 import sys

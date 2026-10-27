@@ -1045,6 +1045,7 @@ class _Session:
             camp.save()
             if old is not None:
                 self.plan_letters(camp, player, snap, events, old)
+                treaties.tick_ai(camp)          # treaties between two AI countries: news only
                 for tag, why in treaties.tick(camp, player) + ultimatums.tick(camp, player) + guarantees.tick(camp):
                     if active(snap, tag) and settings().letters.incoming:
                         self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()

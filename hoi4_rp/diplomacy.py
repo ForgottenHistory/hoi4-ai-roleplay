@@ -1,7 +1,8 @@
 """AI-to-AI diplomacy: countries other than the player write to each other.
 
 [ai_diplomacy] mode = dry: exchanges are written and logged, nothing reaches the game. mode = on: an agreed package of
-LIVE kinds (pacts, market access, guarantees) takes effect, as chronicle news; anything else stays logged.
+live kinds (pacts, market access, guarantees, commitments) takes effect, as chronicle news; anything else stays
+logged.
 One exchange is two short LLM calls: a dispatch from one government (a few sentences, its stance, at most one
 proposal from a short menu) and the other's answer: accept, decline, or counter with a package of its own (often
 theirs without what it refuses), on which the proposer has the last word in a third call. One round only. The prompts are short by
@@ -262,10 +263,12 @@ MENU_ASKS = ("ask:access", "ask:guarantee", "ask:faction", "ask:join")
 STANCES = ("friendly", "cordial", "indifferent", "wary", "hostile")
 
 
-def menu(a: str, b: str, an: str, bn: str) -> Tuple[List[str], List[str], str]:
+def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str) -> Tuple[List[str], List[str], str]:
     """What `a` could propose to `b`: (offers, asks, help lines). No land, factories or governments yet."""
     from . import actions
+    from . import treaties
     rel = actions.relation(a, b)
+    rel.pledged = frozenset(treaties.standing_pair(camp, a, b))   # a commitment standing isn't made twice
     offers = actions.possible_keys(rel, list(MENU_GIVES) + actions.war_gives(rel) + actions.commit_gives(rel))
     asks = actions.possible_keys(rel, list(MENU_ASKS) + actions.war_asks(rel) + actions.commit_asks(rel))
     f = actions._fmt(an, bn)
@@ -301,7 +304,7 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
 
 def dispatch_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: gamestate.CountryState,
                     w: Dict[str, Dict]) -> Tuple[List[Dict], List[str], List[str]]:
-    offers, asks, lines = menu(a.tag, b.tag, a.name, b.name)
+    offers, asks, lines = menu(camp, a.tag, b.tag, a.name, b.name)
     task = (f"Write a short diplomatic dispatch to {b.name}: 2 to 4 sentences in {a.name}'s own voice, about what "
             f"matters most between you now (no heading, date or place line). Then, on a line of its own:\n"
             f"STANCE: one of {', '.join(STANCES)} (how {a.name} regards {b.name} now)\n"
@@ -318,7 +321,7 @@ def answer_prompt(camp: campaign.Campaign, b: gamestate.CountryState, a: gamesta
     from . import actions
     deal = (f"Its proposal, a package you accept or decline as a whole: {actions.package_text(items, a.name)}."
             if items else "It makes no proposal.")
-    c_offers, c_asks, lines = menu(b.tag, a.tag, b.name, a.name) if items else ([], [], "")
+    c_offers, c_asks, lines = menu(camp, b.tag, a.tag, b.name, a.name) if items else ([], [], "")
     answer = ""
     if items:
         answer = (f"ANSWER: accept, decline or counter. accept: every item of the package. decline: none of it. "
@@ -408,6 +411,14 @@ def read_answer(raw: str, items: List[str], c_offers: List[str] = (), c_asks: Li
 # The deal kinds that take effect between AI countries (mode = on); a package holding anything else stays logged
 # only, whole (half a trade is no deal). Commitments, sanctions, factions and wars come later.
 LIVE = ("give:pact", "give:market", "give:guarantee", "ask:guarantee")
+COMMIT_MONTHS = 24          # a commitment between two AI countries lasts this long, as a letter guarantee does
+
+
+def live(key: str) -> bool:
+    """Does this kind take effect between AI countries (mode = on)? The LIVE agreements, and commitments (oppose,
+    befriend, back: kept as treaties, they steer the committed side's AI)."""
+    from . import actions
+    return key in LIVE or actions.is_align(key)
 
 
 def _settled(a: str, b: str, items: List[str], answer: str, counter: List[str], final_answer: str
@@ -434,6 +445,13 @@ def apply_deal(camp: campaign.Campaign, writer: str, other: str, items: List[str
                      for e in events])
     done = [e["type"] for e in events]
     guarantees.record(camp, writer, done, None, other=other)
+    commits = [k for k in done if actions.is_align(k)]
+    if commits:
+        from . import steering, treaties
+        treaties.record(camp, writer, commits, {"months": COMMIT_MONTHS}, key, name(writer), me=other)
+        for tag in (writer, other):                # the committed side's AI turns toward its new line
+            for line in steering.sync(camp, tag):
+                print(line)
     if done:
         _state(camp)["applied"].append({"date": key, "with": writer, "me": other, "items": done})
     return [e["text"] for e in events]
@@ -467,6 +485,13 @@ def undo(camp: campaign.Campaign) -> List[str]:
             holds, script = (s.format(W=x["with"], M=x["me"]) for s in _UNDO[k])
             if bridge.trigger(holds) and actions._effect(script):
                 ended.append(f"{name(x['with'])} / {name(x['me'])}: {k}")
+    from . import steering, treaties
+    today = camp.data.get("last_date") or ""
+    for t in treaties._store(camp):              # commitments between AI countries, and the steering they set
+        if t["status"] == "active" and t["me"] != camp.data["player"]:
+            treaties._close(t, "ended", today, "undone")
+            ended.append(f"{name(t['with'])} / {name(t['me'])}: treaty of {t['when']}")
+    steering.sync_all(camp)
     _state(camp)["applied"] = []
     guarantees.tick(camp)                      # guarantees no longer held stop costing
     camp.save()
@@ -482,8 +507,8 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
     from .config import settings
     key = camp.data.get("last_date") or ""
     agreed, writer, other = _settled(a, b, items, answer, list(counter), final_answer)
-    live = settings().ai.mode == "on" and bool(agreed) and all(k in LIVE for k in agreed)
-    news = apply_deal(camp, writer, other, agreed) if live else []
+    is_live = settings().ai.mode == "on" and bool(agreed) and all(live(k) for k in agreed)
+    news = apply_deal(camp, writer, other, agreed) if is_live else []
     dry = not news
     camp.add_letter(a, a, text, key, other=b)
     camp.letters_with(a, b)[-1].update({"dry": dry, "proposal": items, "stance": stance})
@@ -510,7 +535,7 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
         lines.append(f"  [live] took effect: {' '.join(news)}")
     elif agreed:
         why_not = ("dry run" if settings().ai.mode != "on" else
-                   "not live yet" if not all(k in LIVE for k in agreed) else "could not be put in place")
+                   "not live yet" if not all(live(k) for k in agreed) else "could not be put in place")
         lines.append(f"  [{why_not}] would take effect: {actions.package_text(agreed, name(writer))}")
     if usage:
         lines.append(f"  ({usage})")

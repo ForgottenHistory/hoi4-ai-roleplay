@@ -9,6 +9,9 @@
    python -m hoi4_rp usage [DAYS]  LLM calls and tokens of the last DAYS days (default 1), by kind and country
    python -m hoi4_rp subjects [TAG]  list the subject levels the game and mods define, or one subject's
                                  level, the levels open to it and its progress
+   python -m hoi4_rp agendas [TAG ...] [--prompt] [--save]
+                                 print what countries want from the world (standing aims, from the live game);
+                                 --prompt shows each prompt, --save keeps the agendas (stop `run` first)
    python -m hoi4_rp ai-undo     end every agreement AI-to-AI diplomacy put in place in the running campaign
                                  (pacts, market access, guarantees, commitments) that still holds (stop `run` first)
 """
@@ -89,6 +92,9 @@ if __name__ == "__main__":
         ended = diplomacy.undo(camp)
         print("\n".join(ended) or "nothing to end")
         sys.exit(0)
+    if cmd == "agendas":
+        from . import agendas
+        sys.exit(agendas.main(sys.argv[2:]))
     if cmd == "usage":
         from . import llm
         print(llm.usage_report(float(sys.argv[2]) if len(sys.argv) > 2 else 1.0))

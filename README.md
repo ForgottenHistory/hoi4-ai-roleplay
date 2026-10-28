@@ -40,6 +40,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/policy.py      policies toward the player (stance, urgency, offers, asks, breaks)
     hoi4_rp/steering.py    policies and commitments steer HOI4's own AI (add_ai_strategy)
     hoi4_rp/diplomacy.py   AI-to-AI diplomacy: who talks to whom, short dispatches and answers (dry run)
+    hoi4_rp/agendas.py     what each country wants from the world: standing aims, each with a target the map ties it to
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini

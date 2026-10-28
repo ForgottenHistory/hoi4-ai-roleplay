@@ -46,6 +46,7 @@ DEFAULTS = {
     },
     "ai_diplomacy": {
         "mode": "off",
+        "driver": "random",
         "exchanges_per_month": "3",
         "cooldown_days": "90",
     },
@@ -99,6 +100,7 @@ class WorldSettings:
 @dataclass(frozen=True)
 class AIDiplomacySettings:
     mode: str                 # off | dry (exchanges written and logged, nothing reaches the game) (diplomacy.py)
+    driver: str               # who picks the pairs: random (a monthly draw) | storyteller (storyteller.py)
     exchanges_per_month: int  # AI-to-AI exchanges started per game month
     cooldown_days: int        # game days before the same two countries talk again
 
@@ -154,6 +156,7 @@ def settings() -> Settings:
         ),
         ai=AIDiplomacySettings(
             mode=(ai.get("mode") or "off").strip().lower(),
+            driver=(ai.get("driver") or "random").strip().lower(),
             exchanges_per_month=ai.getint("exchanges_per_month"),
             cooldown_days=ai.getint("cooldown_days"),
         ),

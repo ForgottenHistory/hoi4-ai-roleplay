@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
 from . import (actions, bridge, campaign, chronicle, diplomacy, game, gamestate, leaders, llm, origins, peace, policy, reputation,
-               guarantees, steering, story, style, subjects, treaties, ultimatums, war, world)
+               guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -982,6 +982,7 @@ class _Session:
         self.ultimatum_job: Optional[tuple] = None   # (ultimatum, future, campaign id)
         self.ai_pool = ThreadPoolExecutor(max_workers=AI_PARALLEL)   # AI-to-AI exchanges (diplomacy.py), side by side
         self.ai_jobs: List[tuple] = []            # [(stage, queue item, future, campaign id, what the next stage needs)]
+        self.month: Optional[tuple] = None        # the storyteller's month being worked out: (storyteller.Month, campaign id)
         self.date_seen = ""                       # the game date at the last snapshot
         self.active_at = time.monotonic()         # when the date last moved or the player last wrote
         self.retry_at = 0.0                       # no background LLM call before this (after a failure)
@@ -1012,6 +1013,7 @@ class _Session:
             self.story_job = self.story_draft = None
             self.ultimatum_job = None
             self.ai_jobs = []
+            self.month = None
             print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
                   f"{sum(len(v) for v in self.camp.data['letters'].values())} letters remembered")
         return self.camp
@@ -1096,7 +1098,9 @@ class _Session:
                 continue
             self.ai_jobs.append(("ultimatum", u, self.ai_pool.submit(llm.chat, msgs, None, 0.5, None, "ai:ultimatum",
                                                                      u["from"]), camp.id, None))
-        if diplomacy.due(camp):
+        if cfg.driver == "storyteller":
+            self.storyteller(camp)
+        elif diplomacy.due(camp):
             queued = diplomacy.draw(camp, cfg.exchanges_per_month, cfg.cooldown_days)
             print("  [ai] this month: " + (", ".join(f"{x[0]} -> {x[1]}" for x in queued) or "nobody"))
             camp.save()
@@ -1111,7 +1115,8 @@ class _Session:
             try:
                 w = w or diplomacy.world()
                 msgs, offers, asks, threat_ok = diplomacy.dispatch_prompt(camp, gamestate.country(a),
-                                                                          gamestate.country(b), w)
+                                                                          gamestate.country(b), w,
+                                                                          item[4] if len(item) > 4 else None)
             except gamestate.StateError as e:
                 print(f"  [ai] {a} could not write to {b}: {e}")
                 continue
@@ -1120,6 +1125,33 @@ class _Session:
             self.ai_jobs.append(("dispatch", item, self.ai_pool.submit(llm.chat, msgs, None, None, None,
                                                                        "ai:dispatch", a), camp.id,
                                  (offers, asks, w, threat_ok)))
+
+    def storyteller(self, camp: campaign.Campaign) -> None:
+        """The storyteller's month (storyteller.py): the game queries are worked out a slice per tick so that this loop
+        stays responsive, the LLM calls run in the AI pool. The incident it picks is queued as an exchange."""
+        if self.month and self.month[1] != camp.id:
+            self.month = None
+        if not self.month:
+            if not storyteller.due(camp):
+                return
+            storyteller._state(camp)["tick"] = camp.snapshot["date"]       # one try a month, whatever comes of it
+            camp.save()
+            self.month = (storyteller.Month(camp, camp.snapshot, self.ai_pool), camp.id)
+        try:
+            res = self.month[0].step()
+        except (gamestate.StateError, bridge.BridgeError, bridge.BridgeUnavailable) as e:
+            print(f"  [ai] the storyteller's month failed: {e}")
+            self.month = None
+            return
+        if res is None:
+            return
+        self.month = None
+        if res["error"]:
+            self.failed()
+        item = storyteller.finish(camp, res)
+        if item:
+            print(f"  [ai] storyteller: {item[2]} {item[0]} -> {item[1]} ({item[3][0]})")
+        camp.save()
 
     def _ai_step(self, camp: campaign.Campaign, stage: str, item: List, fut, ctx) -> Optional[tuple]:
         """A finished call of an exchange: the dispatch leads to the answer (returned as the next job), the answer

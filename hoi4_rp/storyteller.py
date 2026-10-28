@@ -344,6 +344,139 @@ def check(camp: campaign.Campaign, pick: Dict, w: Dict[str, Dict], snap: Dict, n
     return True, "", aim
 
 
+# ---------------------------------------------------------------- a month in the running game
+
+class Month:
+    """This month's pick, worked out in slices so that the main loop stays responsive. The game queries it needs
+    (about a second each: the agendas' countries, then every ordered pair's options) are spread over many calls of
+    step(); the LLM calls (agendas, the pick) run in `pool` and are only looked at. step() returns the result when done:
+    {"pick", "ok", "why", "aim", "raw", "error", "pairs"} (pick None when nothing was possible, so no call was made)."""
+
+    def __init__(self, camp: campaign.Campaign, snap: Dict, pool) -> None:
+        self.camp, self.snap, self.pool = camp, snap, pool
+        self.now = snap.get("date", "")
+        self.phase = "world"
+        self.w: Dict[str, Dict] = {}
+        self.scored: List[Tuple] = []
+        self.todo: List = []            # country tags to write agendas for, then ordered pairs to work out
+        self.jobs: List[tuple] = []     # agenda calls running: (country, candidates, future)
+        self.cache: Dict = {}
+        self.opts: Dict = {}
+        self.shortlist: List[Tuple] = []
+        self.fut = None
+
+    def _write_agenda(self, tag: str) -> None:
+        from . import llm
+        try:
+            me = gamestate.country(tag)
+        except gamestate.StateError as e:
+            print(f"  [storyteller] no agenda for {tag}: {e}")
+            return
+        cands = agendas.candidates(me, self.snap, self.w)
+        self.jobs.append((me, cands, self.pool.submit(llm.chat, agendas.prompt(me, cands, self.snap), None, 0.7, 600,
+                                                      "ai:agenda", tag)))
+
+    def _agendas_done(self) -> bool:
+        from . import llm
+        for job in list(self.jobs):
+            me, cands, fut = job
+            if not fut.done():
+                continue
+            self.jobs.remove(job)
+            try:
+                aims, _ = agendas.parse(fut.result(), cands)
+            except llm.LLMError as e:
+                print(f"  [storyteller] agenda of {me.tag} failed: {e}")
+                continue
+            if aims:
+                agendas.keep(self.camp, me.tag, aims)
+        return not self.jobs
+
+    def step(self, budget: float = 2.0) -> Optional[Dict]:
+        """Work for about `budget` seconds. The result when the month's pick is made, else None."""
+        from . import diplomacy, llm
+        started = time.monotonic()
+        player = self.camp.data["player"]
+        while True:
+            if self.phase == "world":
+                self.w = diplomacy.world()
+                self.scored = diplomacy.score(self.camp, self.w)
+                self.todo = [t for t in agendas.covered(self.camp, self.w, self.scored) if agendas.due(self.camp, t)]
+                self.phase = "agendas"
+            elif self.phase == "agendas":
+                if self.todo:
+                    self._write_agenda(self.todo.pop(0))
+                elif not self._agendas_done():
+                    return None                     # agenda calls still running
+                else:
+                    rows = [x for x in self.scored if player not in (x[1], x[2])][:SHORTLIST]
+                    self.todo = [(x[1], x[2]) for x in rows] + [(x[2], x[1]) for x in rows]
+                    self.phase = "options"
+            elif self.phase == "options":
+                if self.todo:
+                    x, y = self.todo.pop(0)
+                    self.cache[(x, y)] = options(self.camp, x, y, self.snap)
+                else:
+                    self.shortlist, self.opts = shortlist_options(self.camp, self.snap, self.scored, self.cache)
+                    msgs = messages(self.camp, self.snap, self.w, self.shortlist, self.opts, self.now, [])
+                    if not msgs:
+                        return {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "", "pairs": 0}
+                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 400, "ai:storyteller", "")
+                    self.phase = "wait"
+            else:
+                if not self.fut.done():
+                    return None
+                res = {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "",
+                       "pairs": len(self.shortlist)}
+                try:
+                    res["raw"] = self.fut.result()
+                except llm.LLMError as e:
+                    res["error"] = str(e)
+                    return res
+                res["pick"] = parse(res["raw"])
+                res["ok"], res["why"], res["aim"] = check(self.camp, res["pick"], self.w, self.snap, self.now, [],
+                                                          self.opts)
+                return res
+            if time.monotonic() - started >= budget:
+                return None
+
+
+def finish(camp: campaign.Campaign, res: Dict) -> Optional[List]:
+    """Log a month's result. An allowed incident is kept and its exchange queued for diplomacy.py (the queue item:
+    [from, to, kind, [aim], brief]); returned, else None."""
+    from . import diplomacy
+    c = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: c.get(t, {}).get("name", t)
+    key = camp.data.get("last_date") or ""
+    head = f"=== {campaign.date_words(key)}: STORYTELLER: "
+    pick = res["pick"]
+    if res["error"]:
+        diplomacy.log([head + f"the call failed: {res['error']}"])
+        return None
+    if not pick:
+        diplomacy.log([head + "quiet (nothing is possible between the pairs; no call made)"])
+        return None
+    if not pick["kind"]:
+        diplomacy.log([head + f"no readable pick; the reply was: {res['raw']}"])
+        return None
+    if pick["kind"] == "quiet":
+        diplomacy.log([head + "quiet" + (f" - {pick['why']}" if pick["why"] else "")])
+        return None
+    line = f"{pick['kind']} {name(pick['from'])} -> {name(pick['to'])}"
+    if not res["ok"]:
+        diplomacy.log([head + f"dropped {line}: {res['why']}", f"  {pick['why']}"])
+        return None
+    aim = res["aim"]
+    _state(camp)["incidents"].append({"date": key, "kind": pick["kind"], "from": pick["from"], "to": pick["to"],
+                                      "aim": aim["aim"], "why": pick["why"]})
+    brief = {"kind": pick["kind"], "aim": aim["aim"], "aim_kind": aim["kind"], "target": aim["target"],
+             "why": pick["why"]}
+    item = [pick["from"], pick["to"], pick["kind"], [aim["aim"]], brief]
+    diplomacy._state(camp)["queue"].append(item)
+    diplomacy.log([head + f"{line}   [{aim['aim']}]", f"  {pick['why']}"])
+    return item
+
+
 # ---------------------------------------------------------------- python -m hoi4_rp storyteller
 
 def main(args: List[str]) -> int:

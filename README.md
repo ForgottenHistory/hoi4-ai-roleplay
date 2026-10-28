@@ -265,9 +265,14 @@ forgets what it did since.
   the stronger, allies and guarantors counted), ready (a war goal and its armies prepared, reviewed every three
   months), more time once, or backing down. All of it is news; both sides' later exchanges remember it.
 
-### Agendas and the storyteller (in progress, dry only)
+### Agendas and the storyteller
 
-A replacement for the random pair draw is being built in steps. It does not touch the game yet.
+A replacement for the random pair draw, built in steps. `driver = storyteller` in `[ai_diplomacy]` (default `random`)
+makes `run` use it: once a game month a background job writes the agendas that are missing or stale, works out what is
+possible between the best pairs (a slice of game queries per tick, so letters stay responsive) and asks the model for
+one incident. The incident becomes an ordinary exchange: the writer's dispatch is told it has decided to act on its aim
+and its menu is cut to the incident, then the answer, a counter and the last word run as before, with `mode` deciding
+whether the result takes effect. Every pick, quiet month and dropped pick is logged to `data/logs/ai_diplomacy.txt`.
 
 - `python -m hoi4_rp agendas [TAG ...]` (`hoi4_rp/agendas.py`): what each country wants from the world, one to four aims
   such as `contain Germany [oppose GER]` or `win Wilno [land LIT]`, written from the live game. An aim may only name a

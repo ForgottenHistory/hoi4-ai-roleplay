@@ -274,10 +274,11 @@ def may_threaten(camp: campaign.Campaign, a: str, b: str, rel) -> bool:
             and not ultimatums.open_from(camp, a, "*"))
 
 
-def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool = False
+def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool = False, only=None
          ) -> Tuple[List[str], List[str], str]:
     """What `a` could propose to `b`: (offers, asks, help lines). No factories or governments yet; land only as an
-    ultimatum's demand (`threat`): `b`'s states where `a` holds a core or a claim."""
+    ultimatum's demand (`threat`): `b`'s states where `a` holds a core or a claim. `only`: a test on each key, to cut
+    the menu to what an incident (storyteller.py) is about."""
     from . import actions
     from . import treaties
     rel = actions.relation(a, b)
@@ -287,6 +288,8 @@ def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool
     if threat:
         asks += [k for k in actions.state_asks(rel) if actions.possible(rel, k)
                  and (s := actions._BORDER_INFO.get(k)) and (s.core or s.claim)]
+    if only:
+        offers, asks = [k for k in offers if only(k)], [k for k in asks if only(k)]
     f = actions._fmt(an, bn)
     lines = actions._item_lines("offer ", offers, f) + actions._item_lines("ask ", asks, f)
     return offers, asks, "\n".join(lines)
@@ -300,6 +303,14 @@ def _threat_help(an: str, bn: str) -> str:
             f"claim). It is real: your armies turn toward {bn} at once, and when the deadline passes unmet you must "
             f"choose between war and backing down, before the world. Rare: most dispatches, even hostile ones, set "
             f"none.")
+
+
+def _set_ultimatum_help(an: str, bn: str) -> str:
+    from . import ultimatums
+    return (f"ULTIMATUM. Your government has decided on it: add [[ultimatum N months: what you demand]] (N from "
+            f"{ultimatums.MIN_MONTHS} to {ultimatums.MAX_MONTHS}), with your demands as asks above (the states "
+            f"listed, where you hold a core or a claim). It is real: your armies turn toward {bn} at once, and when "
+            f"the deadline passes unmet you must choose between war and backing down, before the world.")
 
 
 def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: gamestate.CountryState,
@@ -336,18 +347,50 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
     return "\n\n".join(parts)
 
 
+def _moment(brief: Dict, an: str, bn: str) -> str:
+    """The storyteller's incident, as the writer's own decision to act: what it is about and what it means to do."""
+    doing = {"guarantee": f"a guarantee between you and {bn}, given or asked as suits {an}",
+             "commit": f"asking {bn} to join {an} in this aim, as a standing diplomatic line toward a third country",
+             "ultimatum": f"an ultimatum to {bn}: a deadline to cede the land {an} claims, or war"}[brief["kind"]]
+    return (f"{an}'s government has decided to act on its aim \"{brief['aim']}\" now"
+            + (f" ({brief['why']})" if brief.get("why") else "") + f". It has {doing} in mind.")
+
+
+def _only(brief: Dict):
+    """The menu keys an incident is about: a guarantee; the commitment of the aim; land (an ultimatum's demands)."""
+    from . import actions
+    kind, k, t = brief["kind"], brief.get("aim_kind", ""), brief.get("target", "")
+    if kind == "guarantee":
+        return lambda key: key in ("give:guarantee", "ask:guarantee")
+    if kind == "commit":
+        return lambda key: key in (f"give:{k}:{t}", f"ask:{k}:{t}")
+    return lambda key: actions.is_state(key)
+
+
 def dispatch_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: gamestate.CountryState,
-                    w: Dict[str, Dict]) -> Tuple[List[Dict], List[str], List[str], bool]:
-    """`a`'s dispatch to `b`: (messages, offers, asks, whether it may set an ultimatum)."""
+                    w: Dict[str, Dict], brief: Optional[Dict] = None) -> Tuple[List[Dict], List[str], List[str], bool]:
+    """`a`'s dispatch to `b`: (messages, offers, asks, whether it may set an ultimatum). `brief`: the storyteller's
+    incident (storyteller.finish()): the dispatch is about it, the menu is cut to it, and an ultimatum is set only
+    for an ultimatum incident."""
     from . import actions
     threat = may_threaten(camp, a.tag, b.tag, actions.relation(a.tag, b.tag))
-    offers, asks, lines = menu(camp, a.tag, b.tag, a.name, b.name, threat)
+    if brief:
+        threat = threat and brief["kind"] == "ultimatum"
+    offers, asks, lines = menu(camp, a.tag, b.tag, a.name, b.name, threat, _only(brief) if brief else None)
+    if brief:
+        proposal = (f"{_moment(brief, a.name, b.name)} Add the proposal that does it, one command per item (at most "
+                    f"three), unless something in the situation makes {a.name} think better of it:\n{lines}\n{SHORT_NOTE}"
+                    if lines else f"{_moment(brief, a.name, b.name)} Nothing of it is possible any longer: propose "
+                                  f"nothing.")
+    else:
+        proposal = (f"Only if {a.name} really wants a deal now, add a proposal, one command per item (at most three):\n"
+                    f"{lines}\n{SHORT_NOTE}" if lines else "No agreement is possible between you now: propose nothing.")
+    help_text = ""
+    if threat:
+        help_text = "\n" + (_set_ultimatum_help(a.name, b.name) if brief else _threat_help(a.name, b.name))
     task = (f"Write a short diplomatic dispatch to {b.name}: 2 to 4 sentences in {a.name}'s own voice, about what "
             f"matters most between you now (no heading, date or place line). Then, on a line of its own:\n"
-            f"STANCE: one of {', '.join(STANCES)} (how {a.name} regards {b.name} now)\n"
-            + (f"Only if {a.name} really wants a deal now, add a proposal, one command per item (at most three):\n"
-               f"{lines}\n{SHORT_NOTE}" if lines else "No agreement is possible between you now: propose nothing.")
-            + (f"\n{_threat_help(a.name, b.name)}" if threat else ""))
+            f"STANCE: one of {', '.join(STANCES)} (how {a.name} regards {b.name} now)\n" + proposal + help_text)
     return ([{"role": "system", "content": _situation(camp, a, b, w) + "\n\n" + task},
              {"role": "user", "content": "Write the dispatch now."}], offers, asks, threat)
 
@@ -410,6 +453,7 @@ def _tidy(text: str) -> str:
     """Lines left empty but for a dash or bullet once their commands are taken out go, and runs of blank lines."""
     import re
     text = re.sub(r"^[ \t]*[-*•–]+[ \t]*$", "", text, flags=re.M)
+    text = re.sub(r"^[\W_]*the moment\b.*$", "", text, flags=re.I | re.M)        # a label of the prompt, echoed
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
@@ -586,7 +630,8 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
     for x, y, s in ((a, b, final_stance or stance), (b, a, b_stance)):
         camp.set_policy(x, {"stance": s, "date": key, "when": campaign.date_words(key), "light": True}, other=y)
     deal = actions.package_text(items, name(a)) if items else ""
-    lines = [f"=== {campaign.date_words(key)}: {name(a)} -> {name(b)}   (score {why[0]}: {', '.join(why[1])})",
+    how = f"score {why[0]}" if isinstance(why[0], int) else f"storyteller: {why[0]}"
+    lines = [f"=== {campaign.date_words(key)}: {name(a)} -> {name(b)}   ({how}: {', '.join(why[1])})",
              f"{name(a).upper()} ({stance}): {text}"]
     if threat:
         lines.append(f"  ULTIMATUM{'' if on else ' (dry run)'}: {threat[1]}, within {threat[0]} months, or war")

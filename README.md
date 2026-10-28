@@ -41,6 +41,7 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/steering.py    policies and commitments steer HOI4's own AI (add_ai_strategy)
     hoi4_rp/diplomacy.py   AI-to-AI diplomacy: who talks to whom, short dispatches and answers (dry run)
     hoi4_rp/agendas.py     what each country wants from the world: standing aims, each with a target the map ties it to
+    hoi4_rp/storyteller.py blocs from the agendas, and the monthly pick of one AI-to-AI incident (dry run so far)
     hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
@@ -263,6 +264,22 @@ forgets what it did since.
   stands until its deadline, when the sender decides in a short call as yours do: met, war (only if its side is
   the stronger, allies and guarantors counted), ready (a war goal and its armies prepared, reviewed every three
   months), more time once, or backing down. All of it is news; both sides' later exchanges remember it.
+
+### Agendas and the storyteller (in progress, dry only)
+
+A replacement for the random pair draw is being built in steps. It does not touch the game yet.
+
+- `python -m hoi4_rp agendas [TAG ...]` (`hoi4_rp/agendas.py`): what each country wants from the world, one to four aims
+  such as `contain Germany [oppose GER]` or `win Wilno [land LIT]`, written from the live game. An aim may only name a
+  country the map ties to it (a neighbour, an enemy, a war goal, a faction tie, a strong opinion, a rival major power),
+  so a preset that scrambles the map gets aims that follow it, not real history. Stored in the campaign, refreshed
+  every 180 days or after a war, a new government or the like, dropped when an earlier save is loaded.
+- `python -m hoi4_rp storyteller [--months N]` (`hoi4_rp/storyteller.py`): blocs, computed from the agendas
+  ("Against Germany: Britain, France, Belgium"), and a simulated monthly pick of one incident or none: a guarantee, a
+  commitment or an ultimatum between two countries, each serving an aim of the country that acts. Python works out
+  what the game allows between each of the best pairs first (the same rules a dispatch keeps) and the model chooses
+  from that list, paced by how long ago anything touched you; a pick that breaks a rule is dropped, never retried.
+  Ultimatums need 10% world tension and come at most every 6 months.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)
 

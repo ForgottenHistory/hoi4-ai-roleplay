@@ -12,6 +12,9 @@
    python -m hoi4_rp agendas [TAG ...] [--prompt] [--save]
                                  print what countries want from the world (standing aims, from the live game);
                                  --prompt shows each prompt, --save keeps the agendas (stop `run` first)
+   python -m hoi4_rp storyteller [--months N] [--prompt]
+                                 simulate the storyteller's monthly pick of an AI-to-AI incident, dry: nothing
+                                 reaches the game (--months N: N picks in a row, each remembering the earlier ones)
    python -m hoi4_rp ai-undo     end every agreement AI-to-AI diplomacy put in place in the running campaign
                                  (pacts, market access, guarantees, commitments) that still holds (stop `run` first)
 """
@@ -95,6 +98,9 @@ if __name__ == "__main__":
     if cmd == "agendas":
         from . import agendas
         sys.exit(agendas.main(sys.argv[2:]))
+    if cmd == "storyteller":
+        from . import storyteller
+        sys.exit(storyteller.main(sys.argv[2:]))
     if cmd == "usage":
         from . import llm
         print(llm.usage_report(float(sys.argv[2]) if len(sys.argv) > 2 else 1.0))

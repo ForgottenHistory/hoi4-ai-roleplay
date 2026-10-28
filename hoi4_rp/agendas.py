@@ -226,27 +226,22 @@ def drop_after(camp: campaign.Campaign, key: str) -> None:
     camp.data["agendas"] = {t: a for t, a in _store(camp).items() if a["date"] < key}
 
 
-# ---------------------------------------------------------------- python -m hoi4_rp agendas
+# ---------------------------------------------------------------- writing them
 
-def main(args: List[str]) -> int:
+def generate(camp: campaign.Campaign, w: Dict[str, Dict], tags: List[str], show: bool = False,
+             keep_them: bool = True) -> List[Dict]:
+    """Write the agendas of these countries, PARALLEL calls at a time. Returns, per country, {"me", "cands", "aims",
+    "dropped", "raw", "error"}; with keep_them the usable ones are stored in the campaign (not saved to disk)."""
     from concurrent.futures import ThreadPoolExecutor
-    from . import chronicle, diplomacy, llm
-    save, show = "--save" in args, "--prompt" in args
-    tags = [a.upper() for a in args if not a.startswith("--")]
-    player = gamestate.player_tag()
-    camp = campaign.Campaign(campaign.read_id(player), player)
-    camp.snapshot = chronicle.snapshot(player)
-    snap = camp.snapshot
-    w = diplomacy.world()
-    tags = tags or covered(camp, w, diplomacy.score(camp, w))
-    print(f"{len(tags)} countries: {', '.join(tags)}")
-    jobs = []
+    from . import llm
+    snap = camp.snapshot or {}
+    jobs, out = [], []
     with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
         for tag in tags:
             try:
                 me = gamestate.country(tag)
             except gamestate.StateError as e:
-                print(f"{tag}: {e}")
+                out.append({"me": None, "tag": tag, "error": str(e)})
                 continue
             cands = candidates(me, snap, w)
             msgs = prompt(me, cands, snap)
@@ -254,23 +249,51 @@ def main(args: List[str]) -> int:
                 print(f"----- prompt for {me.name}\n{msgs[0]['content']}\n-----")
             jobs.append((me, cands, pool.submit(llm.chat, msgs, None, 0.7, 600, "ai:agenda", tag)))
         for me, cands, fut in jobs:
-            print(f"\n== {me.name} ({me.tag}) ==")
+            r = {"me": me, "tag": me.tag, "cands": cands, "aims": [], "dropped": [], "raw": "", "error": ""}
             try:
-                raw = fut.result()
+                r["raw"] = fut.result()
             except llm.LLMError as e:
-                print(f"  failed: {e}")
-                continue
-            aims, dropped = parse(raw, cands)
-            c = snap["countries"]
-            for a in aims:
-                to = f" -> {c[a['target']]['name']} ({a['target']}: {', '.join(cands[a['target']])})" if a["target"] else ""
-                print(f"  {a['kind']:<8} {a['aim']}{to}")
-            for line, why in dropped:
-                print(f"  dropped: {line}  [{why}]")
-            if not aims:
-                print(f"  no usable aim; the reply was:\n{raw}")
-            elif save:
-                keep(camp, me.tag, aims)
+                r["error"] = str(e)
+            else:
+                r["aims"], r["dropped"] = parse(r["raw"], cands)
+                if r["aims"] and keep_them:
+                    keep(camp, me.tag, r["aims"])
+            out.append(r)
+    return out
+
+
+def show_result(r: Dict, snap: Dict) -> None:
+    """Print one country's result of generate()."""
+    me = r["me"]
+    print(f"\n== {me.name if me else r['tag']} ({r['tag']}) ==")
+    if r["error"]:
+        print(f"  failed: {r['error']}")
+        return
+    c = snap["countries"]
+    for a in r["aims"]:
+        to = (f" -> {c[a['target']]['name']} ({a['target']}: {', '.join(r['cands'][a['target']])})"
+              if a["target"] else "")
+        print(f"  {a['kind']:<8} {a['aim']}{to}")
+    for line, why in r["dropped"]:
+        print(f"  dropped: {line}  [{why}]")
+    if not r["aims"]:
+        print(f"  no usable aim; the reply was:\n{r['raw']}")
+
+
+# ---------------------------------------------------------------- python -m hoi4_rp agendas
+
+def main(args: List[str]) -> int:
+    from . import chronicle, diplomacy
+    save, show = "--save" in args, "--prompt" in args
+    tags = [a.upper() for a in args if not a.startswith("--")]
+    player = gamestate.player_tag()
+    camp = campaign.Campaign(campaign.read_id(player), player)
+    camp.snapshot = chronicle.snapshot(player)
+    w = diplomacy.world()
+    tags = tags or covered(camp, w, diplomacy.score(camp, w))
+    print(f"{len(tags)} countries: {', '.join(tags)}")
+    for r in generate(camp, w, tags, show, keep_them=save):
+        show_result(r, camp.snapshot)
     if save:
         camp.save()
         print("\nsaved to the campaign")

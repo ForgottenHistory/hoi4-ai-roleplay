@@ -652,7 +652,7 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
     if usage:
         lines.append(f"  ({usage})")
     log(lines)
-    if on and not isinstance(why[0], int):               # a storyteller incident: news in the chronicle
+    if not isinstance(why[0], int):                      # a storyteller incident: news in the chronicle (dry: talks only)
         _news(camp, a, b, name(a), name(b), deal or "closer ties", answer, bool(news), key)
 
 

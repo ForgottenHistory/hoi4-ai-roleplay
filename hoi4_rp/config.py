@@ -43,6 +43,8 @@ DEFAULTS = {
     "story": {
         "events": "yes",
         "gap_days": "60",
+        "news": "yes",
+        "news_gap_days": "10",
     },
     "ai_diplomacy": {
         "mode": "off",
@@ -87,6 +89,8 @@ class LetterSettings:
 class StorySettings:
     events: bool          # story events: the player's country reacts to letter deals and judged deeds (story.py)
     gap_days: int         # game days at least between two story events
+    news: bool            # news events: newspaper popups about what AI-to-AI incidents came to (news.py)
+    news_gap_days: int    # game days at least between two news events
 
 
 @dataclass(frozen=True)
@@ -147,6 +151,8 @@ def settings() -> Settings:
         story=StorySettings(
             events=st.getboolean("events"),
             gap_days=st.getint("gap_days"),
+            news=st.getboolean("news"),
+            news_gap_days=st.getint("news_gap_days"),
         ),
         world=WorldSettings(
             setting=(w.get("setting") or "auto").strip().lower(),

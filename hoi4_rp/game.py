@@ -22,7 +22,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from . import bridge
-from .mod_files import MAX_OPTIONS, PICTURE_KEYS, SLOTS, event_id, loc_key, option_flag, pick_var
+from .mod_files import (MAX_OPTIONS, NEWS_PICTURE_KEYS, NEWS_SLOTS, PICTURE_KEYS, SLOTS, event_id, loc_key,
+                        news_event_id, news_loc_key, option_flag, pick_var)
 
 
 @dataclass
@@ -92,6 +93,21 @@ def show(event: RPEvent) -> int:
         _check(bridge.send(*cmds), "show")
         _check(bridge.send(f"event {event_id(slot, event.picture)}"), "show")
     return slot
+
+
+_news_cycle = itertools.cycle(range(1, NEWS_SLOTS + 1))
+
+
+def show_news(title: str, body: str, button: str, picture: str) -> None:
+    """Open a news event: a newspaper popup with one button and no effect."""
+    if picture not in NEWS_PICTURE_KEYS:
+        raise ValueError(f"unknown news picture {picture!r}; pick one of {NEWS_PICTURE_KEYS}")
+    with _lock:
+        slot = next(_news_cycle)
+        _check(bridge.send(f"bridge.setloc {news_loc_key(slot, 't')} {_one_line(title)}",
+                           f"bridge.setloc {news_loc_key(slot, 'd')} {_one_line(body)}",
+                           f"bridge.setloc {news_loc_key(slot, 'a')} {_one_line(button)}"), "news")
+        _check(bridge.send(f"event {news_event_id(slot, picture)}"), "news")
 
 
 def read_pick(slot: int, tag: Optional[str] = None) -> int:

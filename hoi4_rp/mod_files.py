@@ -40,6 +40,37 @@ PICTURES = [
 ]
 PICTURE_KEYS = [p[0] for p in PICTURES]
 
+# News events (hoi4_rp/news.py): the newspaper-styled popup with one button, pure flavour. Same idea as the
+# templates above: one per slot and picture, text set at runtime. Their ids start at 1000.
+NEWS_SLOTS = 3
+NEWS_PICTURES = [
+    ("army", "GFX_news_event_generic_army", "soldiers, troops, conscription, a parade of infantry"),
+    ("tanks", "GFX_news_event_generic_panzer_attack", "tanks, an armoured offensive, fighting at the front"),
+    ("aircraft", "GFX_news_event_generic_bombers", "aircraft, air force, aviation, an air raid"),
+    ("navy", "GFX_news_event_generic_south_american_dreadnought_race", "warships, the navy, ports, the sea"),
+    ("ruins", "GFX_news_event_generic_ruins", "destruction, disaster, fire, the aftermath of something"),
+    ("factory", "GFX_news_event_generic_factory", "industry, factories, the economy, production"),
+    ("lab", "GFX_news_event_generic_research_lab", "science, invention, medicine, technology"),
+    ("parliament", "GFX_news_event_generic_parliament", "politics, government, laws, elections, scandal in office"),
+    ("rally", "GFX_news_event_generic_rally", "crowds, celebrations, speeches, festivals"),
+    ("riot", "GFX_news_event_generic_riot", "unrest, violent protest, police"),
+    ("strike", "GFX_news_event_generic_strike", "a labour strike, workers' demands"),
+    ("handshake", "GFX_news_event_generic_handshake", "diplomacy, leaders meeting, a visit abroad"),
+    ("treaty", "GFX_news_event_generic_sign_treaty1", "a treaty or agreement being signed, a deal"),
+    ("funeral", "GFX_news_event_generic_funeral", "a death, mourning, a memorial"),
+    ("press", "GFX_news_event_generic_read_write", "newspapers, writing, culture, everyday oddities"),
+]
+NEWS_PICTURE_KEYS = [p[0] for p in NEWS_PICTURES]
+
+
+def news_event_id(slot: int, picture: str) -> str:
+    return f"{NAMESPACE}.{1000 + slot * 100 + NEWS_PICTURE_KEYS.index(picture) + 1}"
+
+
+def news_loc_key(slot: int, part: str) -> str:
+    """part: 't' headline, 'd' report, 'a' the button."""
+    return f"{NAMESPACE}.n{slot}.{part}"
+
 
 def event_id(slot: int, picture: str) -> str:
     return f"{NAMESPACE}.{slot * 100 + PICTURE_KEYS.index(picture) + 1}"
@@ -107,6 +138,21 @@ def write_mod(mod_root: str = MOD_ROOT) -> None:
             loc.append(f' {loc_key(slot, f"o{n}")}:0 "Continue."')
             loc.append(f' {loc_key(slot, f"o{n}.tt")}:0 ""')
 
+    for slot in range(1, NEWS_SLOTS + 1):
+        for key, sprite, _ in NEWS_PICTURES:
+            ev += ["news_event = {",
+                   f"\tid = {news_event_id(slot, key)}\t# news, slot {slot}, {key}",
+                   f"\ttitle = {news_loc_key(slot, 't')}",
+                   f"\tdesc = {news_loc_key(slot, 'd')}",
+                   f"\tpicture = {sprite}",
+                   "\tmajor = no",
+                   "\tis_triggered_only = yes",
+                   f"\toption = {{ name = {news_loc_key(slot, 'a')} }}",
+                   "}", ""]
+        loc += [f' {news_loc_key(slot, "t")}:0 "News"',
+                f' {news_loc_key(slot, "d")}:0 "This story has not been written yet."',
+                f' {news_loc_key(slot, "a")}:0 "Interesting."']
+
     files = {
         os.path.join(mod_root, f"{MOD_FOLDER}.mod"): (descriptor + f'\npath="mod/{MOD_FOLDER}"\n', "utf-8"),
         os.path.join(mod_dir, "descriptor.mod"): (descriptor + "\n", "utf-8"),
@@ -125,4 +171,5 @@ def write_mod(mod_root: str = MOD_ROOT) -> None:
         with open(path, "w", encoding=enc, newline="\n") as f:
             f.write(text)
         print(f"wrote {path}")
-    print(f"{SLOTS} slots x {len(PICTURES)} pictures = {SLOTS * len(PICTURES)} template events")
+    print(f"{SLOTS} slots x {len(PICTURES)} pictures = {SLOTS * len(PICTURES)} template events, "
+          f"{NEWS_SLOTS} x {len(NEWS_PICTURES)} news events")

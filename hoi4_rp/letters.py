@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import (actions, bridge, campaign, chronicle, diplomacy, game, gamestate, leaders, llm, origins, peace, policy, reputation,
+from . import (actions, bridge, campaign, chronicle, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -977,6 +977,8 @@ class _Session:
         self.gm_job: Optional[tuple] = None       # (kind, item, future, campaign id)
         self.story_pool = ThreadPoolExecutor(max_workers=1)   # story events are written here
         self.story_job: Optional[tuple] = None    # (future, campaign id, other country, its name, party names)
+        self.news_job: Optional[tuple] = None     # (future, campaign id, date of the news it reports)
+        self.news_draft: Optional[tuple] = None   # a written news event waiting to be shown: (draft, campaign id, date)
         self.story_draft: Optional[tuple] = None  # a written event waiting to be shown: (draft, campaign id, ...)
         self.war_pool = ThreadPoolExecutor(max_workers=1)    # ultimatum decisions
         self.ultimatum_job: Optional[tuple] = None   # (ultimatum, future, campaign id)
@@ -1010,7 +1012,7 @@ class _Session:
             self.pending.clear()          # letters queued for the previous game
             self.policy_jobs = []         # refreshes still running belong to the previous game: drop them
             self.gm_job = None
-            self.story_job = self.story_draft = None
+            self.story_job = self.story_draft = self.news_job = self.news_draft = None
             self.ultimatum_job = None
             self.ai_jobs = []
             self.month = None
@@ -1063,6 +1065,7 @@ class _Session:
             self.policies(camp, player, snap)
             self.game_master(camp, player, snap)
             self.story(camp, player)
+            self.news(camp, player)
             self.ai_diplomacy(camp)
         return camp
 
@@ -1288,6 +1291,59 @@ class _Session:
         parties = {p.ideology: p.long_name or p.name for p in me.parties}
         self.story_job = (self.story_pool.submit(llm.chat, msgs, None, None, None, "story", moment.other), camp.id,
                           them.tag if them else "", them.name if them else "", parties)
+
+    def news(self, camp: campaign.Campaign, player: str) -> None:
+        """News events (news.py): a report of what the storyteller's incidents came to, written in the story pool."""
+        if self.news_job:
+            fut, cid, told = self.news_job
+            if not fut.done():
+                return
+            self.news_job = None
+            if cid != camp.id:
+                return
+            try:
+                text = fut.result()
+            except llm.LLMError as e:
+                print(f"  news event failed: {e}")
+                self.failed()
+                return
+            draft = news.parse(text, _clean_for_game)
+            if not draft:
+                print(f"  news event: answer not readable, skipped: {text[:300]}")
+                return
+            self.news_draft = (draft, cid, told)
+            return
+        if self.news_draft or self.story_job:
+            return
+        ev = news.due(camp)
+        if not ev:
+            return
+        try:
+            me = gamestate.country(player)
+        except gamestate.StateError:
+            return
+        news._news(camp)["told"] = ev["date"]               # this news is reported, whatever comes of it
+        camp.save()
+        print(f"  news event: writing one about: {ev['text'][:200]}")
+        msgs = news.messages(camp, ev, me.name, [p.ideology for p in me.parties])
+        self.news_job = (self.story_pool.submit(llm.chat, msgs, None, 1.0, 500, "news", ev["tags"][0]), camp.id,
+                         ev["date"])
+
+    def news_tick(self, player: str, block: str) -> None:
+        """Every poll: open a written news event when no letter window or story event is up."""
+        camp = self.camp
+        if not camp or not self.news_draft or story._story(camp)["pending"] \
+                or re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
+            return
+        draft, cid, told = self.news_draft
+        self.news_draft = None
+        if cid != camp.id:
+            return
+        try:
+            news.show(camp, draft, told)
+            print(f"  news event shown: {draft.title}")
+        except (game.BridgeError, ValueError) as e:
+            print(f"  could not show the news event: {e}")
 
     def story_tick(self, player: str, block: str) -> None:
         """Every poll: apply the pick of an open story event, or open a written one when no letter window is up."""
@@ -1639,6 +1695,7 @@ def run() -> int:
                         session.pending[offer["from"]] = broken
                 elif not session.treaty_prompt(player, block):
                     session.story_tick(player, block)
+                    session.news_tick(player, block)
                     session.deliver(player, block)
         except bridge.BridgeUnavailable:
             print("waiting for HOI4 / the bridge...")

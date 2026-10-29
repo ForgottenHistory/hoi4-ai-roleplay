@@ -303,8 +303,10 @@ Terms used below:
   A fourth incident, `reach_out`, makes a country with an aim about you write to you sooner (its policy urgency
   becomes 3); no exchange is made. Countries with an incident in the last 90 days drop to the end of the shortlist.
   With `mode = on`, what an incident came to (agreed, took effect, turned down, countered) is also written to the
-  chronicle as news; the next story event (`[story]`, at most one per `gap_days`) can then be about it: a popup
-  in your game that reports the news the way your embassies and papers would and asks how your government responds.
+  chronicle as news, and a news event (`hoi4_rp/news.py`) reports it in your game: the game's newspaper popup with a
+  headline, a short report and one button, no effect. Who reports it and how is rolled in code (a wire service, your
+  own paper, a tabloid, the government's organ). `[story] news = yes`, at most one per `news_gap_days`. The news
+  templates are in the mod, so run `python -m hoi4_rp write-mod` and restart HOI4 after updating.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)
 

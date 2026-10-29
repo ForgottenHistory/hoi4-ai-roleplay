@@ -140,12 +140,12 @@ def write_mod(mod_root: str = MOD_ROOT) -> None:
 
     for slot in range(1, NEWS_SLOTS + 1):
         for key, sprite, _ in NEWS_PICTURES:
-            ev += ["news_event = {",
+            # a country_event with the news picture: HOI4 (as of the 2026 update) shows no news_event fired from the console
+            ev += ["country_event = {",
                    f"\tid = {news_event_id(slot, key)}\t# news, slot {slot}, {key}",
                    f"\ttitle = {news_loc_key(slot, 't')}",
                    f"\tdesc = {news_loc_key(slot, 'd')}",
                    f"\tpicture = {sprite}",
-                   "\tmajor = no",
                    "\tis_triggered_only = yes",
                    f"\toption = {{ name = {news_loc_key(slot, 'a')} }}",
                    "}", ""]

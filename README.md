@@ -237,9 +237,9 @@ changes, its next letter says so.
 ## AI-to-AI diplomacy
 
 Countries other than you write to each other (`hoi4_rp/diplomacy.py`, `[ai_diplomacy]` in config.ini), logged to
-`data/logs/ai_diplomacy.txt`. `mode = dry` only writes and logs; with `mode = on` what they agree takes effect, for
-now pacts, market access, guarantees and commitments (a package holding anything else stays logged, whole: half a trade
-is no deal). It enters the chronicle as news, so the countries you write to know of it (all of them when a major
+`data/logs/ai_diplomacy.txt`. `mode = dry` only writes and logs; with `mode = on` what they agree takes effect, every
+kind (pacts, access, guarantees, market access, factions, joining wars, commitments, sanctions, an ultimatum's land),
+the same as in a letter to you; `ai-undo` ends only pacts, market access, guarantees and commitments. It enters the chronicle as news, so the countries you write to know of it (all of them when a major
 power is in it), and a guarantee costs its guarantor civilian factories for 24 months, as yours do. A commitment
 (oppose, befriend, back) is kept as a treaty for 24 months and steers the committed country's AI toward its target;
 it lapses with a war between the two, and breaks, as news, when a side steps against it.

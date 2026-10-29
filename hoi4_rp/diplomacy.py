@@ -504,17 +504,15 @@ def read_answer(raw: str, items: List[str], c_offers: List[str] = (), c_asks: Li
 
 # ---------------------------------------------------------------- keeping it, and what takes effect
 
-# The deal kinds that take effect between AI countries (mode = on); a package holding anything else stays logged
-# only, whole (half a trade is no deal). Commitments, sanctions, factions and wars come later.
-LIVE = ("give:pact", "give:market", "give:guarantee", "ask:guarantee")
+# Every kind on the AI menu (pacts, access, guarantees, market, factions, wars, commitments, sanctions, and an
+# ultimatum's land) takes effect between AI countries (mode = on), as it does in a letter to you.
+# Only the pact, market, guarantee and commitment kinds have an ai-undo.
 COMMIT_MONTHS = 24          # a commitment between two AI countries lasts this long, as a letter guarantee does
 
 
 def live(key: str) -> bool:
-    """Does this kind take effect between AI countries (mode = on)? The LIVE agreements, and commitments (oppose,
-    befriend, back: kept as treaties, they steer the committed side's AI)."""
-    from . import actions
-    return key in LIVE or actions.is_align(key)
+    """Does this kind take effect between AI countries (mode = on)? All of them."""
+    return True
 
 
 def _settled(a: str, b: str, items: List[str], answer: str, counter: List[str], final_answer: str

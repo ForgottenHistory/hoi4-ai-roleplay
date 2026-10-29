@@ -152,8 +152,9 @@ def parse(raw: str, clean) -> Optional[Draft]:
         if m:
             key = m.group(1).lower()
             parts.setdefault(key, []).append(m.group(2).strip())
-        elif key == "body" and s:
-            parts["body"].append(s)
+        elif s and key in ("", "title", "picture", "body"):       # an unlabelled paragraph is the body
+            key = "body"
+            parts.setdefault("body", []).append(s)
     one = lambda k: " ".join(parts.get(k, [])).strip().strip('"*').strip()
     title = clean(one("title")).rstrip(".")
     body = _trim(clean(" ".join(parts.get("body", []))), 450)

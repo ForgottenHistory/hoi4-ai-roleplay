@@ -1341,7 +1341,7 @@ class _Session:
             return
         try:
             news.show(camp, draft, told)
-            print(f"  news event shown: {draft.title}")
+            print(f"  news event shown: {draft.title} [{draft.picture}]\n    {draft.body}\n    > {draft.button}")
         except (game.BridgeError, ValueError) as e:
             print(f"  could not show the news event: {e}")
 

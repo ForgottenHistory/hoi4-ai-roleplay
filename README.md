@@ -274,6 +274,21 @@ one incident. The incident becomes an ordinary exchange: the writer's dispatch i
 and its menu is cut to the incident, then the answer, a counter and the last word run as before, with `mode` deciding
 whether the result takes effect. Every pick, quiet month and dropped pick is logged to `data/logs/ai_diplomacy.txt`.
 
+Terms used below:
+
+- **Agenda**: what a country wants from the world, one to four aims, written by the model from the live game.
+- **Aim**: one line of an agenda, with a target country and a kind: `oppose`, `befriend`, `back`, `land` (wants
+  territory), `build` or `neutral`. The target must be a country the map ties to it.
+- **Bloc**: countries whose aims line up for or against the same target ("Against Germany: UK, France"). Computed
+  from the agendas, no model call; information for the storyteller only.
+- **Storyteller**: the monthly model call that looks at agendas, blocs and recent history and picks one incident or none.
+- **Incident**: an aim put into action, always one a country already has. Kinds: `guarantee` (one defends the other's
+  independence), `commit` (asks the other to join it against or behind a third country), `ultimatum` (a land demand
+  with a deadline, needs world tension), `reach_out` (a country writes to you) and `quiet` (nothing this month).
+- **Exchange**: what follows an incident: the acting country's letter, the other's answer, a last word. Whether the
+  deal takes effect is the `mode`: `off`, `dry` (logged only) or `on`.
+- **Driver**: who starts the exchanges: `random` (the old draw) or `storyteller`.
+
 - `python -m hoi4_rp agendas [TAG ...]` (`hoi4_rp/agendas.py`): what each country wants from the world, one to four aims
   such as `contain Germany [oppose GER]` or `win Wilno [land LIT]`, written from the live game. An aim may only name a
   country the map ties to it (a neighbour, an enemy, a war goal, a faction tie, a strong opinion, a rival major power),

@@ -179,18 +179,27 @@ def _name(camp: campaign.Campaign, tag: str) -> str:
     return ((camp.snapshot or {}).get("countries", {}).get(tag) or {}).get("name", "")
 
 
+def _reborn(camp: campaign.Campaign, tag: str, since: str) -> bool:
+    """Did `tag` vanish or appear as a country after `since`? The game reuses dynamic tags (a civil war's side,
+    later another country), so what was written about the tag before is about someone else now."""
+    return any(e["date"] > since and tag in e["tags"][:1] and e.get("type") in ("country_gone", "country_new")
+               for e in camp.data["events"])
+
+
 def of(camp: campaign.Campaign, tag: str) -> Optional[Dict]:
-    """The stored agenda of a country: {"date", "when", "name", "aims": [{"aim", "target", "kind"}]}, or None.
-    The game reuses dynamic tags (a civil war's side, later another country): an agenda written for a country
-    of another name is not this country's."""
+    """The stored agenda of a country: {"date", "when", "name", "aims": [{"aim", "target", "kind"}]}, or None
+    (also when the tag has been another country since it was written)."""
     a = _store(camp).get(tag)
     now = _name(camp, tag)
-    return None if a and a.get("name") and now and a["name"] != now else a
+    if a and (_reborn(camp, tag, a["date"]) or (a.get("name") and now and a["name"] != now)):
+        return None
+    return a
 
 
 def aims_of(camp: campaign.Campaign, tag: str) -> List[Dict]:
+    """The country's aims; one aimed at a tag that has been another country since it was written is dropped."""
     a = of(camp, tag)
-    return list(a["aims"]) if a else []
+    return [x for x in a["aims"] if not (x["target"] and _reborn(camp, x["target"], a["date"]))] if a else []
 
 
 def keep(camp: campaign.Campaign, tag: str, aims: List[Dict]) -> None:

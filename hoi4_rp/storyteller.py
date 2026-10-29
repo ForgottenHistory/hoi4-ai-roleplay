@@ -102,8 +102,8 @@ def blocs(camp: campaign.Campaign) -> List[Dict]:
         g = groups.setdefault((stance, target), [])
         g.extend(m for m in members if m and m != target and m not in g)
 
-    for tag, a in agendas._store(camp).items():
-        for aim in a["aims"]:
+    for tag in list(agendas._store(camp)):
+        for aim in agendas.aims_of(camp, tag):
             if aim["kind"] in ("oppose", "land"):
                 add("against", aim["target"], tag)
             elif aim["kind"] in ("befriend", "back"):

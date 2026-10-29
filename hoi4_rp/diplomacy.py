@@ -653,13 +653,21 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
         lines.append(f"  ({usage})")
     log(lines)
     if not isinstance(why[0], int):                      # a storyteller incident: news in the chronicle (dry: talks only)
-        _news(camp, a, b, name(a), name(b), deal or "closer ties", answer, bool(news), key)
+        _news(camp, a, b, name(a), name(b), deal or "closer ties", answer, bool(news), key, threat, u)
 
 
 def _news(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, deal: str, answer: str, took: bool,
-          key: str) -> None:
+          key: str, threat: Optional[Tuple[int, str]] = None, u: Optional[Dict] = None) -> None:
     """What a storyteller incident came to, as a chronicle event the player's story events can be written about."""
     from . import storyteller
+    if threat:                                            # an ultimatum: the demand is the story, not the "deal"
+        by = f" by {campaign.date_words(u['deadline'])}" if u else f" within {threat[0]} months"
+        text = (f"{an} gave {bn} an ultimatum: {threat[1]}{by}, or war. "
+                + (f"{bn} gave in." if took else f"{bn} has not given in; the ultimatum stands."))
+        c = (camp.snapshot or {}).get("countries", {})
+        camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "news", "tags": [a, b], "text": text,
+                          "major": any(c.get(t, {}).get("major") for t in (a, b))}])
+        return
     said = next((x for x in reversed(storyteller._state(camp)["incidents"]) if x["from"] == a and x["to"] == b), None)
     result = (f"{bn} agreed, and it took effect" if took else
               f"{bn} agreed in principle" if answer == "accept" else f"{bn} turned it down" if answer == "decline"

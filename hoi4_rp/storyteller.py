@@ -46,8 +46,11 @@ KINDS = {"guarantee": "FROM and TO exchange a guarantee: one of them will defend
          "commit": "FROM asks TO to join it in its AIM: to work against, befriend or stand behind the AIM's target "
                    "(a third country, not TO)",
          "ultimatum": "FROM sets TO a deadline to give up land, or face war: only for an AIM of the land kind whose "
-                      "target is TO, and the gravest step there is"}
+                      "target is TO, and the gravest step there is",
+         "reach_out": "FROM writes to the player (TO is the player's tag) about its AIM, which concerns the player's "
+                      "country: for when the player's corner has been quiet"}
 INCIDENTS_PER_MONTH = 1
+REACH_QUIET_DAYS = 45        # a country that wrote to the player within this many days does not reach out
 ULTIMATUM_GAP_DAYS = 180
 ULTIMATUM_TENSION = 0.10      # world tension below which nobody sets an ultimatum
 PAIR_GAP_DAYS = 90           # the same two countries are not picked again within this
@@ -140,6 +143,40 @@ def pacing(camp: campaign.Campaign, now: str, sim: List[Dict]) -> Dict:
             "mine": mine}
 
 
+def pair_rows(camp: campaign.Campaign, scored: List[Tuple], now: str) -> List[Tuple]:
+    """The scored pairs without the player, those whose countries had an incident lately last, so that the same
+    few countries do not crowd the month's shortlist (a stable sort: the score order is kept otherwise)."""
+    player = camp.data["player"]
+    seen: Dict[str, int] = {}
+    for x in _state(camp)["incidents"]:
+        if 0 <= _days(x["date"], now) <= 90:
+            for t in (x["from"], x["to"]):
+                seen[t] = seen.get(t, 0) + 1
+    rows = [x for x in scored if player not in (x[1], x[2])]
+    return sorted(rows, key=lambda x: seen.get(x[1], 0) + seen.get(x[2], 0))
+
+
+def reach_options(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict]) -> Dict:
+    """{(country, player): [reach_out incident]}: countries with an aim that concerns the player and a standing
+    policy toward them, that have not written to them lately and are not already writing urgently."""
+    player = camp.data["player"]
+    today = snap.get("date", "")
+    c = snap.get("countries", {})
+    out = {}
+    for tag, p in camp.policies_toward().items():
+        if tag == player or tag not in c or tag not in w or w[tag]["subject"] or c[tag].get("capitulated"):
+            continue
+        if p.get("urgency", 0) >= 3 or p.get("stance") == "indifferent":
+            continue
+        last = max((x["date"] for x in camp.letters_with(tag) if x["from"] == tag), default="")
+        if last and _days(last, today) < REACH_QUIET_DAYS:
+            continue
+        aim = next((a for a in agendas.aims_of(camp, tag) if a["target"] == player), None)
+        if aim:
+            out[(tag, player)] = [{"kind": "reach_out", "aim": aim}]
+    return out
+
+
 def shortlist_options(camp: campaign.Campaign, snap: Dict, scored: List[Tuple],
                       cache: Optional[Dict] = None) -> Tuple[List[Tuple], Dict]:
     """The best SHORTLIST pairs of diplomacy.score() that have something possible between them, and the incidents
@@ -148,7 +185,7 @@ def shortlist_options(camp: campaign.Campaign, snap: Dict, scored: List[Tuple],
     player = camp.data["player"]
     cache = {} if cache is None else cache
     shortlist, opts = [], {}
-    for row in [x for x in scored if player not in (x[1], x[2])][:SHORTLIST]:
+    for row in pair_rows(camp, scored, snap.get("date", ""))[:SHORTLIST]:
         a, b = row[1], row[2]
         for x, y in ((a, b), (b, a)):
             if (x, y) not in cache:
@@ -163,11 +200,12 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
              sim: List[Dict]) -> Optional[List[Dict]]:
     """The LLM messages for this month's pick, or None when nothing is possible between any of the pairs."""
     from . import diplomacy
-    if not shortlist:
+    player = camp.data["player"]
+    reach = {k: v for k, v in opts.items() if k[1] == player and v}
+    if not shortlist and not reach:
         return None
     c = snap.get("countries", {})
     name = lambda t: c.get(t, {}).get("name", t)
-    player = camp.data["player"]
     me = gamestate.country(player)
     tags = list(dict.fromkeys(t for x in shortlist for t in (x[1], x[2])))
     pc = pacing(camp, now, sim)
@@ -191,17 +229,22 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
         parts.append(f"WORLD TENSION: {round(level * 100)}%. A quiet world makes alarm and war unlikely; Python rejects "
                      f"anything the game's rules forbid at this level.")
     parts.append("BLOCS (aims lining up, computed):\n" + blocs_text(camp, name))
-    parts.append("AGENDAS (what each country wants):\n" + "\n".join(
-        f"{name(t)} ({t}):\n{_aims_lines(camp, t)}" for t in tags))
+    if reach:
+        parts.append(f"COUNTRIES THAT MAY WRITE TO THE PLAYER (INCIDENT reach_out; TO is {player}):\n" + "\n".join(
+            f"- {name(t)} ({t}) [{o[0]['aim']['aim']}]" for (t, _), o in reach.items()))
+    if tags:
+        parts.append("AGENDAS (what each country wants):\n" + "\n".join(
+            f"{name(t)} ({t}):\n{_aims_lines(camp, t)}" for t in tags))
 
     def possible(x: str, y: str) -> str:
         found = opts.get((x, y), [])
         return f"\n  {x} -> {y}: " + "; ".join(f"{o['kind']} [{o['aim']['aim']}]" for o in found) if found else ""
 
-    parts.append("PAIRS, AND THE INCIDENTS POSSIBLE BETWEEN THEM NOW (the game's rules already checked; pick only "
-                 "from these):\n" + "\n".join(
-                     f"- {name(a)} ({a}) and {name(b)} ({b}): {', '.join(why)}{possible(a, b)}{possible(b, a)}"
-                     for _, a, b, why, _ in shortlist))
+    if shortlist:
+        parts.append("PAIRS, AND THE INCIDENTS POSSIBLE BETWEEN THEM NOW (the game's rules already checked; pick only "
+                     "from these):\n" + "\n".join(
+                         f"- {name(a)} ({a}) and {name(b)} ({b}): {', '.join(why)}{possible(a, b)}{possible(b, a)}"
+                         for _, a, b, why, _ in shortlist))
     world_events = [e for e in camp.data["events"] if e.get("major") and e["date"] <= now][-8:]
     if world_events:
         parts.append("RECENT WORLD EVENTS:\n" + "\n".join(f"- {e['when']}: {e['text']}" for e in world_events))
@@ -213,9 +256,10 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
              else f"{pc['quiet_days']} days since anything in the chronicle involved the player's country")
     parts.append(f"PACING: {quiet}; {pc['incidents_90']} incidents of yours in the last 90 days "
                  f"({pc['ultimatums_90']} ultimatums); {len(pc['open_ultimatums'])} ultimatums standing in the world. "
-                 f"After a quiet stretch for the player, bring something near their region (they see it as news and "
-                 f"may be written to); after a busy one, choose quiet or something distant. Favour the player's "
-                 f"corner of the world moderately, not exclusively. Aim for an incident roughly every other month: "
+                 f"After a quiet stretch for the player, a reach_out (if one is listed) or something near their region "
+                 f"brings them news; after a busy one, choose quiet or something distant. Most incidents should be "
+                 f"between other countries: favour the player's corner only moderately, and name the player's country "
+                 f"in WHY only when the incident really concerns it. Aim for an incident roughly every other month: "
                  f"if you picked one in the last 45 days, choose quiet unless something truly calls for another. "
                  f"Choosing QUIET is right whenever nothing earns an incident.")
     kinds = "\n".join(f"  {k}: {v}" for k, v in KINDS.items())
@@ -312,10 +356,12 @@ def check(camp: campaign.Campaign, pick: Dict, w: Dict[str, Dict], snap: Dict, n
         return False, "no known incident kind", None
     c = snap.get("countries", {})
     player = camp.data["player"]
+    if kind == "reach_out" and b != player:
+        return False, "a reach_out is to the player", None
     for t in (a, b):
         if t not in c or t not in w:
             return False, f"{t or '?'} is not a country in the game", None
-        if t == player:
+        if t == player and not (kind == "reach_out" and t == b):
             return False, "the player is not part of an incident", None
         if w[t]["subject"] or c[t].get("capitulated"):
             return False, f"{t} is a subject or beaten", None
@@ -324,7 +370,8 @@ def check(camp: campaign.Campaign, pick: Dict, w: Dict[str, Dict], snap: Dict, n
     if campaign.pair(a, b) in snap.get("wars", []):
         return False, "they are at war", None
     pc = pacing(camp, now, sim)
-    if sum(1 for x in pc["mine"] if _days(x["date"], now) < 30) >= INCIDENTS_PER_MONTH:
+    # due() already spaces the jobs a month apart; a slow job's incident is dated when it finished, so allow for that
+    if sum(1 for x in pc["mine"] if _days(x["date"], now) < 20) >= INCIDENTS_PER_MONTH:
         return False, "an incident was already picked this month", None
     if any(campaign.pair(x["from"], x["to"]) == campaign.pair(a, b) and _days(x["date"], now) < PAIR_GAP_DAYS
            for x in pc["mine"]):
@@ -409,7 +456,7 @@ class Month:
                 elif not self._agendas_done():
                     return None                     # agenda calls still running
                 else:
-                    rows = [x for x in self.scored if player not in (x[1], x[2])][:SHORTLIST]
+                    rows = pair_rows(self.camp, self.scored, self.now)[:SHORTLIST]
                     self.todo = [(x[1], x[2]) for x in rows] + [(x[2], x[1]) for x in rows]
                     self.phase = "options"
             elif self.phase == "options":
@@ -418,6 +465,7 @@ class Month:
                     self.cache[(x, y)] = options(self.camp, x, y, self.snap)
                 else:
                     self.shortlist, self.opts = shortlist_options(self.camp, self.snap, self.scored, self.cache)
+                    self.opts.update(reach_options(self.camp, self.snap, self.w))
                     msgs = messages(self.camp, self.snap, self.w, self.shortlist, self.opts, self.now, [])
                     if not msgs:
                         return {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "", "pairs": 0}
@@ -469,6 +517,13 @@ def finish(camp: campaign.Campaign, res: Dict) -> Optional[List]:
     aim = res["aim"]
     _state(camp)["incidents"].append({"date": key, "kind": pick["kind"], "from": pick["from"], "to": pick["to"],
                                       "aim": aim["aim"], "why": pick["why"]})
+    if pick["kind"] == "reach_out":                   # no exchange: the country's letter to the player comes sooner
+        pol = camp.policy_of(pick["from"])
+        if pol:
+            pol["urgency"] = 3
+            camp.set_policy(pick["from"], pol)
+        diplomacy.log([head + f"{line}   [{aim['aim']}]", f"  {pick['why']}"])
+        return [pick["from"], pick["to"], "reach_out", [aim["aim"]]]
     brief = {"kind": pick["kind"], "aim": aim["aim"], "aim_kind": aim["kind"], "target": aim["target"],
              "why": pick["why"]}
     item = [pick["from"], pick["to"], pick["kind"], [aim["aim"]], brief]
@@ -500,6 +555,7 @@ def main(args: List[str]) -> int:
     started = time.monotonic()
     cache: Dict = {}
     shortlist, opts = shortlist_options(camp, snap, scored, cache)
+    opts.update(reach_options(camp, snap, w))
     print(f"\n{len(shortlist)} pairs with something possible between them "
           f"({sum(len(v) for v in opts.values())} incidents; {time.monotonic() - started:.0f} s to work out)")
     for i in range(months):

@@ -285,6 +285,8 @@ whether the result takes effect. Every pick, quiet month and dropped pick is log
   what the game allows between each of the best pairs first (the same rules a dispatch keeps) and the model chooses
   from that list, paced by how long ago anything touched you; a pick that breaks a rule is dropped, never retried.
   Ultimatums need 10% world tension and come at most every 6 months.
+  A fourth incident, `reach_out`, makes a country with an aim about you write to you sooner (its policy urgency
+  becomes 3); no exchange is made. Countries with an incident in the last 90 days drop to the end of the shortlist.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)
 

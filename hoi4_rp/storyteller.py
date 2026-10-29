@@ -45,6 +45,9 @@ from . import agendas, campaign, gamestate, world
 KINDS = {"guarantee": "FROM and TO exchange a guarantee: one of them will defend the other",
          "commit": "FROM asks TO to join it in its AIM: to work against, befriend or stand behind the AIM's target "
                    "(a third country, not TO)",
+         "access": "FROM and TO open their lands to each other's armies (military access): FROM backs or befriends TO",
+         "alliance": "FROM and TO ally in a faction (one founds it or joins the other's) against the country FROM "
+                     "opposes, which TO opposes too",
          "ultimatum": "FROM sets TO a deadline to give up land, or face war: only for an AIM of the land kind whose "
                       "target is TO, and the gravest step there is",
          "reach_out": "FROM writes to the player (TO is the player's tag) about its AIM, which concerns the player's "
@@ -149,7 +152,7 @@ def pair_rows(camp: campaign.Campaign, scored: List[Tuple], now: str) -> List[Tu
     player = camp.data["player"]
     seen: Dict[str, int] = {}
     for x in _state(camp)["incidents"]:
-        if 0 <= _days(x["date"], now) <= 90:
+        if 0 <= _days(x["date"], now) <= 180:
             for t in (x["from"], x["to"]):
                 seen[t] = seen.get(t, 0) + 1
     rows = [x for x in scored if player not in (x[1], x[2])]
@@ -185,8 +188,12 @@ def shortlist_options(camp: campaign.Campaign, snap: Dict, scored: List[Tuple],
     player = camp.data["player"]
     cache = {} if cache is None else cache
     shortlist, opts = [], {}
-    for row in pair_rows(camp, scored, snap.get("date", ""))[:SHORTLIST]:
+    now = snap.get("date", "")
+    for row in pair_rows(camp, scored, now)[:SHORTLIST]:
         a, b = row[1], row[2]
+        if any(campaign.pair(x["from"], x["to"]) == campaign.pair(a, b) and _days(x["date"], now) < PAIR_GAP_DAYS
+               for x in _state(camp)["incidents"]):
+            continue                                  # check() would turn it down: don't offer it
         for x, y in ((a, b), (b, a)):
             if (x, y) not in cache:
                 cache[(x, y)] = options(camp, x, y, snap)
@@ -316,7 +323,9 @@ def _tense(tag: str) -> bool:
 
 def options(camp: campaign.Campaign, a: str, b: str, snap: Dict) -> List[Dict]:
     """Every incident FROM `a` TO `b` that serves one of a's aims and that the game allows now: [{"kind", "aim"}].
-        guarantee   the aim befriends or backs b, or b has an aim of the same side toward the same target
+        guarantee   the aim befriends or backs b, or opposes a third country that b opposes too
+        access      the aim befriends or backs b, and military access is possible
+        alliance    the aim opposes a third country that b opposes too, and a faction is possible
         commit      the aim opposes, befriends or backs a third country that b has an aim of the same side toward
                     too, and that commitment is possible
         ultimatum   a land aim whose target is b, a may threaten b, and the world is tense enough"""
@@ -329,13 +338,21 @@ def options(camp: campaign.Campaign, a: str, b: str, snap: Dict) -> List[Dict]:
     offers, asks, _ = diplomacy.menu(camp, a, b, c[a]["name"], c[b]["name"])
     shared = {(x["target"], _side(x["kind"])) for x in agendas.aims_of(camp, b) if x["target"]}
     can_guarantee = "give:guarantee" in offers or "ask:guarantee" in asks
+    can_access = "give:access" in offers or "ask:access" in asks
+    can_ally = any(k in offers + asks for k in ("give:faction", "ask:faction", "give:join", "ask:join"))
     out = []
     for aim in aims:
         t, k = aim["target"], aim["kind"]
         if not t:
             continue
-        if can_guarantee and ((t == b and k in ("befriend", "back")) or (t != b and (t, _side(k)) in shared)):
+        friend = t == b and k in ("befriend", "back")
+        common_foe = t != b and k == "oppose" and (t, "against") in shared
+        if can_guarantee and (friend or common_foe):
             out.append({"kind": "guarantee", "aim": aim})
+        if can_access and friend:
+            out.append({"kind": "access", "aim": aim})
+        if can_ally and common_foe:
+            out.append({"kind": "alliance", "aim": aim})
         if (k in ("oppose", "befriend", "back") and t not in (a, b) and (t, _side(k)) in shared
                 and (f"give:{k}:{t}" in offers or f"ask:{k}:{t}" in asks)):
             out.append({"kind": "commit", "aim": aim})
@@ -466,6 +483,10 @@ class Month:
                 else:
                     self.shortlist, self.opts = shortlist_options(self.camp, self.snap, self.scored, self.cache)
                     self.opts.update(reach_options(self.camp, self.snap, self.w))
+                    today = max(self.now, self.camp.data.get("last_date") or "")
+                    if any(_days(x["date"], today) < 20 for x in _state(self.camp)["incidents"]):
+                        return {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "", "pairs": 0,
+                                "note": "quiet (an incident was already picked this month; no call made)"}
                     msgs = messages(self.camp, self.snap, self.w, self.shortlist, self.opts, self.now, [])
                     if not msgs:
                         return {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "", "pairs": 0}
@@ -502,6 +523,9 @@ def finish(camp: campaign.Campaign, res: Dict) -> Optional[List]:
     pick = res["pick"]
     if res["error"]:
         diplomacy.log([head + f"the call failed: {res['error']}"])
+        return None
+    if not pick and res.get("note"):
+        diplomacy.log([head + res["note"]])
         return None
     if not pick:
         diplomacy.log([head + "quiet (nothing is possible between the pairs; no call made)"])

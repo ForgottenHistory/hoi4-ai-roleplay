@@ -351,6 +351,8 @@ def _moment(brief: Dict, an: str, bn: str) -> str:
     """The storyteller's incident, as the writer's own decision to act: what it is about and what it means to do."""
     doing = {"guarantee": f"a guarantee between you and {bn}, given or asked as suits {an}",
              "commit": f"asking {bn} to join {an} in this aim, as a standing diplomatic line toward a third country",
+             "access": f"military access between you and {bn}, given or asked as suits {an}",
+             "alliance": f"a faction with {bn}, founded or joined as suits {an}, against the aim's target",
              "ultimatum": f"an ultimatum to {bn}: a deadline to cede the land {an} claims, or war"}[brief["kind"]]
     return (f"{an}'s government has decided to act on its aim \"{brief['aim']}\" now"
             + (f" ({brief['why']})" if brief.get("why") else "") + f". It has {doing} in mind.")
@@ -362,6 +364,10 @@ def _only(brief: Dict):
     kind, k, t = brief["kind"], brief.get("aim_kind", ""), brief.get("target", "")
     if kind == "guarantee":
         return lambda key: key in ("give:guarantee", "ask:guarantee")
+    if kind == "access":
+        return lambda key: key in ("give:access", "ask:access")
+    if kind == "alliance":
+        return lambda key: key in ("give:faction", "ask:faction", "give:join", "ask:join")
     if kind == "commit":
         return lambda key: key in (f"give:{k}:{t}", f"ask:{k}:{t}")
     return lambda key: actions.is_state(key)

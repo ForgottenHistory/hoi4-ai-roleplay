@@ -192,6 +192,21 @@ def context(camp: campaign.Campaign, name) -> str:
             f"mention the player's country in a crisis:\n" + "\n".join(lines))
 
 
+def context_for(camp: campaign.Campaign, tag: str, name) -> str:
+    """For a country's own prompts (its agenda): the plotlines it is part of, as news of what the player's country is
+    after. The country owes the player nothing: it weighs the plot for its own sake."""
+    mine = [x for x in _store(camp)["list"] if x["stage"] != "done" and tag in x["tags"]]
+    if not mine:
+        return ""
+    player = name(camp.data["player"])
+    lines = [f"- {x['title']} ({x['stage']}). Goal: {x['goal']} So far: {x['so_far']}" for x in mine]
+    return (f"WHAT {player.upper()} IS AFTER, AND HOW IT INVOLVES YOU (what its government has been working toward, as "
+            f"the world sees it):\n" + "\n".join(lines) + f"\nWeigh it as your government would, for your own sake, "
+            f"and owe {player} nothing: it may serve your interests, or threaten them. Let your aims answer it "
+            f"(befriend, back, oppose, or, only if your government truly wants it for its own reasons, unite with "
+            f"{player}); an aim may also simply keep your distance.")
+
+
 def main(args: List[str]) -> int:
     """python -m hoi4_rp plots [--write]: the stored plotlines of the running campaign; --write has the model rewrite
     them now (kept)."""

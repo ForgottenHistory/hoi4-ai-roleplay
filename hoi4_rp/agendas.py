@@ -42,6 +42,8 @@ KINDS = {"oppose": "work against TARGET: contain it, isolate it, prepare for a c
          "befriend": "seek TARGET's friendship",
          "back": "stand behind TARGET: protect and support it",
          "land": "win territory from TARGET, a neighbour of yours, by pressure or by force",
+         "unite": "become one state with TARGET (annexed by it or merged by agreement): only if your government "
+                  "truly wants it, for its own reasons",
          "build": "strengthen yourself: rearm, industrialise, steady the country (TARGET none)",
          "neutral": "keep out of other countries' quarrels (TARGET none)"}
 
@@ -119,10 +121,14 @@ def prompt(me: gamestate.CountryState, cands: Dict[str, List[str]], snap: Dict, 
     if wt:
         parts.append(wt)
     if camp is not None:
-        from . import crises
-        ctx = crises.context(camp, [me.tag] + list(cands), lambda t: c.get(t, {}).get("name", t))
+        from . import crises, plots
+        name_of = lambda t: c.get(t, {}).get("name", t)
+        ctx = crises.context(camp, [me.tag] + list(cands), name_of)
         if ctx:
             parts.append(ctx)
+        story = plots.context_for(camp, me.tag, name_of)
+        if story:
+            parts.append(story)
     parts.append(
         f"Decide {me.name}'s standing aims toward the world: between 1 and {MAX_AIMS}, what its government means to work "
         f"toward over the next year or two. Build each from the live situation above: borders, claims and war goals, "
@@ -221,8 +227,16 @@ def due(camp: campaign.Campaign, tag: str) -> bool:
         return True
     if today and campaign.shift(a["date"], REFRESH_DAYS) <= today:
         return True
+    from . import plots
+    if any(x["updated"] > a["date"] and tag in x["tags"] for x in plots._store(camp)["list"]):
+        return True                                   # the player's story has moved with this country in it
     return any(e["date"] > a["date"] and tag in e["tags"] and e.get("type") in TRIGGERS
                for e in camp.data["events"])
+
+
+def wants(camp: campaign.Campaign, tag: str, target: str, kind: str = "unite") -> bool:
+    """Does `tag` have an aim of this kind toward `target`?"""
+    return any(x["kind"] == kind and x["target"] == target for x in aims_of(camp, tag))
 
 
 def covered(camp: campaign.Campaign, w: Dict[str, Dict], scored: List[Tuple]) -> List[str]:
@@ -230,9 +244,11 @@ def covered(camp: campaign.Campaign, w: Dict[str, Dict], scored: List[Tuple]) ->
     c = (camp.snapshot or {}).get("countries", {})
     player = camp.data["player"]
     ok = lambda t: t in c and t != player and not c[t].get("capitulated") and not (w.get(t) or {}).get("subject")
+    from . import plots
+    story = [t for t in plots.tags(camp) if ok(t)]       # the countries of the player's story first
     majors = [t for t in w if c.get(t, {}).get("major") and ok(t)]
     shortlist = [t for x in scored[:12] for t in (x[1], x[2]) if ok(t)]
-    return list(dict.fromkeys(majors + shortlist))[:MAX_COUNTRIES]
+    return list(dict.fromkeys(story + majors + shortlist))[:MAX_COUNTRIES]
 
 
 def describe(camp: campaign.Campaign, tag: str, name_of) -> str:

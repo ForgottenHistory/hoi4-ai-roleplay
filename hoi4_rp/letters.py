@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import (actions, bridge, campaign, chronicle, crises, plots, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
+from . import (actions, bridge, campaign, agendas, chronicle, crises, plots, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -286,6 +286,8 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")
         + (f"{began}\n\n" if (began := origins.text(camp, them, me)) else "")
         + (f"{pol}\n\n" if pol else "")
+        + (f"YOUR GOVERNMENT'S STANDING AIMS (what it means to work toward):\n{aims}\n\n"
+           if (aims := agendas.describe(camp, them.tag, them.name_of)) else "")
         + (f"{rep}\n\n" if rep else "")
         + (f"{deals}\n\n" if (deals := treaties.describe(camp, them.tag, them.name, me.name)) else "")
         + (f"{lines}\n\n" if (lines := treaties.commitments_text(camp, them.tag)) else "")
@@ -400,6 +402,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     actions.set_parties(rel, them, me)
     offers, asks = _proposals(camp, to, rel, key, reply=True)
     actions.economy(them.name, me.name, rel)
+    actions.union(me.name, agendas.wants(camp, them.tag, me.tag))
     help_text = (actions.reply_help(them.name, me.name, rel) + "\n\n"
                  + actions.proposal_help(them.name, me.name, offers, asks, expected=False,
                                          grants=actions.reply_grants(rel))
@@ -743,6 +746,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     rel = actions.relation(sender, player)
     offers, asks = _proposals(camp, sender, rel, key)
     actions.economy(them.name, me.name, rel)
+    actions.union(me.name, agendas.wants(camp, them.tag, me.tag))
     steps = [k for k in (pol["breaks"] if pol else []) if actions.possible(rel, k)]
     if actions.possible(rel, "end:embargo") and "end:embargo" not in steps:
         steps.append("end:embargo")                       # lifting an embargo is always allowed

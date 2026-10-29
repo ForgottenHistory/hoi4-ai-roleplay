@@ -898,6 +898,20 @@ AMOUNT_KINDS = ("civ", "mil", "dismantle") + tuple(EQUIPMENT)
 EQUIPMENT_GIVES = [k for k in EQUIPMENT_KEYS if k.startswith("give:")]
 EQUIPMENT_ASKS = [k for k in EQUIPMENT_KEYS if k.startswith("ask:")]
 ECONOMY: Dict[str, str] = {}   # {"text": both sides' industry} for the help of the letter being written (economy())
+UNION: Dict[str, str] = {}     # {"note": ...} while the letter being written is from a country whose aim is union (union())
+
+
+def union(me_name: str, wants: bool) -> None:
+    """Set (or clear) the note that replaces SUBMIT_NOTE for the letter being written: the country's own aim is to
+    become one state with the player, so annexation is where its path leads, not a last resort."""
+    UNION.clear()
+    if wants:
+        UNION["note"] = (f"UNION. Your government has decided on its own that it wants union with {me_name}: to become "
+                         f"one state (annexation by agreement). For you that is the end of a path, not a last "
+                         f"resort. Weigh the terms as a proud government would: your name and rights, your "
+                         f"institutions, your people's voice, the timing, what the other powers will do. Agree "
+                         f"when the terms are met, or say plainly what is still missing; do not agree in the same "
+                         f"breath as small favours, and do not pretend you have not decided.")
 
 
 def economy(them_name: str, me_name: str, rel: "Relation") -> str:
@@ -1369,7 +1383,7 @@ def _notes(keys: List[str]) -> List[str]:
     if any(is_state(k) or is_rights(k) or k in FACTORY_KEYS for k in keys) and ECONOMY.get("text"):
         out.append(ECONOMY["text"])
     if any(k in keys for k in ("give:submit", "ask:submit", "give:annex")):
-        out.append(SUBMIT_NOTE)
+        out.append(UNION.get("note") or SUBMIT_NOTE)
     if any(is_govt_key(k) for k in keys):
         out.append(GOVT_NOTE)
     return out + _new_goods_notes(keys)

@@ -200,8 +200,8 @@ def _resolve(line: str, scope: str, tags: List[str], names: Dict[str, str]) -> L
     low = line.lower()
     found = []
     for t in tags:
-        spots = [m.start() for m in (re.search(r"" + re.escape(x.lower()) + r"", low) for x in (t, names.get(t, "")) if x)
-                 if m]
+        pats = (re.search(r"" + re.escape(x.lower()) + r"", low) for x in (t, names.get(t, "")) if x)
+        spots = [m.start() for m in pats if m]
         if spots:
             found.append((min(spots), t))
     return [t for _, t in sorted(found)][:1 if scope == "inside" else 2]

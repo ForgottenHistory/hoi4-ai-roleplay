@@ -1187,7 +1187,8 @@ class _Session:
             self.failed()
             return
         pick = crises.parse(raw)
-        ok, why = crises.check(camp, pick, pairs, tags)
+        cn = (camp.snapshot or {}).get("countries", {})
+        ok, why = crises.check(camp, pick, pairs, tags, {t: x.get("name", t) for t, x in cn.items()})
         now = camp.data.get("last_date") or ""
         head = f"=== {campaign.date_words(now)}: CRISIS: "
         if not ok:

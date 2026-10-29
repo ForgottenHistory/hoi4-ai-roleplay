@@ -32,6 +32,7 @@ GAP_DAYS = 28            # a try about this often (most come to nothing)
 MAX_OPEN = 3
 MIN_MONTHS, MAX_MONTHS = 2, 6
 PAIRS = 10               # neighbouring pairs offered
+RECENT_DAYS = 120        # a country with a crisis this lately is not offered for another
 HISTORY_DAYS = 270       # a faded crisis is still remembered this long
 SEVERITIES = ("minor", "serious", "grave")
 
@@ -99,7 +100,11 @@ def candidates(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], scored: 
     c = snap.get("countries", {})
     player = camp.data["player"]
     ok = lambda t: t in c and t != player and not c[t].get("capitulated") and not (w.get(t) or {}).get("subject")
-    busy = {t for x in _open(camp) for t in x["tags"]}
+    now = snap.get("date", "")
+    # in a crisis now, or lately (the same few countries do not take every turn)
+    busy = {t for x in _store(camp)["list"] if x["status"] == "open" or x["date"] >= campaign.shift(now, -RECENT_DAYS)
+            for t in x["tags"]}
+    wars = set(snap.get("wars", []))
     pairs, tags = [], []
     for x in scored:
         a, b = x[1], x[2]
@@ -108,7 +113,8 @@ def candidates(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], scored: 
         for t in (a, b):
             if t not in tags and t not in busy:
                 tags.append(t)
-        if b in (w.get(a) or {}).get("neighbours", ()) and not {a, b} & busy and len(pairs) < PAIRS:
+        if (b in (w.get(a) or {}).get("neighbours", ()) and not {a, b} & busy and len(pairs) < PAIRS
+                and campaign.pair(a, b) not in wars):
             pairs.append((a, b))
     return pairs, tags[:14]
 
@@ -153,10 +159,13 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], pairs: Lis
     if world_events:
         parts.append("RECENT WORLD EVENTS:\n" + "\n".join(f"- {e['when']}: {e['text'][:300]}" for e in world_events))
     parts.append(
-        "RULES: a crisis needs a cause in the country's situation (its ideology, a border, a war, an aim above), "
-        "not a random shock; it does not repeat an open one; it fits the real course of events or the way this world "
-        "has diverged from it. No coups, no changes of government, no deaths of leaders, no wars begun: the countries "
-        "decide those themselves. Choose none unless a crisis would truly make the world richer: most months none.\n"
+        "RULES: a crisis needs a cause in the country's situation (its ideology, a border, an aim above), not a "
+        "random shock. This world is its own: the RECENT WORLD EVENTS and the countries above are the truth, so do not "
+        "re-enact what happened in real history on its real date, and never contradict them. Leave to the countries "
+        "(and the game) everything they decide or fight: no coups, no change of government, no leader's death, no war "
+        "begun, no annexation or occupation or remilitarisation, no battle or bombing of a war already under way. A "
+        "crisis is the trouble that leads to such things or follows them: a clash, an incident, unrest, a quarrel, "
+        "a shortage. 'inside' is about one country alone; anything done by another country is 'between'. Choose none unless a crisis would truly make the world richer: most months none.\n"
         "Answer with exactly these lines and nothing else:\n"
         "CRISIS: between, inside, or none\nTAGS: one tag (inside) or two tags separated by a comma (between)\n"
         "TITLE: at most 6 words\nTEXT: one or two sentences of fact, past tense, naming places and what was done\n"
@@ -181,13 +190,30 @@ def parse(raw: str) -> Dict:
     sev = next((s for s in SEVERITIES if s in _line(raw, "severity").lower()), "minor")
     m = re.search(r"\d+", _line(raw, "months"))
     months = min(MAX_MONTHS, max(MIN_MONTHS, int(m.group()))) if m else MIN_MONTHS
-    return {"scope": scope, "tags": tags, "title": _line(raw, "title").strip(". "), "text": _line(raw, "text"),
+    return {"scope": scope, "tags": tags, "tags_line": _line(raw, "tags"), "title": _line(raw, "title").strip(". "), "text": _line(raw, "text"),
             "severity": sev, "months": months}
 
 
-def check(camp: campaign.Campaign, pick: Dict, pairs: List[Tuple[str, str]], tags: List[str]) -> Tuple[bool, str]:
-    """(allowed, why not)."""
+def _resolve(line: str, scope: str, tags: List[str], names: Dict[str, str]) -> List[str]:
+    """The tags a TAGS line means when it gave names instead ("Czechoslovak Republic"): the known countries in it,
+    in the order they appear."""
+    low = line.lower()
+    found = []
+    for t in tags:
+        spots = [m.start() for m in (re.search(r"" + re.escape(x.lower()) + r"", low) for x in (t, names.get(t, "")) if x)
+                 if m]
+        if spots:
+            found.append((min(spots), t))
+    return [t for _, t in sorted(found)][:1 if scope == "inside" else 2]
+
+
+def check(camp: campaign.Campaign, pick: Dict, pairs: List[Tuple[str, str]], tags: List[str],
+          names: Optional[Dict[str, str]] = None) -> Tuple[bool, str]:
+    """(allowed, why not). `names` {tag: name}: a TAGS line of names instead of tags is read too."""
     scope, t = pick["scope"], pick["tags"]
+    if scope in ("inside", "between") and names and not (
+            len(t) == (1 if scope == "inside" else 2) and all(x in tags for x in t)):
+        t = pick["tags"] = _resolve(pick.get("tags_line", ""), scope, tags, names) or t
     if scope in ("none", ""):
         return False, "none" if scope else "no readable pick"
     if not pick["text"] or not pick["title"]:

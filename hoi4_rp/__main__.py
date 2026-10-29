@@ -98,6 +98,9 @@ if __name__ == "__main__":
     if cmd == "agendas":
         from . import agendas
         sys.exit(agendas.main(sys.argv[2:]))
+    if cmd == "plots":
+        from . import plots
+        sys.exit(plots.main(sys.argv[2:]))
     if cmd == "storyteller":
         from . import storyteller
         sys.exit(storyteller.main(sys.argv[2:]))

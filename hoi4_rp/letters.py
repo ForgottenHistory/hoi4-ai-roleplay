@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import (actions, bridge, campaign, chronicle, crises, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
+from . import (actions, bridge, campaign, chronicle, crises, plots, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -984,6 +984,7 @@ class _Session:
         self.ultimatum_job: Optional[tuple] = None   # (ultimatum, future, campaign id)
         self.ai_pool = ThreadPoolExecutor(max_workers=AI_PARALLEL)   # AI-to-AI exchanges (diplomacy.py), side by side
         self.ai_jobs: List[tuple] = []            # [(stage, queue item, future, campaign id, what the next stage needs)]
+        self.plot_job: Optional[tuple] = None     # the plotlines being written: (future, campaign id)
         self.crisis: Optional[tuple] = None       # a crisis try running: (future, campaign id, pairs, countries)
         self.month: Optional[tuple] = None        # the storyteller's month being worked out: (storyteller.Month, campaign id)
         self.date_seen = ""                       # the game date at the last snapshot
@@ -1134,6 +1135,7 @@ class _Session:
         """The storyteller's month (storyteller.py): the game queries are worked out a slice per tick so that this loop
         stays responsive, the LLM calls run in the AI pool. The incident it picks is queued as an exchange."""
         self._crisis_step(camp)
+        self._plots_step(camp)
         if self.month and self.month[1] != camp.id:
             self.month = None
         if not self.month:
@@ -1156,8 +1158,37 @@ class _Session:
         item = storyteller.finish(camp, res)
         if item:
             print(f"  [ai] storyteller: {item[2]} {item[0]} -> {item[1]} ({item[3][0]})")
+        if not self.plot_job and plots.due(camp):
+            plots._store(camp)["tick"] = month.snap.get("date", "")
+            self.plot_job = (self.ai_pool.submit(llm.chat, plots.messages(camp, month.snap), None, 0.7, 700,
+                                                 "ai:plots", ""), camp.id)
         if not self.crisis and crises.due(camp):
             self._start_crisis(camp, month)
+        camp.save()
+
+    def _plots_step(self, camp: campaign.Campaign) -> None:
+        """A finished plotlines call: keep what it wrote, and log it."""
+        if not self.plot_job:
+            return
+        fut, cid = self.plot_job
+        if cid != camp.id:
+            self.plot_job = None
+            return
+        if not fut.done():
+            return
+        self.plot_job = None
+        try:
+            raw = fut.result()
+        except llm.LLMError as e:
+            print(f"  [ai] the plotlines call failed: {e}")
+            self.failed()
+            return
+        now = camp.data.get("last_date") or ""
+        changed = plots.keep(camp, plots.parse(raw), now)
+        for x in changed:
+            diplomacy.log([f"=== {campaign.date_words(now)}: PLOTLINE: {x['title']} ({x['stage']}; "
+                           f"{', '.join(x['tags'])})", f"  goal: {x['goal']}", f"  so far: {x['so_far']}"])
+            print(f"  [ai] plotline: {x['title']} ({x['stage']})")
         camp.save()
 
     def _start_crisis(self, camp: campaign.Campaign, month) -> None:

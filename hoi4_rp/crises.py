@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-from . import agendas, campaign, world
+from . import agendas, campaign, plots, world
 
 GAP_DAYS = 28            # a try about this often (most come to nothing)
 MAX_OPEN = 3
@@ -105,7 +105,7 @@ def candidates(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], scored: 
     busy = {t for x in _store(camp)["list"] if x["status"] == "open" or x["date"] >= campaign.shift(now, -RECENT_DAYS)
             for t in x["tags"]}
     wars = set(snap.get("wars", []))
-    pairs, tags = [], []
+    pairs, tags = [], [t for t in plots.tags(camp) if ok(t) and t not in busy]   # the player's story first
     for x in scored:
         a, b = x[1], x[2]
         if not (ok(a) and ok(b)):
@@ -155,6 +155,10 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], pairs: Lis
     ctx = context(camp, tags, name, now)
     if ctx:
         parts.append(ctx)
+    from . import plots
+    story = plots.context(camp, name)
+    if story:
+        parts.append(story)
     world_events = [e for e in camp.data["events"] if e.get("major") and e["date"] <= now][-6:]
     if world_events:
         parts.append("RECENT WORLD EVENTS:\n" + "\n".join(f"- {e['when']}: {e['text'][:300]}" for e in world_events))

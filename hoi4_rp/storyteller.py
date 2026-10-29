@@ -252,6 +252,10 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
                      "from these):\n" + "\n".join(
                          f"- {name(a)} ({a}) and {name(b)} ({b}): {', '.join(why)}{possible(a, b)}{possible(b, a)}"
                          for _, a, b, why, _ in shortlist))
+    from . import crises
+    ctx = crises.context(camp, tags, name, now)
+    if ctx:
+        parts.append(ctx)
     world_events = [e for e in camp.data["events"] if e.get("major") and e["date"] <= now][-8:]
     if world_events:
         parts.append("RECENT WORLD EVENTS:\n" + "\n".join(f"- {e['when']}: {e['text']}" for e in world_events))
@@ -437,7 +441,7 @@ class Month:
             print(f"  [storyteller] no agenda for {tag}: {e}")
             return
         cands = agendas.candidates(me, self.snap, self.w)
-        self.jobs.append((me, cands, self.pool.submit(llm.chat, agendas.prompt(me, cands, self.snap), None, 0.7, 600,
+        self.jobs.append((me, cands, self.pool.submit(llm.chat, agendas.prompt(me, cands, self.snap, self.camp), None, 0.7, 600,
                                                       "ai:agenda", tag)))
 
     def _agendas_done(self) -> bool:

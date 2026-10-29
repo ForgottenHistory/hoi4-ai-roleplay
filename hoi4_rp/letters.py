@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from . import (actions, bridge, campaign, chronicle, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
+from . import (actions, bridge, campaign, chronicle, crises, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -984,6 +984,7 @@ class _Session:
         self.ultimatum_job: Optional[tuple] = None   # (ultimatum, future, campaign id)
         self.ai_pool = ThreadPoolExecutor(max_workers=AI_PARALLEL)   # AI-to-AI exchanges (diplomacy.py), side by side
         self.ai_jobs: List[tuple] = []            # [(stage, queue item, future, campaign id, what the next stage needs)]
+        self.crisis: Optional[tuple] = None       # a crisis try running: (future, campaign id, pairs, countries)
         self.month: Optional[tuple] = None        # the storyteller's month being worked out: (storyteller.Month, campaign id)
         self.date_seen = ""                       # the game date at the last snapshot
         self.active_at = time.monotonic()         # when the date last moved or the player last wrote
@@ -1132,6 +1133,7 @@ class _Session:
     def storyteller(self, camp: campaign.Campaign) -> None:
         """The storyteller's month (storyteller.py): the game queries are worked out a slice per tick so that this loop
         stays responsive, the LLM calls run in the AI pool. The incident it picks is queued as an exchange."""
+        self._crisis_step(camp)
         if self.month and self.month[1] != camp.id:
             self.month = None
         if not self.month:
@@ -1148,12 +1150,56 @@ class _Session:
             return
         if res is None:
             return
-        self.month = None
+        month, self.month = self.month[0], None
         if res["error"]:
             self.failed()
         item = storyteller.finish(camp, res)
         if item:
             print(f"  [ai] storyteller: {item[2]} {item[0]} -> {item[1]} ({item[3][0]})")
+        if not self.crisis and crises.due(camp):
+            self._start_crisis(camp, month)
+        camp.save()
+
+    def _start_crisis(self, camp: campaign.Campaign, month) -> None:
+        """Consider a crisis (crises.py), from the month's world: one LLM call in the AI pool, read by _crisis_step."""
+        snap = month.snap
+        crises._store(camp)["tick"] = snap.get("date", "")
+        pairs, tags = crises.candidates(camp, snap, month.w, month.scored)
+        msgs = crises.messages(camp, snap, month.w, pairs, tags, month.now)
+        if msgs:
+            self.crisis = (self.ai_pool.submit(llm.chat, msgs, None, 0.9, 500, "ai:crisis", ""), camp.id, pairs, tags)
+
+    def _crisis_step(self, camp: campaign.Campaign) -> None:
+        """A finished crisis call: open the crisis if it is allowed, and log it."""
+        if not self.crisis:
+            return
+        fut, cid, pairs, tags = self.crisis
+        if cid != camp.id:
+            self.crisis = None
+            return
+        if not fut.done():
+            return
+        self.crisis = None
+        try:
+            raw = fut.result()
+        except llm.LLMError as e:
+            print(f"  [ai] the crisis call failed: {e}")
+            self.failed()
+            return
+        pick = crises.parse(raw)
+        ok, why = crises.check(camp, pick, pairs, tags)
+        now = camp.data.get("last_date") or ""
+        head = f"=== {campaign.date_words(now)}: CRISIS: "
+        if not ok:
+            if why != "none":
+                diplomacy.log([head + f"dropped ({why})", f"  {raw[:300]}"])
+            return
+        crisis = crises.open_crisis(camp, pick, now)
+        c = (camp.snapshot or {}).get("countries", {})
+        who = " and ".join(c.get(t, {}).get("name", t) for t in crisis["tags"])
+        diplomacy.log([head + f"{crisis['scope']} - {crisis['title']} ({who}; {crisis['severity']}, until "
+                       f"{campaign.date_words(crisis['until'])})", f"  {crisis['text']}"])
+        print(f"  [ai] crisis: {crisis['title']} ({who})")
         camp.save()
 
     def _ai_step(self, camp: campaign.Campaign, stage: str, item: List, fut, ctx) -> Optional[tuple]:

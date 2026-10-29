@@ -330,6 +330,10 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
     ev = _pair_events(camp, me.tag, other.tag)
     if ev:
         parts.append("RECENT EVENTS BETWEEN YOU:\n" + "\n".join(ev))
+    from . import crises
+    cr = crises.context(camp, [me.tag, other.tag], name)
+    if cr:
+        parts.append(cr)
     cm = _commitments(camp, me.tag, other.tag, name)
     if cm:
         parts.append("STANDING COMMITMENTS (agreed by letter):\n" + "\n".join(cm))

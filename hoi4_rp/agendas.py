@@ -37,7 +37,7 @@ AIM_WORDS = 12
 PARALLEL = 4
 # Events that change what a country is, so that its agenda written before them is stale
 TRIGGERS = {"war", "peace", "capitulation", "government", "country_new", "country_gone", "faction_left",
-            "faction_founded", "faction_joined", "independence", "subject"}
+            "faction_founded", "faction_joined", "independence", "subject", "crisis"}
 KINDS = {"oppose": "work against TARGET: contain it, isolate it, prepare for a clash",
          "befriend": "seek TARGET's friendship",
          "back": "stand behind TARGET: protect and support it",
@@ -102,8 +102,8 @@ def _target_line(t: str, why: List[str], c: Dict, name_of) -> str:
 
 # ---------------------------------------------------------------- the prompt and its reading
 
-def prompt(me: gamestate.CountryState, cands: Dict[str, List[str]], snap: Dict) -> List[Dict]:
-    """The LLM messages for one country's agenda."""
+def prompt(me: gamestate.CountryState, cands: Dict[str, List[str]], snap: Dict, camp=None) -> List[Dict]:
+    """The LLM messages for one country's agenda (`camp`: its recent crises are part of the situation)."""
     c = snap.get("countries", {})
     kinds = "\n".join(f"  {k}: {v}" for k, v in KINDS.items())
     listed = "\n".join(_target_line(t, why, c, me.name_of) for t, why in cands.items()) or "(none: no country ties you)"
@@ -118,6 +118,11 @@ def prompt(me: gamestate.CountryState, cands: Dict[str, List[str]], snap: Dict) 
     wt = world.tension_text({me.tag: me.name})
     if wt:
         parts.append(wt)
+    if camp is not None:
+        from . import crises
+        ctx = crises.context(camp, [me.tag] + list(cands), lambda t: c.get(t, {}).get("name", t))
+        if ctx:
+            parts.append(ctx)
     parts.append(
         f"Decide {me.name}'s standing aims toward the world: between 1 and {MAX_AIMS}, what its government means to work "
         f"toward over the next year or two. Build each from the live situation above: borders, claims and war goals, "

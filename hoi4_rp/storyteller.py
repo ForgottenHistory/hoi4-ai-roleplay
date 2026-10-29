@@ -76,9 +76,9 @@ def drop_after(camp: campaign.Campaign, key: str) -> None:
 
 
 def due(camp: campaign.Campaign) -> bool:
-    """A game month since the last pick."""
+    """Three weeks since the last try began (a try itself takes a while, so tries come about a month apart)."""
     st, today = _state(camp), (camp.snapshot or {}).get("date", "")
-    return bool(today) and (not st["tick"] or campaign.shift(st["tick"], 30) <= today)
+    return bool(today) and (not st["tick"] or campaign.shift(st["tick"], 21) <= today)
 
 
 def _days(a: str, b: str) -> int:
@@ -259,8 +259,8 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
                  f"After a quiet stretch for the player, a reach_out (if one is listed) or something near their region "
                  f"brings them news; after a busy one, choose quiet or something distant. Most incidents should be "
                  f"between other countries: favour the player's corner only moderately, and name the player's country "
-                 f"in WHY only when the incident really concerns it. Aim for an incident roughly every other month: "
-                 f"if you picked one in the last 45 days, choose quiet unless something truly calls for another. "
+                 f"in WHY only when the incident really concerns it. Aim for an incident most months: "
+                 f"if you picked one in the last 25 days, choose quiet unless something truly calls for another. "
                  f"Choosing QUIET is right whenever nothing earns an incident.")
     kinds = "\n".join(f"  {k}: {v}" for k, v in KINDS.items())
     parts.append("Choose one of the possible incidents above, or quiet. Answer with exactly these lines and nothing "
@@ -482,7 +482,9 @@ class Month:
                     res["error"] = str(e)
                     return res
                 res["pick"] = parse(res["raw"])
-                res["ok"], res["why"], res["aim"] = check(self.camp, res["pick"], self.w, self.snap, self.now, [],
+                # pacing is measured to the day the pick lands: the game ran on while the month was worked out
+                res["ok"], res["why"], res["aim"] = check(self.camp, res["pick"], self.w, self.snap,
+                                                          max(self.now, self.camp.data.get("last_date") or ""), [],
                                                           self.opts)
                 return res
             if time.monotonic() - started >= budget:

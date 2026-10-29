@@ -302,6 +302,9 @@ Terms used below:
   Ultimatums need 10% world tension and come at most every 6 months.
   A fourth incident, `reach_out`, makes a country with an aim about you write to you sooner (its policy urgency
   becomes 3); no exchange is made. Countries with an incident in the last 90 days drop to the end of the shortlist.
+  With `mode = on`, what an incident came to (agreed, took effect, turned down, countered) is also written to the
+  chronicle as news; the next story event (`[story]`, at most one per `gap_days`) can then be about it: a popup
+  in your game that reports the news the way your embassies and papers would and asks how your government responds.
 
 ## Other settings (Kaiserreich, Kaiserredux, ...)
 

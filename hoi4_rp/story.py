@@ -71,7 +71,7 @@ class Moment:
     other: str          # the country it concerns ("" if none)
     weight: int         # 1..3, how telling
     text: str           # what happened, for the prompt
-    kind: str           # "deal" or "deed"
+    kind: str           # "deal", "deed" or "news" (an incident between two other countries)
 
 
 def _story(camp: campaign.Campaign) -> Dict:
@@ -97,6 +97,9 @@ def moments(camp: campaign.Campaign, player: str, since: str = "") -> List[Momen
     out = [Moment(date, group[0]["when"], other, max(_deal_weight(e["type"]) for e in group),
                   "A deal made by letter: " + " ".join(e["text"] for e in group), "deal")
            for (date, other), group in deals.items()]
+    for e in camp.data["events"]:                      # what the storyteller's incidents came to (diplomacy.record)
+        if e.get("type") == "news" and e["date"] > since and player not in e["tags"]:
+            out.append(Moment(e["date"], e["when"], e["tags"][0], 2, e["text"], "news"))
     for d in reputation._rep(camp)["deeds"]:
         if d["date"] <= since or not d.get("weight"):
             continue                                   # not judged yet, or nothing to do with honour
@@ -283,7 +286,7 @@ def messages(camp: campaign.Campaign, me, them, moment: Moment, relation: str) -
         + f"WHAT HAPPENED IN THE LAST YEAR:\n{memory}\n\n"
         + (f"EARLIER EVENTS LIKE THIS ONE (don't repeat them):\n" + "\n".join(earlier) + "\n\n" if earlier else "")
     )
-    task = (
+    task = (_news_task(me, other_name, moment) if moment.kind == "news" else
         f"You are the game master of a Hearts of Iron IV game. Write one national event for {me.name}, the player's "
         f"country, growing out of this moment ({moment.when}):\n{moment.text}\n\n"
         f"The event is a DECISION, not a news report. The player already knows what happened; don't retell it. "
@@ -299,19 +302,38 @@ def messages(camp: campaign.Campaign, me, them, moment: Moment, relation: str) -
         f"minister\", \"Arrest the ringleaders\", \"Buy them off from the treasury\"), not a mood or a statement, and "
         f"each has its price. \"Do nothing\" is only an option if doing nothing is itself a gamble. "
         f"{_VOICE.get(settings().letters.style, _VOICE['serious'])}\n\n"
+    ) + (
         f"{_effects_help(other_name, parties)}\n\n"
         f"PICTURES (pick the one that fits best):\n{pictures}\n\n"
         "Answer in exactly this form, plain text, no markdown:\n"
         "TITLE: a short event title, at most 6 words\n"
         "PICTURE: one picture key from the list\n"
         "TEXT: the event text, 50 to 100 words\n"
-        f"SUMMARY: one sentence for the history books: the conflict in {me.name} and who wanted what (without the choice)\n"
+        f"SUMMARY: one sentence for the history books: "
+        + ("what happened abroad and how the government took it" if moment.kind == "news" else
+           f"the conflict in {me.name} and who wanted what (without the choice)") + "\n"
         "OPTION: the first response, at most 12 words, then its effects\n"
         "OPTION: the second response, then its effects\n"
         "OPTION: (optional) a third response"
     )
     return [{"role": "system", "content": context + task},
             {"role": "user", "content": f"Write the event for {me.name}."}]
+
+
+def _news_task(me, other_name: str, moment: "Moment") -> str:
+    """The prompt's task for a news event: something happened between two other countries."""
+    return (
+        f"You are the game master of a Hearts of Iron IV game. Something happened abroad ({moment.when}) that "
+        f"{me.name}, the player's country, hears of through its embassies and newspapers:\n{moment.text}\n\n"
+        f"Write one news event for {me.name}'s government. Open it like a dispatch or a front page: the headline "
+        f"fact first, in the voice of a newspaper or an ambassador's report in that country, in a sentence or two, "
+        f"then what it means for {me.name} (who in the cabinet, the press, the army or the public reads it as a "
+        f"threat or a chance, and what they ask for). End on the question of how {me.name} responds. The "
+        f"options are the government's response: a public statement, a quiet approach to one of the countries, "
+        f"a precaution at home, or doing nothing; each concrete, and most of them cost or change little. Invent the "
+        f"small human details (a quote, a paper's name, an official), keep to the facts given, and do not make the "
+        f"news bigger than it was. "
+        f"{_VOICE.get(settings().letters.style, _VOICE['serious'])}\n\n")
 
 
 def _describe(s, short: bool = False) -> str:

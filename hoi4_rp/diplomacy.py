@@ -652,6 +652,22 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
     if usage:
         lines.append(f"  ({usage})")
     log(lines)
+    if on and not isinstance(why[0], int):               # a storyteller incident: news in the chronicle
+        _news(camp, a, b, name(a), name(b), deal or "closer ties", answer, bool(news), key)
+
+
+def _news(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, deal: str, answer: str, took: bool,
+          key: str) -> None:
+    """What a storyteller incident came to, as a chronicle event the player's story events can be written about."""
+    from . import storyteller
+    said = next((x for x in reversed(storyteller._state(camp)["incidents"]) if x["from"] == a and x["to"] == b), None)
+    result = (f"{bn} agreed, and it took effect" if took else
+              f"{bn} agreed in principle" if answer == "accept" else f"{bn} turned it down" if answer == "decline"
+              else f"{bn} answered with a counter-offer")
+    text = f"{an} proposed to {bn}: {deal}. {result}." + (f" Behind it: {said['why']}" if said else "")
+    c = (camp.snapshot or {}).get("countries", {})
+    camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "news", "tags": [a, b], "text": text,
+                      "major": any(c.get(t, {}).get("major") for t in (a, b))}])
 
 
 def log(lines: List[str]) -> None:

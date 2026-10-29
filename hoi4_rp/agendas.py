@@ -175,9 +175,17 @@ def _store(camp: campaign.Campaign) -> Dict[str, Dict]:
     return camp.data.setdefault("agendas", {})
 
 
+def _name(camp: campaign.Campaign, tag: str) -> str:
+    return ((camp.snapshot or {}).get("countries", {}).get(tag) or {}).get("name", "")
+
+
 def of(camp: campaign.Campaign, tag: str) -> Optional[Dict]:
-    """The stored agenda of a country: {"date", "when", "aims": [{"aim", "target", "kind"}]}, or None."""
-    return _store(camp).get(tag)
+    """The stored agenda of a country: {"date", "when", "name", "aims": [{"aim", "target", "kind"}]}, or None.
+    The game reuses dynamic tags (a civil war's side, later another country): an agenda written for a country
+    of another name is not this country's."""
+    a = _store(camp).get(tag)
+    now = _name(camp, tag)
+    return None if a and a.get("name") and now and a["name"] != now else a
 
 
 def aims_of(camp: campaign.Campaign, tag: str) -> List[Dict]:
@@ -187,7 +195,8 @@ def aims_of(camp: campaign.Campaign, tag: str) -> List[Dict]:
 
 def keep(camp: campaign.Campaign, tag: str, aims: List[Dict]) -> None:
     key = (camp.snapshot or {}).get("date") or camp.data.get("last_date") or ""
-    _store(camp)[tag] = {"date": key, "when": campaign.date_words(key), "aims": aims}
+    _store(camp)[tag] = {"date": key, "when": campaign.date_words(key), "name": _name(camp, tag),
+                      "aims": aims}
 
 
 def due(camp: campaign.Campaign, tag: str) -> bool:

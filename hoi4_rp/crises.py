@@ -197,10 +197,12 @@ def parse(raw: str) -> Dict:
 def _resolve(line: str, scope: str, tags: List[str], names: Dict[str, str]) -> List[str]:
     """The tags a TAGS line means when it gave names instead ("Czechoslovak Republic"): the known countries in it,
     in the order they appear."""
-    low = line.lower()
+    flat = lambda x: " ".join(re.findall(r"[a-z0-9]+", x.lower()))
+    low = flat(line)
     found = []
     for t in tags:
-        pats = (re.search(r"" + re.escape(x.lower()) + r"", low) for x in (t, names.get(t, "")) if x)
+        pats = (re.search(r"(?<![a-z0-9])" + re.escape(flat(x)) + r"(?![a-z0-9])", low)
+                for x in (t, names.get(t, "")) if x)
         spots = [m.start() for m in pats if m]
         if spots:
             found.append((min(spots), t))

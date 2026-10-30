@@ -1525,6 +1525,9 @@ class _Session:
             else:
                 item["weight"], item["verdict"] = reputation.read_verdict(text)
                 print(f"  game master: {item['weight']:+d} {item['verdict']}")
+                if item["weight"] and item.get("by", player) == player and not item.get("opinion_set"):
+                    item["opinion_set"] = True
+                    actions.reputation_opinion(player, item.get("tags", []), item["weight"])
             camp.save()
             return
         job = reputation.next_job(camp, player)

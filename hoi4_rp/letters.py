@@ -43,7 +43,7 @@ POLL_SECONDS = 0.5
 SENT_KEPT = 20            # copies of the player's latest letters, for a reply a loaded save still waits on
 RESUME_SECONDS = 120      # a resumed letter whose reply didn't arrive is tried again after this long
 CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded when the date moved)
-IDLE_SECONDS = 600        # game date still this long (paused, player away): no background LLM work, no letters
+RUN_DAYS = 3              # game days the game must run, unpaused, before background LLM work, popups and letters start
 EVENT_LETTERS = 2          # countries that may start a letter about events within EVENT_DAYS
 EVENT_DAYS = 10            # game days
 RETRY_SECONDS = 60        # after a failed background LLM call, wait this long before the next one
@@ -1001,18 +1001,20 @@ class _Session:
         self.retry_at = 0.0                       # no background LLM call before this (after a failure)
         self.was_idle = False
         self.moving = 0                           # snapshots in a row whose date had moved (a loaded save moves it once)
+        self.run_from = ""                         # the date the current run of unpaused play began
 
     def running(self) -> bool:
         """The game is unpaused: its date moved at the last two snapshots. New popups (news, story events, letters
         countries start) wait for this; a paused or just loaded game is the player's to look at first."""
-        return self.moving >= 2
+        return self.moving >= 2 and _days(self.date_seen) - _days(self.run_from) >= RUN_DAYS
 
     def idle(self) -> bool:
-        """The game date hasn't moved for IDLE_SECONDS: paused, maybe with nobody there. Background AI work
-        (policies, the game master, letters countries start) waits; the player's own letters are still answered."""
-        idle = time.monotonic() - self.active_at > IDLE_SECONDS
+        """The game is paused, or was unpaused or loaded fewer than RUN_DAYS days ago. Background AI work
+        (policies, the game master, the storyteller, letters countries start) waits; the player's own letters are
+        still answered."""
+        idle = not self.running()
         if idle != self.was_idle:
-            print("game paused for a while: background AI work paused" if idle else "background AI work resumed")
+            print("game paused: background AI work waits" if idle else "game running: background AI work resumes")
             self.was_idle = idle
         return idle
 
@@ -1051,12 +1053,15 @@ class _Session:
         if snap["date"] != self.date_seen:
             self.date_seen, self.active_at = snap["date"], now
             self.moving += 1
+            if self.moving == 1:
+                self.run_from = snap["date"]          # the date it started to move from
         else:
             self.moving = 0                            # the same date at two snapshots: paused
         camp = self.campaign_for(player, snap["campaign"])
         rewound = camp.at(snap["date"])
         if rewound:
             print(f"{campaign.date_words(snap['date'])}: an earlier save was loaded; later memories dropped")
+            self.moving, self.run_from = 1, snap["date"]               # a new run of play begins here
         old = camp.snapshot
         if old is None or snap["date"] > old["date"]:
             if old is not None:

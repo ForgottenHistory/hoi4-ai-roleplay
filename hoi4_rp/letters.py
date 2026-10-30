@@ -1035,6 +1035,8 @@ class _Session:
         # The .gui can't do either: Enter makes a new line, and the page shows the whole letter.
         # Cheap, and repeating it covers a restarted game.
         bridge.send(f"bridge.editbox.multiline {EDITBOX_NAME}", f"bridge.editbox.mirror {EDITBOX_NAME} {PAGE_NAME}")
+        if self.camp:                                  # those it writes to, and the plot's
+            chronicle.WATCH = set(self.camp.threads()) | set(plots.tags(self.camp))
         snap = chronicle.snapshot(player)
         if snap["date"] != self.date_seen:
             self.date_seen, self.active_at = snap["date"], now

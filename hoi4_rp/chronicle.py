@@ -192,11 +192,26 @@ def snapshot(player: str) -> Dict:
         elif kind == "S" and len(f) >= 3:
             snap["states"][f[0]] = [f[1], f[2]]
     snap["wars"] = sorted(wars)
-    try:                                              # the player's completed focuses: what a focus did is news too
-        snap["focuses"] = [[f.id, f.name] for f in completed_focuses(player)]
-    except (StateError, RuntimeError):
-        pass
+    # Completed focuses of the player, the major powers and WATCH (those it writes to): what a focus did is news
+    # too. One small read each (0.03 s), so not every country in the game.
+    focuses: Dict[str, List[List[str]]] = {}
+    for tag in {player} | WATCH | {t for t, x in snap["countries"].items() if x["major"]}:
+        if tag in snap["countries"]:
+            try:
+                focuses[tag] = [[f.id, f.name] for f in completed_focuses(tag)]
+            except (StateError, RuntimeError):
+                pass
+    snap["focuses"] = focuses
     return snap
+
+
+WATCH: Set[str] = set()      # countries beyond the major powers whose focuses are read (set by the letter loop)
+
+
+def recent_focuses(events: List[Dict], tag: str, now: str, n: int = 3) -> List[str]:
+    """The names of the last `n` national focuses `tag` completed, newest last."""
+    return [e["text"].split('focus "', 1)[1].rstrip('."') for e in events
+            if e.get("type") == "focus" and tag in e["tags"] and e["date"] <= now][-n:]
 
 
 def diff(old: Dict, new: Dict) -> List[Dict]:
@@ -299,16 +314,21 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
 
     # The player's national focuses (an older snapshot without them: nothing to compare). A focus can bring a
     # country under the player, into its faction or across its border; those events say so, or they read as force.
-    if player and "focuses" in old and "focuses" in new:
-        done = {f[0] for f in old["focuses"]}
-        fresh = [f[1] for f in new["focuses"] if f[0] not in done]
+    # Older snapshots held the player's alone, as a list.
+    as_dict = lambda f: f if isinstance(f, dict) else ({player: f} if player else {})
+    of, nf = as_dict(old.get("focuses")), as_dict(new.get("focuses"))
+    for tag in nf.keys() & of.keys():
+        done = {f[0] for f in of[tag]}
+        fresh = [f[1] for f in nf[tag] if f[0] not in done]
         for focus in fresh:
-            add([player], f"{name(player)} completed the national focus \"{focus}\".", "focus")
+            add([tag], f"{name(tag)} completed the national focus \"{focus}\".", "focus")
+            events[-1]["major"] = tag == player          # a major power's focus is not world news in itself
         if fresh:
-            because = f" This followed {name(player)}'s national focus \"{fresh[-1]}\"."
+            because = f" This followed {name(tag)}'s national focus \"{fresh[-1]}\"."
             for e in events:
                 if (e["type"] in ("subject", "independence", "faction_joined", "faction_founded", "territory")
-                        and player in e["tags"]):
+                        and tag in e["tags"][:1 if e["type"] == "territory" else 2]
+                        and "national focus" not in e["text"]):
                     e["text"] += because
     return events
 

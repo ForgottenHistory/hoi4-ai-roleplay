@@ -106,6 +106,7 @@ def _clean_for_game(text: str) -> str:
     for a, b in {"‘": "'", "’": "'", "“": '"', "”": '"', "—": "-",
                  "–": "-", "…": "..."}.items():
         text = text.replace(a, b)
+    text = re.sub(r"(?im)^[ \t]*(?:grant|give)[ \t]+(?:rights|dmz|state)[ \t]+\d+[ \t]*$\n?", "", text)   # a bare command
     text = re.sub(r"[*_#`]+", "", text)              # markdown
     text = re.sub(r"[§$£\[\]@]", "", text)            # HOI4 colour codes, key refs, icons, scripted loc
     text = re.sub(r"[ 	]*-[ 	]*(?=\S)", lambda m: " - " if m.group(0).strip() != m.group(0) else "-", text)
@@ -429,7 +430,8 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         raw += "\n\n" + extra
     raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
-    if fixed := _unmatched(prompt, raw, to, proposals + [k for k, _ in commands], offers + asks):
+    if fixed := _unmatched(prompt, raw, to, proposals + [k for k, _ in commands],
+                           offers + asks + actions.reply_grants(rel), grants=True):
         raw, terms = treaties.parse_terms(fixed)
         letter, commands, proposals = actions.parse(raw)
     commands, renounced = treaties.take_renounce(commands)
@@ -550,7 +552,8 @@ def _missing_commands(prompt: List[Dict], raw: str, about: str, grants: bool) ->
 _PROPOSAL_COMMAND = re.compile(r"\[\[\s*(offer|ask|for)\b[^\[\]]*\]\]", re.I)
 
 
-def _unmatched(prompt: List[Dict], raw: str, about: str, covered: List[str], allowed: List[str]) -> str:
+def _unmatched(prompt: List[Dict], raw: str, about: str, covered: List[str], allowed: List[str],
+               grants: bool = False) -> str:
     """The letter's text speaks of a kind of deal its commands leave out (it says it can spare a factory, and no
     factory is in the proposal): ask once whether the letter offers it. Returns `raw` with its proposal commands
     replaced by the corrected ones, or '' if they stand."""
@@ -568,7 +571,8 @@ def _unmatched(prompt: List[Dict], raw: str, about: str, covered: List[str], all
     except llm.LLMError as e:
         print(f"  checking {about}'s proposal failed: {e}")
         return ""
-    found = [c for c in re.findall(r"\[\[[^\[\]]+\]\]", answer) if _REPAIR_KINDS.match(c)]
+    found = [c for c in re.findall(r"\[\[[^\[\]]+\]\]", answer)
+             if _REPAIR_KINDS.match(c) or (grants and not re.match(r"\[\[\s*(end|embargo|ultimatum|opinion)\b", c, re.I))]
     if not found:
         return ""
     print(f"  {about}'s letter spoke of {what} outside its proposal; proposal now {' '.join(found)}")
@@ -710,7 +714,7 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
                 + actions.dmz_asks(rel) + actions.EQUIPMENT_ASKS + actions.war_asks(rel) + actions.third_asks(rel))
         standing = treaties.standing(camp, tag)
         ok = lambda k: k != "give:peace" and k not in standing and actions.possible(rel, k)
-        return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
+        return peace_offer + [k for k in offers + actions.rights_after(rel) if ok(k)], [k for k in asks if ok(k)]
     proposed = [x["date"] for ls in camp.threads().values() for x in ls if x.get("proposal")]
     if proposed and today - _days(max(proposed)) < cfg.proposal_gap_days:
         return peace_offer, []
@@ -732,7 +736,7 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
                                     + actions.dmz_asks(rel) + actions.war_asks(rel))
     refused |= treaties.standing(camp, tag)                # a pledge already given isn't asked for again
     ok = lambda k: k not in refused and k != "give:peace" and actions.possible(rel, k)
-    return peace_offer + [k for k in offers if ok(k)], [k for k in asks if ok(k)]
+    return peace_offer + [k for k in offers + actions.rights_after(rel) if ok(k)], [k for k in asks if ok(k)]
 
 
 def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) -> None:

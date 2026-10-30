@@ -496,7 +496,10 @@ def dismantle_factories(tag: str, n: int) -> Optional[Tuple[int, List[str]]]:
 
 RIGHTS_NOTE = ("Resource rights hand over a state's whole output of oil, steel, aluminium and the rest, for good, "
                "while the land stays yours: a real loss to your own industry, but far cheaper than ceding the "
-               "state. Weigh the amounts against what you get, and against how much you need them yourself.")
+               "state. Weigh the amounts against what you get, and against how much you need them yourself. When you "
+               "receive a state in the package and the other side wants its resources kept (or you promised them), put "
+               "the rights over that state in the same package: the land passes to you first, then the rights go back. "
+               "A promise of rights that is not in the commands never happens.")
 
 
 def is_rights(key: str) -> bool:
@@ -520,6 +523,21 @@ def rights_held(receiver: str, giver: str) -> Set[str]:
 def rights_gives(rel: "Relation") -> List[str]:
     keys = [f"give:rights:{sid}" for sid, s in (rel.them_border or {}).items() if s.resources]
     _BORDER_INFO.update({k: rel.them_border[k.rsplit(":", 1)[1]] for k in keys})
+    return keys
+
+
+_AFTER: Set[str] = set()      # "give:rights:N" keys that name a state not theirs yet (see rights_after)
+
+
+def rights_after(rel: "Relation") -> List[str]:
+    """Rights over a state of mine that they ask for in the same package: I cede the land and keep its resources.
+    Only meaningful with "ask:state:N" in the package (package() drops them otherwise, and apply() takes them after
+    the land has changed hands)."""
+    _AFTER.clear()                                  # rebuilt with each letter: a state that changed hands is no longer one
+    keys = [f"give:rights:{sid}" for sid, s in (rel.me_border or {}).items()
+            if s.resources and not s.capital and sid not in (rel.them_border or {})]
+    _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
+    _AFTER.update(keys)
     return keys
 
 
@@ -1217,6 +1235,8 @@ def possible(rel: Relation, key: str) -> bool:
         if (rel.them_subject and rel.bound != "subject") if give else (rel.me_subject and rel.bound != "overlord"):
             return False                               # a subject's resources are its overlord's to give
         state = ((rel.them_border if give else rel.me_border) or {}).get(sid)
+        if not state and give and key in _AFTER:         # the land is still mine: it is theirs once the package runs
+            state = (rel.me_border or {}).get(sid)
         held = (rel.them_rights if give else rel.me_rights) or set()
         return not rel.at_war and bool(state and state.resources) and sid not in held
     if is_state(key):
@@ -1789,6 +1809,9 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             why = "not a border state" if is_state(key) else f"{deal.relation} exists: {rel.exists.get(deal.relation)}"
             print(f"  {key} not possible now (at war: {rel.at_war}, {why})")
             continue
+        if key in _AFTER and key.startswith("give:") and key.rsplit(":", 1)[1] not in (rel.them_border or {}):
+            print(f"  {key} skipped: the state has not changed hands")     # rights follow the land they came with
+            continue
         if is_govt_key(key):
             verb, _, ideology = key.split(":")
             if _effect(_govt_script(them if verb == "give" else me, ideology)):
@@ -1865,7 +1888,12 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             continue
         if _effect(deal.effect.format(**fmt)):
             if is_state(key):
-                (rel.them_border if key.startswith("give:") else rel.me_border).pop(key.rsplit(":", 1)[1], None)
+                sid = key.rsplit(":", 1)[1]
+                src, dst = ((rel.them_border, rel.me_border) if key.startswith("give:")
+                            else (rel.me_border, rel.them_border))
+                info = src.pop(sid, None)
+                if info is not None and dst is not None:      # it is the other's now: what follows (rights) sees it
+                    dst[sid] = info
             elif is_dmz(key):
                 state = (rel.them_border if key.startswith("give:") else rel.me_border or {}).get(key.rsplit(":", 1)[1])
                 if state:
@@ -1899,7 +1927,10 @@ def package(proposals: List[str], allowed: List[str]) -> List[str]:
         if alone in kept:
             return [alone]
     moved = {(k.split(":")[0], k.rsplit(":", 1)[1]) for k in kept if is_state(k)}
-    return [k for k in kept if not ((is_rights(k) or is_dmz(k)) and (k.split(":")[0], k.rsplit(":", 1)[1]) in moved)]
+    kept = [k for k in kept if not ((is_rights(k) or is_dmz(k)) and (k.split(":")[0], k.rsplit(":", 1)[1]) in moved)]
+    asked = {k.rsplit(":", 1)[1] for k in kept if k.startswith("ask:state:")}
+    kept = [k for k in kept if not (k in _AFTER and k.rsplit(":", 1)[1] not in asked)]     # rights need their land
+    return [k for k in kept if not k in _AFTER] + [k for k in kept if k in _AFTER]          # the land goes first
 
 
 def package_text(keys: List[str], who: str = "they") -> str:

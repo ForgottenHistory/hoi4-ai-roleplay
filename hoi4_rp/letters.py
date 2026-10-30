@@ -358,7 +358,7 @@ def _show_reply(player: str, sender: str, text: str, offer: bool = False) -> Non
         f"bridge.setloc airp_reply_body {body}",
         f"eval_effect {player} = {{ clear_variable = airp_awaiting_from {offer_var} "
         f"set_variable = {{ airp_reply_size = {size} }} set_variable = {{ airp_reply_from = {sender}.id }} "
-        f"add_to_variable = {{ airp_reply_refresh = 1 }} }}",   # update the window now, even while paused
+        f"add_to_variable = {{ airp_reply_refresh = 1 }} add_to_variable = {{ airp_awaiting_refresh = 1 }} }}",   # update the window now, even while paused
     )
     bad = [r for r in replies if not r.startswith("OK")]
     if bad:
@@ -1787,13 +1787,13 @@ def run() -> int:
                     text = ""
                 if to == player:
                     print("letter recipient decoded as the player's own country; check on_sent_effect scopes")
-                    bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from }}")
+                    bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from add_to_variable = {{ airp_awaiting_refresh = 1 }} }}")
                 elif to and text.strip():
                     session.active_at = time.monotonic()      # the player is here
                     handle_letter(session.chronicle(player, force=True), player, to, text)
                 else:
                     print("empty letter; nothing to answer")
-                    bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from }}")
+                    bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from add_to_variable = {{ airp_awaiting_refresh = 1 }} }}")
             elif (waiting := read_awaiting(block)) and session.camp:
                 # Letters are answered here, in this loop, so a wait with no letter in hand came from a loaded save
                 mark = (session.camp.id, waiting)

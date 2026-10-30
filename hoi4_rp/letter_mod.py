@@ -245,12 +245,16 @@ scripted_diplomatic_actions = {
 			ROOT = {
 				set_variable = { airp_outbox_to = PREV.id }
 				set_variable = { airp_awaiting_from = PREV.id }
+				add_to_variable = { airp_awaiting_refresh = 1 }
+				add_to_variable = { airp_reply_refresh = 1 }
 			}
 		}
 		complete_effect = {
 			ROOT = {
 				set_variable = { airp_outbox_to = PREV.id }
 				set_variable = { airp_awaiting_from = PREV.id }
+				add_to_variable = { airp_awaiting_refresh = 1 }
+				add_to_variable = { airp_reply_refresh = 1 }
 			}
 		}
 
@@ -276,6 +280,7 @@ scripted_gui = {
 		context_type = player_context
 		window_name = "airp_awaiting_window"
 		visible = { has_variable = airp_awaiting_from }
+		dirty = airp_awaiting_refresh        # a paused game has no ticks: update the notice the moment a letter is sent
 		ai_enabled = { always = no }
 	}
 
@@ -290,6 +295,7 @@ _REPLY_GUI = """	airp_letter_reply_@SIZE@ = {
 
 		visible = {
 			has_variable = airp_reply_from
+			NOT = { has_variable = airp_awaiting_from }     # a letter sent over an open reply: the notice shows
 			check_variable = { airp_reply_size = @SIZE@ }
 		}
 		# Scripted guis update every tick, and a paused game has none: a reply opened while paused showed the

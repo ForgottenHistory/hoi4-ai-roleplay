@@ -395,9 +395,13 @@ def describe(camp: campaign.Campaign, player: str, player_name: str, viewer: str
     return "\n\n".join(x for x in (out, threats) if x)
 
 
-def window(camp: campaign.Campaign, player: str, name, clean) -> str:
-    """The reputation window's text (HOI4 colour codes): the standing the world sees, the deeds judged, the threats
-    and the latest promises. `name(tag)` gives a country's name; `clean` makes LLM text safe for the game."""
+SHORT_STANDING = [(-6, "Notorious"), (-3, "Untrustworthy"), (-1, "Doubtful")]
+
+
+def widget(camp: campaign.Campaign, player: str, name, clean) -> Tuple[str, str]:
+    """The top-bar reputation box (HOI4 colour codes): (its text, its tooltip with the record: the standing, the most
+    telling deeds, the threats, the latest promises). `name(tag)` gives a country's name; `clean` makes LLM text safe
+    for the game."""
     rep = _rep(camp)
     today = camp.data.get("last_date") or ""
     judged = [d for d in rep["deeds"] if d["weight"] is not None and d.get("by", player) == player]
@@ -405,18 +409,25 @@ def window(camp: campaign.Campaign, player: str, name, clean) -> str:
     waiting = [d for d in rep["deeds"] if d["weight"] is None and d.get("by", player) == player]
     score = sum(_faded(d, today) for d in counted)
     colour = "R" if score <= -1 else "G" if score >= 1 else "Y"
-    out = [f"The world sees {name(player)} as §{colour}{standing(score)}§!  (standing {score:+.1f})",
-           "Every government knows these deeds. Older ones fade, by half every three years.", ""]
+    label = next((w for limit, w in SHORT_STANDING if score <= limit), None) or \
+        ("Trusted" if score >= 3 else "Reliable" if score >= 1 else "Untested")
+    value = f"§{colour}{label}§! {score:+.1f}" if counted else f"§Y{label}§!"
+    out = [f"§YReputation§!: the world sees {name(player)} as §{colour}{standing(score)}§! ({score:+.1f}).",
+           "Every government knows these deeds; older ones fade, by half every three years.", ""]
     if not counted:
         out.append("§gNothing is on record yet. Keeping or breaking your word will be.§!")
-    for d in sorted(counted, key=lambda d: d["date"], reverse=True)[:16]:
+    telling = sorted(counted, key=lambda d: -abs(_faded(d, today)))[:6]
+    for d in sorted(telling, key=lambda d: d["date"], reverse=True):
         w = d["weight"]
         others = ", ".join(name(t) for t in d["tags"] if t != player)
         out.append(f"§{'G' if w > 0 else 'R'}{w:+d}§!  §Y{d['when']}§!" + (f"  ({others})" if others else ""))
         out.append(clean(d["verdict"]))
         out.append("")
+    if len(counted) > len(telling):
+        out.append(f"§g{len(counted) - len(telling)} lesser deeds on record besides.§!")
     if waiting:
         out.append(f"§g{len(waiting)} more deed{'s' if len(waiting) > 1 else ''} not judged yet.§!")
+    if len(counted) > len(telling) or waiting:
         out.append("")
     threats = rep["threats"]
     if threats:
@@ -429,8 +440,8 @@ def window(camp: campaign.Campaign, player: str, name, clean) -> str:
     promises = rep["promises"]
     if promises:
         out.append(f"§YLatest promises§!  ({len(promises)} on record)")
-        out += [f"{x['when']}, to {name(x['to'])}: {clean(x['text'])}" for x in promises[-8:][::-1]]
-    return "\n".join(out).strip()
+        out += [f"{x['when']}, to {name(x['to'])}: {clean(x['text'])}" for x in promises[-4:][::-1]]
+    return value, "\n".join(out).strip()
 
 
 def drop_after(camp: campaign.Campaign, key: str) -> None:

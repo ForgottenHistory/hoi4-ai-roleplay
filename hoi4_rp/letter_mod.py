@@ -106,33 +106,41 @@ _GUI = """guiTypes = {
 		}
 	}
 
-	# The button that opens and closes the reputation window: its own small floating window, so no game window is
-	# changed (other mods stay compatible). Drag it by its frame.
+	# Reputation: a small box on the top bar showing the player's standing, the record in its tooltip. Its own window,
+	# attached to the top bar by the scripted gui (parent_window_token), so no game window is changed. Drag it anywhere.
+	# The full-screen outer window gives the box room to be moved (inside the top bar alone it could hardly move).
 	containerWindowType = {
-		name = "airp_rep_opener_window"
-		position = { x = 10 y = 130 }
-		size = { width = 143 height = 44 }
-		orientation = upper_left
-		moveable = yes
+		name = "airp_rep_container"
+		position = { x = 0 y = 0 }
+		size = { width = 102%% height = 107%% }
 
-		background = {
-			name = "background"
-			spriteType = "GFX_tiled_window_transparent"
-		}
+		containerWindowType = {
+			name = "airp_rep_box"
+			position = { x = 1125 y = 4 }
+			size = { width = 170 height = 26 }
+			moveable = yes
 
-		buttonType = {
-			name = "airp_rep_open_button"
-			position = { x = 10 y = 5 }
-			quadTextureSprite = "GFX_button_123x34"
-			buttonFont = "hoi_16mbs"
-			buttonText = "AIRP_REP_OPEN"
-			clicksound = click_default
+			background = {
+				name = "background"
+				spriteType = "GFX_generic_box_small"
+				alwaystransparent = no
+			}
+
+			instantTextBoxType = {
+				name = "airp_rep_value"
+				position = { x = 5 y = 4 }
+				font = "hoi_18mbs"
+				text = "AIRP_REP_VALUE"
+				format = center
+				maxWidth = 160
+				maxHeight = 23
+				fixedsize = yes
+				pdx_tooltip = "AIRP_REP_TIP"
+			}
 		}
 	}
 
 @REPLY_WINDOWS@
-
-@REP_WINDOWS@
 }
 """
 
@@ -312,28 +320,15 @@ scripted_gui = {
 
 @REPLY_GUIS@
 
-	# The floating Reputation button: opens the window (letters.py builds the text), or closes it when open.
-	airp_rep_opener = {
+	# The reputation box on the top bar; letters.py sets its text and tooltip (airp_rep_value, airp_rep_tip).
+	airp_reputation = {
 		context_type = player_context
-		window_name = "airp_rep_opener_window"
-		visible = { is_ai = no }
-		dirty = airp_rep_refresh
-		effects = {
-			airp_rep_open_button_click = {
-				if = {
-					limit = { has_variable = airp_rep_for }
-					clear_variable = airp_rep_for
-				}
-				else = {
-					set_variable = { airp_rep_request = ROOT.id }
-				}
-				add_to_variable = { airp_rep_refresh = 1 }
-			}
-		}
+		parent_window_token = top_bar
+		window_name = "airp_rep_container"
+		visible = { always = yes }
+		dirty = airp_rep_refresh             # a paused game has no ticks: letters.py bumps this when the text changes
 		ai_enabled = { always = no }
 	}
-
-@REP_GUIS@
 }
 """
 
@@ -397,6 +392,20 @@ defined_text = {
 		localization_key = airp_reply_body
 	}
 }
+defined_text = {
+	name = GetAirpRepValue
+	text = {
+		trigger = { always = yes }
+		localization_key = airp_rep_value
+	}
+}
+defined_text = {
+	name = GetAirpRepTip
+	text = {
+		trigger = { always = yes }
+		localization_key = airp_rep_tip
+	}
+}
 """
 
 
@@ -415,10 +424,10 @@ def _loc() -> str:
         ' AIRP_REPLY_TITLE:0 "Letter from [?airp_reply_from.GetNameWithFlag]"',
         ' AIRP_REPLY_BODY:0 "[This.GetAirpReplyBody]"',
         ' airp_reply_body:0 ""',
-        ' AIRP_REP_OPEN:0 "Reputation"',
-        ' AIRP_REP_TITLE:0 "Reputation of [?airp_rep_for.GetNameWithFlag]"',
-        ' AIRP_REP_BODY:0 "[This.GetAirpRepBody]"',
-        ' airp_rep_body:0 ""',
+        ' AIRP_REP_VALUE:0 "[This.GetAirpRepValue]"',
+        ' AIRP_REP_TIP:0 "[This.GetAirpRepTip]"',
+        ' airp_rep_value:0 "Reputation"',
+        ' airp_rep_tip:0 "Your reputation for keeping your word. It shows once the AI Roleplay script is running."',
         ' AIRP_CLOSE:0 "Close"',
         ' AIRP_ACCEPT:0 "Accept"',
         ' AIRP_DECLINE:0 "Decline"',

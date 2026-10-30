@@ -32,7 +32,7 @@ import re
 import time
 import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import (actions, bridge, campaign, agendas, chronicle, crises, plots, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
@@ -63,25 +63,26 @@ def read_awaiting(block: str) -> Optional[str]:
     return bridge.decode_country(float(m.group(1))) if m else None
 
 
-def read_rep_request(block: str) -> Optional[str]:
-    """The player's tag if the Reputation button was just pressed, else None."""
-    m = re.search(r"\bairp_rep_request=(-?[\d.]+)", block)
-    return bridge.decode_country(float(m.group(1))) if m else None
+REP_RESEND_SECONDS = 60   # the box's text is set again this often even unchanged (a restarted game forgets it)
 
 
-def show_reputation(camp: campaign.Campaign, player: str) -> None:
-    """Open the reputation window."""
+def show_reputation(camp: campaign.Campaign, player: str, last: Tuple[str, float]) -> Tuple[str, float]:
+    """Set the top-bar reputation box's text and tooltip when they changed. `last` is (text set, when); returns the
+    new one."""
     names = (camp.snapshot or {}).get("countries", {})
     name = lambda t: names.get(t, {}).get("name", t)
-    text = reputation.window(camp, player, name, _clean_for_game)
-    size = reply_size_for(text)
+    value, tip = reputation.widget(camp, player, name, _clean_for_game)
+    text = value + "|" + tip
+    if text == last[0] and time.monotonic() - last[1] < REP_RESEND_SECONDS:
+        return last
     replies = bridge.send(
-        f"bridge.setloc airp_rep_body {text.replace(chr(13), '').replace(chr(10), chr(92) + 'n')}",
-        f"eval_effect {player} = {{ clear_variable = airp_rep_request set_variable = {{ airp_rep_size = {size} }} "
-        f"set_variable = {{ airp_rep_for = {player}.id }} add_to_variable = {{ airp_rep_refresh = 1 }} }}")
+        f"bridge.setloc airp_rep_value {value}",
+        f"bridge.setloc airp_rep_tip {tip.replace(chr(13), '').replace(chr(10), chr(92) + 'n')}",
+        f"eval_effect {player} = {{ add_to_variable = {{ airp_rep_refresh = 1 }} }}")   # shows now, even while paused
     bad = [r for r in replies if not r.startswith("OK")]
     if bad:
-        print("  could not show the reputation window:", " | ".join(bad))
+        print("  could not set the reputation box:", " | ".join(bad))
+    return text, time.monotonic()
 
 
 def resume_letter(camp: campaign.Campaign, player: str, to: str) -> None:
@@ -998,6 +999,7 @@ class _Session:
     def __init__(self) -> None:
         self.camp: Optional[campaign.Campaign] = None
         self.resumed: Dict[tuple, float] = {}   # (campaign id, country) -> when its waiting letter was resumed
+        self.rep_shown: Tuple[str, float] = ("", 0.0)   # the reputation box's text as last set, and when
         self.steered = 0                         # campaign whose game AI strategies were last brought in line
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
@@ -1812,6 +1814,8 @@ def run() -> int:
         try:
             player = bridge.player_tag()
             session.chronicle(player)
+            if session.camp:
+                session.rep_shown = show_reputation(session.camp, player, session.rep_shown)
             block = bridge.country_block(player)
             to = read_outbox(block)
             if to:
@@ -1832,8 +1836,6 @@ def run() -> int:
                 else:
                     print("empty letter; nothing to answer")
                     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from add_to_variable = {{ airp_awaiting_refresh = 1 }} }}")
-            elif read_rep_request(block) and session.camp:
-                show_reputation(session.chronicle(player, force=True), player)
             elif (waiting := read_awaiting(block)) and session.camp:
                 # Letters are answered here, in this loop, so a wait with no letter in hand came from a loaded save
                 mark = (session.camp.id, waiting)

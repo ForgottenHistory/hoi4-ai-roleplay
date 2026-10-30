@@ -395,6 +395,45 @@ def describe(camp: campaign.Campaign, player: str, player_name: str, viewer: str
     return "\n\n".join(x for x in (out, threats) if x)
 
 
+def window(camp: campaign.Campaign, player: str, viewer: str, name, clean) -> str:
+    """The reputation window's text (HOI4 colour codes): the standing the world sees, the deeds judged, the threats and
+    the promises made to `viewer`. `name(tag)` gives a country's name; `clean` makes LLM text safe for the game."""
+    rep = _rep(camp)
+    today = camp.data.get("last_date") or ""
+    judged = [d for d in rep["deeds"] if d["weight"] is not None and d.get("by", player) == player]
+    counted = [d for d in judged if d["weight"] != 0]
+    waiting = [d for d in rep["deeds"] if d["weight"] is None and d.get("by", player) == player]
+    score = sum(_faded(d, today) for d in counted)
+    colour = "R" if score <= -1 else "G" if score >= 1 else "Y"
+    out = [f"The world sees {name(player)} as §{colour}{standing(score)}§!  (standing {score:+.1f})",
+           "Every government knows these deeds. Older ones fade, by half every three years.", ""]
+    if not counted:
+        out.append("§gNothing is on record yet. Keeping or breaking your word will be.§!")
+    for d in sorted(counted, key=lambda d: d["date"], reverse=True)[:16]:
+        w = d["weight"]
+        others = ", ".join(name(t) for t in d["tags"] if t != player)
+        out.append(f"§{'G' if w > 0 else 'R'}{w:+d}§!  §Y{d['when']}§!"
+                   + (f"  ({others}{'; this concerned them' if viewer in d['tags'] else ''})" if others else ""))
+        out.append(clean(d["verdict"]))
+        out.append("")
+    if waiting:
+        out.append(f"§g{len(waiting)} more deed{'s' if len(waiting) > 1 else ''} not judged yet.§!")
+        out.append("")
+    threats = rep["threats"]
+    if threats:
+        count = lambda st: sum(1 for t in threats if t["status"] == st)
+        out.append(f"§YThreats§!  {len(threats)} made: {count('kept')} carried out, {count('yielded')} got their way, "
+                   f"{count('empty')} came to nothing, {count('open')} still open.")
+        for t in [t for t in threats if t["status"] == "open" and t["to"] == viewer]:
+            out.append(f"Open, against {name(viewer)}: {clean(t['text'])}")
+        out.append("")
+    promises = [x for x in rep["promises"] if x["to"] == viewer]
+    if promises:
+        out.append(f"§YPromises made to {name(viewer)}§!")
+        out += [f"{x['when']}: {clean(x['text'])}" for x in promises[-6:]]
+    return "\n".join(out).strip()
+
+
 def drop_after(camp: campaign.Campaign, key: str) -> None:
     """An earlier save was loaded: forget what happened after it."""
     rep = camp.data.get("reputation")

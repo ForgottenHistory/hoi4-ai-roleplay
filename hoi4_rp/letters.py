@@ -63,6 +63,27 @@ def read_awaiting(block: str) -> Optional[str]:
     return bridge.decode_country(float(m.group(1))) if m else None
 
 
+def read_rep_request(block: str) -> Optional[str]:
+    """The country whose Reputation action the player just pressed, else None."""
+    m = re.search(r"\bairp_rep_request=(-?[\d.]+)", block)
+    return bridge.decode_country(float(m.group(1))) if m else None
+
+
+def show_reputation(camp: campaign.Campaign, player: str, viewer: str) -> None:
+    """Open the reputation window as `viewer` sees it."""
+    names = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: names.get(t, {}).get("name", t)
+    text = reputation.window(camp, player, viewer, name, _clean_for_game)
+    size = reply_size_for(text)
+    replies = bridge.send(
+        f"bridge.setloc airp_rep_body {text.replace(chr(13), '').replace(chr(10), chr(92) + 'n')}",
+        f"eval_effect {player} = {{ clear_variable = airp_rep_request set_variable = {{ airp_rep_size = {size} }} "
+        f"set_variable = {{ airp_rep_for = {viewer}.id }} add_to_variable = {{ airp_rep_refresh = 1 }} }}")
+    bad = [r for r in replies if not r.startswith("OK")]
+    if bad:
+        print("  could not show the reputation window:", " | ".join(bad))
+
+
 def resume_letter(camp: campaign.Campaign, player: str, to: str) -> None:
     """The game waits on a reply no letter is being answered for: a save made while the reply was being written,
     then loaded. Answer the letter sent to `to` by then (kept in camp.data["sent"]); with no copy, close the wait."""
@@ -1811,6 +1832,8 @@ def run() -> int:
                 else:
                     print("empty letter; nothing to answer")
                     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from add_to_variable = {{ airp_awaiting_refresh = 1 }} }}")
+            elif (asked := read_rep_request(block)) and session.camp:
+                show_reputation(session.chronicle(player, force=True), player, asked)
             elif (waiting := read_awaiting(block)) and session.camp:
                 # Letters are answered here, in this loop, so a wait with no letter in hand came from a loaded save
                 mark = (session.camp.id, waiting)

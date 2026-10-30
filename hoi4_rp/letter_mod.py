@@ -107,6 +107,8 @@ _GUI = """guiTypes = {
 	}
 
 @REPLY_WINDOWS@
+
+@REP_WINDOWS@
 }
 """
 
@@ -260,6 +262,26 @@ scripted_diplomatic_actions = {
 
 		ai_desire = { base = 0 }
 	}
+
+	# Opens the reputation window: how this country sees the player's word. Python (letters.py) builds the text.
+	airp_show_reputation = {
+		icon = 1
+		visible = {
+			ROOT = { is_ai = no }
+		}
+		selectable = {
+			ROOT = { NOT = { has_variable = airp_rep_request } }
+		}
+		requires_acceptance = no
+		show_acceptance_on_action_button = no
+		cost = 0
+
+		complete_effect = {
+			ROOT = { set_variable = { airp_rep_request = PREV.id } }
+		}
+
+		ai_desire = { base = 0 }
+	}
 }
 """
 
@@ -285,6 +307,8 @@ scripted_gui = {
 	}
 
 @REPLY_GUIS@
+
+@REP_GUIS@
 }
 """
 
@@ -366,6 +390,11 @@ def _loc() -> str:
         ' AIRP_REPLY_TITLE:0 "Letter from [?airp_reply_from.GetNameWithFlag]"',
         ' AIRP_REPLY_BODY:0 "[This.GetAirpReplyBody]"',
         ' airp_reply_body:0 ""',
+        ' AIRP_SHOW_REPUTATION_TITLE:0 "Reputation"',
+        ' AIRP_SHOW_REPUTATION_ACTION_DESC:0 "See how the world judges your word, and how this country sees it."',
+        ' AIRP_REP_TITLE:0 "Reputation in the eyes of [?airp_rep_for.GetNameWithFlag]"',
+        ' AIRP_REP_BODY:0 "[This.GetAirpRepBody]"',
+        ' airp_rep_body:0 ""',
         ' AIRP_CLOSE:0 "Close"',
         ' AIRP_ACCEPT:0 "Accept"',
         ' AIRP_DECLINE:0 "Decline"',

@@ -1000,6 +1000,12 @@ class _Session:
         self.active_at = time.monotonic()         # when the date last moved or the player last wrote
         self.retry_at = 0.0                       # no background LLM call before this (after a failure)
         self.was_idle = False
+        self.moving = 0                           # snapshots in a row whose date had moved (a loaded save moves it once)
+
+    def running(self) -> bool:
+        """The game is unpaused: its date moved at the last two snapshots. New popups (news, story events, letters
+        countries start) wait for this; a paused or just loaded game is the player's to look at first."""
+        return self.moving >= 2
 
     def idle(self) -> bool:
         """The game date hasn't moved for IDLE_SECONDS: paused, maybe with nobody there. Background AI work
@@ -1044,6 +1050,9 @@ class _Session:
         snap = chronicle.snapshot(player)
         if snap["date"] != self.date_seen:
             self.date_seen, self.active_at = snap["date"], now
+            self.moving += 1
+        else:
+            self.moving = 0                            # the same date at two snapshots: paused
         camp = self.campaign_for(player, snap["campaign"])
         rewound = camp.at(snap["date"])
         if rewound:
@@ -1441,7 +1450,7 @@ class _Session:
     def news_tick(self, player: str, block: str) -> None:
         """Every poll: open a written news event when no letter window or story event is up."""
         camp = self.camp
-        if not camp or not self.news_draft or story._story(camp)["pending"] \
+        if not camp or not self.news_draft or not self.running() or story._story(camp)["pending"] \
                 or re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
             return
         draft, cid, told = self.news_draft
@@ -1466,7 +1475,7 @@ class _Session:
                 me_name = (camp.snapshot or {}).get("countries", {}).get(player, {}).get("name", player)
                 story.resolve(camp, player, n, me_name)
             return
-        if not self.story_draft or re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
+        if not self.story_draft or not self.running() or re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
             return
         draft, cid, other, other_name, parties = self.story_draft
         self.story_draft = None
@@ -1676,7 +1685,7 @@ class _Session:
 
     def deliver(self, player: str, block: str) -> None:
         """Let one waiting country write, if the player isn't reading or awaiting a letter."""
-        if not self.pending or not self.camp or self.idle():
+        if not self.pending or not self.camp or self.idle() or not self.running():
             return
         if re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
             return

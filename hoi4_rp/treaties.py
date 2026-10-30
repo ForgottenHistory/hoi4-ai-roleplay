@@ -709,9 +709,8 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
     return out
 
 
-# ---------------------------------------------------------------- the diplomacy view's treaty box
+# ---------------------------------------------------------------- the treaty row in the diplomacy view
 
-PANEL_SLOTS = 40     # countries the box can be filled for at once (letter_mod.py makes a loc key for each)
 PANEL_RECENT = 24    # months a treaty that came to an end still shows
 
 _CLOSED_COLOUR = {"fulfilled": "G", "broken": "R", "renounced": "R"}
@@ -747,7 +746,7 @@ def _panel_lines(camp: campaign.Campaign, t: Dict, them: str) -> List[str]:
 
 
 def panel(camp: campaign.Campaign, player: str) -> Dict[str, Tuple[str, str]]:
-    """For the diplomacy view: {country: (box text, tooltip)} for each country the player has treaties with, those
+    """For the diplomacy view: {country: (summary, tooltip)} for each country the player has treaties with, those
     in force or ended in the last PANEL_RECENT months."""
     today = camp.data.get("last_date") or ""
     since = _add_months(today, -PANEL_RECENT) if today else ""

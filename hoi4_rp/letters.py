@@ -91,19 +91,19 @@ def _loc_line(text: str) -> str:
 
 
 def show_treaties(camp: campaign.Campaign, player: str, last: Tuple[str, float]) -> Tuple[str, float]:
-    """Fill the diplomacy view's treaty box: each country with treaties gets a slot number (variable airp_treaty_slot
-    on it) whose loc keys hold its text and tooltip; the box shows for countries with a slot. `last` as in
-    show_reputation."""
-    rows = sorted(treaties.panel(camp, player).items())[:treaties.PANEL_SLOTS]
+    """The treaty row in the diplomacy view's relations list (the bridge adds it): the pairs of countries it shows a
+    flag for (bridge.treaties) and each flag's tooltip, loc key airp_rel_<A>_<B> (tags in alphabetical order).
+    `last` as in show_reputation."""
+    rows = sorted(treaties.panel(camp, player).items())
     text = repr(rows)
     if text == last[0] and time.monotonic() - last[1] < REP_RESEND_SECONDS:
         return last
-    cmds = []
-    for n, (tag, (box, tip)) in enumerate(rows, 1):
-        cmds += [f"bridge.setloc airp_treaty_{n} {_loc_line(box)}", f"bridge.setloc airp_treaty_{n}_tip {_loc_line(tip)}"]
-    slots = " ".join(f"{tag} = {{ set_variable = {{ airp_treaty_slot = {n} }} }}" for n, (tag, _) in enumerate(rows, 1))
-    cmds.append(f"eval_effect {player} = {{ every_country = {{ limit = {{ has_variable = airp_treaty_slot }} "
-                f"clear_variable = airp_treaty_slot }} {slots} }}")
+    names = (camp.snapshot or {}).get("countries", {})
+    cmds = [("bridge.treaties " + " ".join(f"{player}:{tag}" for tag, _ in rows)).strip()]
+    for tag, (summary, tip) in rows:
+        a, b = sorted((player, tag))
+        them = names.get(tag, {}).get("name", tag)
+        cmds.append(f"bridge.setloc airp_rel_{a}_{b} {_loc_line(f'§YTreaties by letter with {them}§!' + chr(10) + summary + chr(10) + chr(10) + tip)}")
     bad = [r for r in bridge.send(*cmds) if not r.startswith("OK")]
     if bad:
         print("  could not set the treaty box:", " | ".join(bad))

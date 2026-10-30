@@ -279,7 +279,7 @@ def _settle_threats(camp: campaign.Campaign, player: str, new: Dict, events: Lis
             kind = e["type"]
             if kind.startswith(_YIELDS) and e["tags"][0] == t["to"]:
                 status = "yielded"
-            elif kind == "territory" and e["text"].startswith(p) or                     kind == "subject" and e["text"].endswith(f"subject of {p}.") or                     kind == "war" and e in events and                     bridge.trigger(f"{player} = {{ has_offensive_war_with = {t['to']} }}"):
+            elif kind == "territory" and e["text"].startswith(p) or                     kind == "subject" and f"subject of {p}." in e["text"] or                     kind == "war" and e in events and                     bridge.trigger(f"{player} = {{ has_offensive_war_with = {t['to']} }}"):
                 status = "kept"
             else:
                 continue

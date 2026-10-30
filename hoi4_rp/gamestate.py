@@ -406,6 +406,12 @@ def _named(ids: List[str], hide_missing: bool) -> List[Named]:
     return out
 
 
+def completed_focuses(tag: str) -> List[Named]:
+    """The country's completed national focuses, in the order taken (one read of its block, nothing else)."""
+    focus_block = _sub_block(bridge.country_block(tag.upper()), "focus", 2) or ""
+    return _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
+
+
 def country(tag: str) -> CountryState:
     tag = tag.upper()
     s = CountryState(tag)

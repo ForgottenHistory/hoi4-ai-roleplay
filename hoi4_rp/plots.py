@@ -113,7 +113,11 @@ def messages(camp: campaign.Campaign, snap: Dict) -> List[Dict]:
         parts.append("TREATIES THEY KEEP:\n" + "\n".join(f"- {x['when']}: {x['text']}" for x in active))
     world_events = [e for e in camp.data["events"] if e.get("major") and e["date"] <= now][-6:]
     if world_events:
-        parts.append("RECENT WORLD EVENTS:\n" + "\n".join(f"- {e['when']}: {e['text'][:240]}" for e in world_events))
+        parts.append("RECENT WORLD EVENTS:\n" + "\n".join(f"- {e['when']}: {e['text'][:340]}" for e in world_events))
+    focuses = [e for e in camp.data["events"] if e.get("type") == "focus" and e["date"] <= now][-8:]
+    if focuses:
+        parts.append("THE PLAYER'S OWN NATIONAL FOCUSES (the path its government has taken):\n"
+                     + "\n".join(f"- {e['when']}: {e['text']}" for e in focuses))
     old = [x for x in _store(camp)["list"] if x["stage"] != "done"]
     if old:
         parts.append("PLOTLINES YOU WROTE BEFORE (keep the title of one that goes on, change its stage and what has "

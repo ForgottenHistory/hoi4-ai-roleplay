@@ -17,7 +17,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
 from .campaign import ID_VARIABLE, date_key, date_words, save_key
-from .gamestate import StateError, query, save_date, timed_activities
+from .gamestate import StateError, completed_focuses, query, save_date, timed_activities
 
 _EFFECT = (
     'log = "I|[?' + ID_VARIABLE + ']" '
@@ -192,6 +192,10 @@ def snapshot(player: str) -> Dict:
         elif kind == "S" and len(f) >= 3:
             snap["states"][f[0]] = [f[1], f[2]]
     snap["wars"] = sorted(wars)
+    try:                                              # the player's completed focuses: what a focus did is news too
+        snap["focuses"] = [[f.id, f.name] for f in completed_focuses(player)]
+    except (StateError, RuntimeError):
+        pass
     return snap
 
 
@@ -292,6 +296,20 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
             moved[(before[1], owner)].append(sname)
     for (frm, to), names in moved.items():
         add([to, frm], f"{name(to)} took {', '.join(names)} from {name(frm)}.", "territory")
+
+    # The player's national focuses (an older snapshot without them: nothing to compare). A focus can bring a
+    # country under the player, into its faction or across its border; those events say so, or they read as force.
+    if player and "focuses" in old and "focuses" in new:
+        done = {f[0] for f in old["focuses"]}
+        fresh = [f[1] for f in new["focuses"] if f[0] not in done]
+        for focus in fresh:
+            add([player], f"{name(player)} completed the national focus \"{focus}\".", "focus")
+        if fresh:
+            because = f" This followed {name(player)}'s national focus \"{fresh[-1]}\"."
+            for e in events:
+                if (e["type"] in ("subject", "independence", "faction_joined", "faction_founded", "territory")
+                        and player in e["tags"]):
+                    e["text"] += because
     return events
 
 

@@ -395,9 +395,9 @@ def describe(camp: campaign.Campaign, player: str, player_name: str, viewer: str
     return "\n\n".join(x for x in (out, threats) if x)
 
 
-def window(camp: campaign.Campaign, player: str, viewer: str, name, clean) -> str:
-    """The reputation window's text (HOI4 colour codes): the standing the world sees, the deeds judged, the threats and
-    the promises made to `viewer`. `name(tag)` gives a country's name; `clean` makes LLM text safe for the game."""
+def window(camp: campaign.Campaign, player: str, name, clean) -> str:
+    """The reputation window's text (HOI4 colour codes): the standing the world sees, the deeds judged, the threats
+    and the latest promises. `name(tag)` gives a country's name; `clean` makes LLM text safe for the game."""
     rep = _rep(camp)
     today = camp.data.get("last_date") or ""
     judged = [d for d in rep["deeds"] if d["weight"] is not None and d.get("by", player) == player]
@@ -412,8 +412,7 @@ def window(camp: campaign.Campaign, player: str, viewer: str, name, clean) -> st
     for d in sorted(counted, key=lambda d: d["date"], reverse=True)[:16]:
         w = d["weight"]
         others = ", ".join(name(t) for t in d["tags"] if t != player)
-        out.append(f"§{'G' if w > 0 else 'R'}{w:+d}§!  §Y{d['when']}§!"
-                   + (f"  ({others}{'; this concerned them' if viewer in d['tags'] else ''})" if others else ""))
+        out.append(f"§{'G' if w > 0 else 'R'}{w:+d}§!  §Y{d['when']}§!" + (f"  ({others})" if others else ""))
         out.append(clean(d["verdict"]))
         out.append("")
     if waiting:
@@ -424,13 +423,13 @@ def window(camp: campaign.Campaign, player: str, viewer: str, name, clean) -> st
         count = lambda st: sum(1 for t in threats if t["status"] == st)
         out.append(f"§YThreats§!  {len(threats)} made: {count('kept')} carried out, {count('yielded')} got their way, "
                    f"{count('empty')} came to nothing, {count('open')} still open.")
-        for t in [t for t in threats if t["status"] == "open" and t["to"] == viewer]:
-            out.append(f"Open, against {name(viewer)}: {clean(t['text'])}")
+        for t in [t for t in threats if t["status"] == "open"]:
+            out.append(f"Open, against {name(t['to'])}: {clean(t['text'])}")
         out.append("")
-    promises = [x for x in rep["promises"] if x["to"] == viewer]
+    promises = rep["promises"]
     if promises:
-        out.append(f"§YPromises made to {name(viewer)}§!")
-        out += [f"{x['when']}: {clean(x['text'])}" for x in promises[-6:]]
+        out.append(f"§YLatest promises§!  ({len(promises)} on record)")
+        out += [f"{x['when']}, to {name(x['to'])}: {clean(x['text'])}" for x in promises[-8:][::-1]]
     return "\n".join(out).strip()
 
 

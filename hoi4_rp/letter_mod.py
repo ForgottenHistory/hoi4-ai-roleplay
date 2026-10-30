@@ -106,6 +106,30 @@ _GUI = """guiTypes = {
 		}
 	}
 
+	# The button that opens and closes the reputation window: its own small floating window, so no game window is
+	# changed (other mods stay compatible). Drag it by its frame.
+	containerWindowType = {
+		name = "airp_rep_opener_window"
+		position = { x = 10 y = 130 }
+		size = { width = 143 height = 44 }
+		orientation = upper_left
+		moveable = yes
+
+		background = {
+			name = "background"
+			spriteType = "GFX_tiled_window_transparent"
+		}
+
+		buttonType = {
+			name = "airp_rep_open_button"
+			position = { x = 10 y = 5 }
+			quadTextureSprite = "GFX_button_123x34"
+			buttonFont = "hoi_16mbs"
+			buttonText = "AIRP_REP_OPEN"
+			clicksound = click_default
+		}
+	}
+
 @REPLY_WINDOWS@
 
 @REP_WINDOWS@
@@ -262,26 +286,6 @@ scripted_diplomatic_actions = {
 
 		ai_desire = { base = 0 }
 	}
-
-	# Opens the reputation window: how this country sees the player's word. Python (letters.py) builds the text.
-	airp_show_reputation = {
-		icon = 1
-		visible = {
-			ROOT = { is_ai = no }
-		}
-		selectable = {
-			ROOT = { NOT = { has_variable = airp_rep_request } }
-		}
-		requires_acceptance = no
-		show_acceptance_on_action_button = no
-		cost = 0
-
-		complete_effect = {
-			ROOT = { set_variable = { airp_rep_request = PREV.id } }
-		}
-
-		ai_desire = { base = 0 }
-	}
 }
 """
 
@@ -307,6 +311,27 @@ scripted_gui = {
 	}
 
 @REPLY_GUIS@
+
+	# The floating Reputation button: opens the window (letters.py builds the text), or closes it when open.
+	airp_rep_opener = {
+		context_type = player_context
+		window_name = "airp_rep_opener_window"
+		visible = { is_ai = no }
+		dirty = airp_rep_refresh
+		effects = {
+			airp_rep_open_button_click = {
+				if = {
+					limit = { has_variable = airp_rep_for }
+					clear_variable = airp_rep_for
+				}
+				else = {
+					set_variable = { airp_rep_request = ROOT.id }
+				}
+				add_to_variable = { airp_rep_refresh = 1 }
+			}
+		}
+		ai_enabled = { always = no }
+	}
 
 @REP_GUIS@
 }
@@ -390,9 +415,8 @@ def _loc() -> str:
         ' AIRP_REPLY_TITLE:0 "Letter from [?airp_reply_from.GetNameWithFlag]"',
         ' AIRP_REPLY_BODY:0 "[This.GetAirpReplyBody]"',
         ' airp_reply_body:0 ""',
-        ' AIRP_SHOW_REPUTATION_TITLE:0 "Reputation"',
-        ' AIRP_SHOW_REPUTATION_ACTION_DESC:0 "See how the world judges your word, and how this country sees it."',
-        ' AIRP_REP_TITLE:0 "Reputation in the eyes of [?airp_rep_for.GetNameWithFlag]"',
+        ' AIRP_REP_OPEN:0 "Reputation"',
+        ' AIRP_REP_TITLE:0 "Reputation of [?airp_rep_for.GetNameWithFlag]"',
         ' AIRP_REP_BODY:0 "[This.GetAirpRepBody]"',
         ' airp_rep_body:0 ""',
         ' AIRP_CLOSE:0 "Close"',

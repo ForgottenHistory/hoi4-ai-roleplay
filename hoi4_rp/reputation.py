@@ -411,7 +411,7 @@ def widget(camp: campaign.Campaign, player: str, name, clean) -> Tuple[str, str]
     colour = "R" if score <= -1 else "G" if score >= 1 else "Y"
     label = next((w for limit, w in SHORT_STANDING if score <= limit), None) or \
         ("Trusted" if score >= 3 else "Reliable" if score >= 1 else "Untested")
-    value = f"§{colour}{label}§! {score:+.1f}" if counted else f"§Y{label}§!"
+    value = f"§{colour}{label}§!"                  # the number is in the tooltip
     out = [f"§YReputation§!: the world sees {name(player)} as §{colour}{standing(score)}§! ({score:+.1f}).",
            "Every government knows these deeds; older ones fade, by half every three years.", ""]
     if not counted:

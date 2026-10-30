@@ -117,7 +117,7 @@ _GUI = """guiTypes = {
 		containerWindowType = {
 			name = "airp_rep_box"
 			position = { x = 1125 y = 4 }
-			size = { width = 170 height = 26 }
+			size = { width = 180 height = 26 }
 			moveable = yes
 
 			background = {
@@ -126,13 +126,14 @@ _GUI = """guiTypes = {
 				alwaystransparent = no
 			}
 
+			# Left-aligned: centring text that changes at runtime put it right of the middle, past the box.
 			instantTextBoxType = {
 				name = "airp_rep_value"
-				position = { x = 5 y = 4 }
+				position = { x = 8 y = 4 }
 				font = "hoi_18mbs"
 				text = "AIRP_REP_VALUE"
-				format = center
-				maxWidth = 160
+				format = left
+				maxWidth = 164
 				maxHeight = 23
 				fixedsize = yes
 				pdx_tooltip = "AIRP_REP_TIP"

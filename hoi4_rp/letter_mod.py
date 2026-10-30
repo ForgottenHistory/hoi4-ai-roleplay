@@ -376,9 +376,10 @@ scripted_gui = {
 	}
 
 	# The treaty box in the diplomacy view. THIS is the country shown, ROOT the player; letters.py gives each country
-	# with treaties a slot (airp_treaty_slot) whose loc keys hold the text.
+	# with treaties a slot (airp_treaty_slot) whose loc keys hold the text. (diplomacy_target_context, which the game's
+	# documentation names for this, made the game reject this file; mods adding to the view use this context.)
 	airp_treaties = {
-		context_type = diplomacy_target_context
+		context_type = selected_country_context
 		parent_window_token = selected_country_view_diplomacy
 		window_name = "airp_treaty_box"
 		visible = {

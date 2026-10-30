@@ -85,6 +85,31 @@ def show_reputation(camp: campaign.Campaign, player: str, last: Tuple[str, float
     return text, time.monotonic()
 
 
+def _loc_line(text: str) -> str:
+    """Text for bridge.setloc: one line, newlines as \\n (it refuses empty text: a non-breaking space shows nothing)."""
+    return text.replace(chr(13), "").replace(chr(10), chr(92) + "n") or chr(160)
+
+
+def show_treaties(camp: campaign.Campaign, player: str, last: Tuple[str, float]) -> Tuple[str, float]:
+    """Fill the diplomacy view's treaty box: each country with treaties gets a slot number (variable airp_treaty_slot
+    on it) whose loc keys hold its text and tooltip; the box shows for countries with a slot. `last` as in
+    show_reputation."""
+    rows = sorted(treaties.panel(camp, player).items())[:treaties.PANEL_SLOTS]
+    text = repr(rows)
+    if text == last[0] and time.monotonic() - last[1] < REP_RESEND_SECONDS:
+        return last
+    cmds = []
+    for n, (tag, (box, tip)) in enumerate(rows, 1):
+        cmds += [f"bridge.setloc airp_treaty_{n} {_loc_line(box)}", f"bridge.setloc airp_treaty_{n}_tip {_loc_line(tip)}"]
+    slots = " ".join(f"{tag} = {{ set_variable = {{ airp_treaty_slot = {n} }} }}" for n, (tag, _) in enumerate(rows, 1))
+    cmds.append(f"eval_effect {player} = {{ every_country = {{ limit = {{ has_variable = airp_treaty_slot }} "
+                f"clear_variable = airp_treaty_slot }} {slots} }}")
+    bad = [r for r in bridge.send(*cmds) if not r.startswith("OK")]
+    if bad:
+        print("  could not set the treaty box:", " | ".join(bad))
+    return text, time.monotonic()
+
+
 def resume_letter(camp: campaign.Campaign, player: str, to: str) -> None:
     """The game waits on a reply no letter is being answered for: a save made while the reply was being written,
     then loaded. Answer the letter sent to `to` by then (kept in camp.data["sent"]); with no copy, close the wait."""
@@ -1000,6 +1025,7 @@ class _Session:
         self.camp: Optional[campaign.Campaign] = None
         self.resumed: Dict[tuple, float] = {}   # (campaign id, country) -> when its waiting letter was resumed
         self.rep_shown: Tuple[str, float] = ("", 0.0)   # the reputation box's text as last set, and when
+        self.treaties_shown: Tuple[str, float] = ("", 0.0)   # the same for the diplomacy view's treaty box
         self.steered = 0                         # campaign whose game AI strategies were last brought in line
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
@@ -1816,6 +1842,7 @@ def run() -> int:
             session.chronicle(player)
             if session.camp:
                 session.rep_shown = show_reputation(session.camp, player, session.rep_shown)
+                session.treaties_shown = show_treaties(session.camp, player, session.treaties_shown)
             block = bridge.country_block(player)
             to = read_outbox(block)
             if to:

@@ -709,6 +709,73 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
     return out
 
 
+# ---------------------------------------------------------------- the diplomacy view's treaty box
+
+PANEL_SLOTS = 40     # countries the box can be filled for at once (letter_mod.py makes a loc key for each)
+PANEL_RECENT = 24    # months a treaty that came to an end still shows
+
+_CLOSED_COLOUR = {"fulfilled": "G", "broken": "R", "renounced": "R"}
+
+
+def _panel_lines(camp: campaign.Campaign, t: Dict, them: str) -> List[str]:
+    """What an active treaty still holds, a short line each, from the player's side ('we')."""
+    countries = (camp.snapshot or {}).get("countries", {})
+    name = lambda x: countries.get(x, {}).get("name", x)
+    out = []
+    lasting = [t["labels"].get(k, k) for k in t["items"] if _endable(k)]
+    if t["until"] and lasting:
+        out.append(f"{', '.join(lasting)} until {campaign.date_words(t['until'])}")
+    for p in t["payments"]:
+        if _left(p) <= 0:
+            continue
+        what = t["labels"].get(p["key"], p["key"])
+        who = f"{them} pays us" if p["key"].startswith("give:") else f"We pay {them}"
+        out.append(f"{who} {what} {_every_words(p['every'])}: {len(p['paid'])} of {p['count']} paid"
+                   + (f", {len(p['missed'])} missed" if p["missed"] else "")
+                   + f", next {campaign.date_words(_next_due(t, p))}")
+    for c in t["clauses"]:
+        if c["fired"]:
+            continue
+        x = name(c["key"].rsplit(":", 1)[1])
+        theirs = c["key"].startswith("give:")
+        if actions.is_align(c["key"]):
+            promise = _PROMISE[c["key"].split(":")[1]].format(x=x)[3:]      # "work against X"
+            out.append(f"{them if theirs else 'We'}: {promise}")
+        else:
+            out.append(f"{them} joins our wars with {x}" if theirs else f"We join {them}'s wars with {x}")
+    return out
+
+
+def panel(camp: campaign.Campaign, player: str) -> Dict[str, Tuple[str, str]]:
+    """For the diplomacy view: {country: (box text, tooltip)} for each country the player has treaties with, those
+    in force or ended in the last PANEL_RECENT months."""
+    today = camp.data.get("last_date") or ""
+    since = _add_months(today, -PANEL_RECENT) if today else ""
+    by_tag: Dict[str, List[Dict]] = {}
+    for t in _all(camp, player):
+        if t["status"] == "active" or (t["closed"] and t["closed"] >= since):
+            by_tag.setdefault(t["with"], []).append(t)
+    out = {}
+    for tag, ts in by_tag.items():
+        them, _ = _names(camp, player, tag)
+        box, tip = [], []
+        for t in sorted(ts, key=lambda t: t["date"], reverse=True):
+            head = f"§YTreaty of {t['when']}§!"
+            if t["status"] == "active":
+                lines = _panel_lines(camp, t, them)
+                box += lines
+                tip.append(f"{head}: {t['text']}." + (f"\n§GStill holds§!: {'; '.join(lines)}." if lines else ""))
+            else:
+                colour = _CLOSED_COLOUR.get(t["status"], "g")
+                closed = f"§{colour}{t['status'].capitalize()} {campaign.date_words(t['closed'])}§!: {t['how']}"
+                box.append(f"§{colour}Treaty of {t['when']}: {t['status']}§!")
+                tip.append(f"{head}: {t['text']}.\n{closed}.")
+        if not any(t["status"] == "active" for t in ts):
+            box.insert(0, "§gNo treaty in force.§!")
+        out[tag] = ("\n".join(box), "\n\n".join(tip))
+    return out
+
+
 def drop_after(camp: campaign.Campaign, key: str) -> None:
     """An earlier save was loaded: forget treaties made, and steps taken, from that moment on."""
     keep = []

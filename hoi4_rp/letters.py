@@ -1058,9 +1058,18 @@ class _Session:
                 self.plan_letters(camp, player, snap, events, old)
                 treaties.tick_ai(camp)          # treaties and ultimatums between two AI countries: news only
                 ultimatums.tick_ai(camp)
-                for tag, why in treaties.tick(camp, player) + ultimatums.tick(camp, player) + guarantees.tick(camp):
+                ticked = treaties.tick(camp, player) + ultimatums.tick(camp, player) + guarantees.tick(camp)
+                # A term that ran out is routine: one notice tells the player, no letter per country (a country
+                # that wants it renewed says so in its next letter, through its own policy).
+                ran_out = {x["text"] for x in camp.data["events"][-60:] if x.get("type") in ("treaty:ended", "guarantee:expired")
+                           and x["date"] == snap["date"] and player in x["tags"]}
+                for tag, why in ticked:
+                    if why in ran_out:
+                        continue
                     if active(snap, tag) and settings().letters.incoming:
                         self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()
+                if ran_out:
+                    self._expiry_notice(snap, sorted(ran_out))
                 if self.steered == camp.id:     # commitments that ended, or a war with their country, since
                     steering.sync_all(camp)
         if rewound or self.steered != camp.id:      # the game's AI follows the policies (steering.py)
@@ -1203,6 +1212,17 @@ class _Session:
         msgs = crises.messages(camp, snap, month.w, pairs, tags, month.now)
         if msgs:
             self.crisis = (self.ai_pool.submit(llm.chat, msgs, None, 0.9, 500, "ai:crisis", ""), camp.id, pairs, tags)
+
+    def _expiry_notice(self, snap: Dict, texts: List[str]) -> None:
+        """One popup for the agreements that ran out today, with the reminder that renewing takes a letter."""
+        body = " ".join(texts)
+        if len(body) > 420:
+            body = body[:420].rsplit(" ", 1)[0] + " ..."
+        body += " Write to the country if you want it renewed."
+        try:
+            game.show_news("Agreements Expired" if len(texts) > 1 else "Agreement Expired", body, "Noted.", "treaty")
+        except Exception as err:                       # the game may be busy; the chronicle holds it anyway
+            print(f"  expiry notice not shown: {err}")
 
     def _crisis_step(self, camp: campaign.Campaign) -> None:
         """A finished crisis call: open the crisis if it is allowed, and log it."""

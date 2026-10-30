@@ -44,7 +44,8 @@ SENT_KEPT = 20            # copies of the player's latest letters, for a reply a
 RESUME_SECONDS = 120      # a resumed letter whose reply didn't arrive is tried again after this long
 CHRONICLE_SECONDS = 5.0   # real-time gap between world snapshots (only recorded when the date moved)
 IDLE_SECONDS = 600        # game date still this long (paused, player away): no background LLM work, no letters
-EVENT_LETTERS = 2          # countries that may write about one batch of events
+EVENT_LETTERS = 2          # countries that may start a letter about events within EVENT_DAYS
+EVENT_DAYS = 10            # game days
 RETRY_SECONDS = 60        # after a failed background LLM call, wait this long before the next one
 AI_PARALLEL = 3           # AI-to-AI exchanges running at once (NanoGPT takes several calls at a time)
 POLICY_PARALLEL = 3       # policy refreshes running at once (never two for the same country)
@@ -1610,7 +1611,12 @@ class _Session:
                     reasons[other] = (reasons.get(other, "") + " " + e["text"]).strip()
         before = (old or {}).get("countries", {})
         rank = lambda t: (snap["countries"][t].get("major", False), t in before, len(reasons[t]))
-        for tag in sorted(reasons, key=rank, reverse=True)[:EVENT_LETTERS]:
+        # The cap holds over EVENT_DAYS, not per batch: a war's allies and subjects join over several days, each
+        # in a batch of its own, and would otherwise all write.
+        recent = [x for ls in camp.threads().values() for x in ls
+                  if x.get("initiated") and today - _days(x["date"]) < EVENT_DAYS]
+        room = max(0, EVENT_LETTERS - len(recent))
+        for tag in sorted(reasons, key=rank, reverse=True)[:room]:
             self.pending[tag] = (self.pending.get(tag, "") + " " + reasons[tag]).strip()
         if self.pending:
             return

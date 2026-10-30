@@ -448,7 +448,9 @@ DISARM_NOTE = ("Demilitarizing a border state or dismantling military factories 
                "wish: a humiliation and a lasting weakness, accepted under real pressure or for something substantial "
                "(a guarantee, land, peace), and demanded of a country you fear or could compel. A demilitarized state "
                "can hold no troops, fortifications or working airbases, for good; dismantled factories are destroyed, not "
-               "handed over.")
+               "handed over. Ask for one only against a neighbour that threatens you today, for a reason that still "
+               "stands: a past deal, or a danger that has since gone (a state that no longer exists, a war that is "
+               "over), is no reason to ask again.")
 
 
 def is_dmz(key: str) -> bool:

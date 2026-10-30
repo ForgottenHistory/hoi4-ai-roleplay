@@ -87,6 +87,7 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
         f"{me_name}, fears from them, and how it means to deal with them"
         + (f"\n\nStates are listed with their number (state N). {actions.TERRITORY_NOTE} {actions.RIGHTS_NOTE}"
            if rel.them_border or rel.me_border else "")
+        + (f"\n\n{actions.DISARM_NOTE}" if any(actions.is_dmz(k) for k in gives + asks) else "")
         + (f"\n\n{actions.bound_note(them_name, me_name, rel.bound)}" if rel.bound else "")
         + (f"\n\n{actions.WAR_NOTE}" if any(actions.is_war(k) or actions.is_pledge(k) for k in gives + asks) else "")
         + (f"\n\n{actions.ALIGN_NOTE}" if any(actions.third_kind(k) for k in gives + asks) else "")

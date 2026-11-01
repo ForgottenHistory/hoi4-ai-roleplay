@@ -1,0 +1,5 @@
+# The world the AI reasons from. One file per setting; see lore/README.md.
+NAME: Vanilla (real history)
+DEFAULT: yes
+---
+This game follows real history from 1936, but the live situation below may already have diverged from it: trust the situation over your own historical knowledge.

@@ -1,8 +1,8 @@
-"""The world the game is set in, for the LLM: vanilla history, or a mod's alternate history (Kaiserreich and
-Kaiserredux, or Half-Life in Unforeseen Consequences), plus optional setting notes from a file. Chosen in config.ini
-[world]:
+"""The world the game is set in, for the LLM: vanilla history or a mod's world, from the lore files (lore/*.txt, one
+per setting: vanilla, Kaiserreich, Half-Life...; see lore/README.md), plus optional setting notes from a file.
+Chosen in config.ini [world]:
 
-    setting = auto          auto (default) detects Kaiserreich or Half-Life from the player's ideology groups
+    setting = auto          auto (default) picks the lore file whose DETECT ideology groups the game has
     lore_file =             optional text file with extra setting notes, added to every prompt
 
 The setting text opens every prompt (letters, replies, policies). The live game data that follows is
@@ -12,84 +12,131 @@ always authoritative; the setting only tells the LLM which history to reason fro
 from __future__ import annotations
 
 import os
-from typing import Optional
+from dataclasses import dataclass
+from functools import lru_cache
+from typing import Dict, FrozenSet, Optional
 
 from .config import settings
 
-KAISERREICH_IDEOLOGIES = {"totalist", "syndicalist", "radical_socialist", "social_democrat", "social_liberal",
-                          "market_liberal", "social_conservative", "authoritarian_democrat", "paternal_autocrat",
-                          "national_populist"}
-
-_VANILLA = ("This game follows real history from 1936, but the live situation below may already have diverged "
-            "from it: trust the situation over your own historical knowledge.")
-
-_KAISERREICH = (
-    "SETTING: this game is set in the Kaiserreich alternate history (the Kaiserredux version). Real history "
-    "after 1917 did not happen here; reason from this world, and trust the live situation below over anything "
-    "you know of either history.\n"
-    "- Germany won the Great War (the Weltkrieg) in 1919; there was no Treaty of Versailles. The German Empire "
-    "dominates Europe and leads Mitteleuropa, a bloc of client states carved from Russia's former western lands "
-    "(among them Poland, the United Baltic Duchy, Lithuania, White Ruthenia, Ukraine and Finland).\n"
-    "- The defeated Entente fell to revolution. France is the syndicalist Commune of France, while the old "
-    "government holds on in North Africa as National France. Britain is the syndicalist Union of Britain, while "
-    "the monarchy and what remains of the Entente continue from Canada. Syndicalism, organised in the Third "
-    "Internationale, is Germany's great ideological rival.\n"
-    "- Russia lost the war and its western lands and is weak and resentful. Austria-Hungary survived but strains "
-    "under its nationalities. The Ottoman Empire endures.\n"
-    "- A stock market crash in Berlin, Black Monday, shook the world economy and Germany's confidence; the United "
-    "States is divided and unstable.\n"
-    "- China is fragmented among cliques, restorationists and foreign spheres of influence; Japan is the leading "
-    "power in Asia.\n"
-    "- Politics run along ten ideologies, from left to right: totalist, syndicalist, radical socialist, social "
-    "democrat, social liberal, market liberal, social conservative, authoritarian democrat, paternal autocrat "
-    "and national populist."
-)
+LORE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lore")
 
 
-# Unforeseen Consequences, a Half-Life total conversion (Steam workshop 3635283949): starts 2000 or 2015.
-HALFLIFE_IDEOLOGIES = {"combine_ascensionism", "combine_homosapience", "vortigaunt_rebels", "xen_hordes"}
-
-_HALFLIFE = (
-    "SETTING: this game is set in the Half-Life universe (the Unforeseen Consequences mod). Real history holds up "
-    "to the year 2000; after that the world below follows Half-Life, not what really happened. Trust the live "
-    "situation below over anything you know.\n"
-    "- In 2000 the Cold War is over and the United States is the sole superpower. Two rival American research "
-    "giants, Black Mesa (teleportation, exotic matter from the border world Xen) and Aperture Science, compete "
-    "for government money. Few know how dangerous their work is.\n"
-    "- The Black Mesa incident, a resonance cascade, tore open portals to Xen: alien creatures (headcrabs, "
-    "antlions, vortigaunts and worse) spill across the Earth through portal storms. The US military's HECU was "
-    "sent to cover it up.\n"
-    "- The Combine, a vast inter-dimensional empire (the Universal Union) that enslaves species across many "
-    "worlds, then invaded and defeated Earth in the Seven Hour War. Dr Wallace Breen, Black Mesa's "
-    "administrator, negotiated Earth's surrender and governs it for them from City 17's Citadel. Under Combine "
-    "rule humans live in policed cities, families are split up, reproduction is suppressed, and Civil "
-    "Protection and the transhuman Overwatch soldiers keep order; the Resistance and the vortigaunts fight back "
-    "from hiding.\n"
-    "- Which stage the world is at (before the incident, the invasion, or years of occupation) is shown by the "
-    "date and the live situation: who exists, who rules where, who is at war.\n"
-    "- Not every country is a human government. The Combine speaks with cold, bureaucratic menace and treats "
-    "humans as a resource. Xen creature hordes (Xenian Fauna) have no politics and cannot negotiate. Warlords, "
-    "bandits and militias are survivors, not statesmen.")
+@dataclass(frozen=True)
+class Setting:
+    key: str                                   # file name without .txt
+    name: str
+    text: str
+    detect: FrozenSet[str] = frozenset()       # ideology groups only this setting has
+    voiceless: FrozenSet[str] = frozenset()    # ideology groups of creatures, not governments
+    default: bool = False
 
 
-def detect(party_ideologies) -> str:
-    """'halflife' or 'kaiserreich' if the parties use those mods' ideology groups, else 'vanilla'."""
+def _parse(key: str, raw: str) -> Setting:
+    """'KEY: value' header lines, a '---' line, then the lore text."""
+    head, sep, body = raw.partition("\n---")
+    if not sep:
+        head, body = "", raw
+    fields: Dict[str, str] = {}
+    for line in head.splitlines():
+        k, colon, v = line.partition(":")
+        if colon and not line.lstrip().startswith("#"):
+            fields[k.strip().upper()] = v.strip()
+    ids = lambda k: frozenset(x.strip() for x in fields.get(k, "").replace(";", ",").split(",") if x.strip())
+    return Setting(key, fields.get("NAME", key), body.lstrip("-").strip(), ids("DETECT"), ids("VOICELESS"),
+                   fields.get("DEFAULT", "").lower() in ("yes", "true", "1"))
+
+
+def lore() -> Dict[str, Setting]:
+    """Every lore file, by key. Read afresh each time (they are small), so edits apply to the next prompt."""
+    out: Dict[str, Setting] = {}
+    try:
+        names = sorted(n for n in os.listdir(LORE_DIR) if n.lower().endswith(".txt"))
+    except OSError:
+        names = []
+    for n in names:
+        try:
+            with open(os.path.join(LORE_DIR, n), encoding="utf-8-sig") as f:
+                out[n[:-4].lower()] = _parse(n[:-4].lower(), f.read())
+        except OSError as e:
+            print(f"lore file {n} could not be read: {e}")
+    return out
+
+
+_FALLBACK = Setting("vanilla", "Vanilla", "This game follows real history from 1936, but the live situation below may "
+                    "already have diverged from it: trust the situation over your own historical knowledge.")
+
+_LORE = ("Stay true to this world's lore in everything you write: who your country is decides how it speaks, what "
+         "it knows and what it would never do.")
+
+
+def detect(party_ideologies) -> Setting:
+    """The lore file whose DETECT ideology groups the parties use (the most matches wins), else the default one."""
     found = set(party_ideologies)
-    if HALFLIFE_IDEOLOGIES & found:
-        return "halflife"
-    return "kaiserreich" if KAISERREICH_IDEOLOGIES & found else "vanilla"
+    files = lore()
+    best = max(files.values(), key=lambda s: len(s.detect & found), default=None)
+    if best and best.detect & found:
+        return best
+    return next((s for s in files.values() if s.default), files.get("vanilla", _FALLBACK))
 
 
-def setting_for(party_ideologies) -> str:
+def setting_for(party_ideologies) -> Setting:
     chosen = settings().world.setting
-    return detect(party_ideologies) if chosen == "auto" else chosen
+    if chosen != "auto":
+        files = lore()
+        if chosen in files:
+            return files[chosen]
+        print(f"no lore file lore/{chosen}.txt; detecting the setting instead")
+    return detect(party_ideologies)
 
 
 def text(party_ideologies) -> str:
     """The setting paragraph(s) for the top of a prompt."""
-    body = {"kaiserreich": _KAISERREICH, "halflife": _HALFLIFE}.get(setting_for(party_ideologies), _VANILLA)
+    body = setting_for(party_ideologies).text
     notes = _lore_notes()
-    return body + (f"\n\nSETTING NOTES FROM THE PLAYER:\n{notes}" if notes else "")
+    return body + f"\n{_LORE}" + (f"\n\nSETTING NOTES FROM THE PLAYER:\n{notes}" if notes else "")
+
+
+def voiceless_groups() -> FrozenSet[str]:
+    """Ideology groups of creatures, not governments, from every lore file (VOICELESS lines)."""
+    return frozenset().union(*(s.voiceless for s in lore().values()))
+
+
+def voiceless(s) -> bool:
+    """A country of creatures, not a government (its ruling party's ideology group is VOICELESS in a lore file)."""
+    groups = voiceless_groups()
+    return any(p.ruling and p.ideology in groups for p in s.parties)
+
+
+@lru_cache(maxsize=None)
+def _game_ideologies() -> FrozenSet[str]:
+    """The ideology groups the loaded game defines."""
+    from . import gamefiles
+    found = set()
+    for path in gamefiles.files("common/ideologies"):
+        try:
+            with open(path, encoding="utf-8-sig", errors="replace") as f:
+                tree = gamefiles.parse(f.read())
+        except OSError:
+            continue
+        for key, _, groups in tree:
+            if key == "ideologies" and isinstance(groups, list):
+                found |= {g for g, _, v in groups if isinstance(v, list)}
+    return frozenset(found)
+
+
+def voiceless_ideologies() -> tuple:
+    """The voiceless ideology groups the loaded game defines (asking the game about one it doesn't know is an
+    error)."""
+    return tuple(sorted(_game_ideologies() & voiceless_groups()))
+
+
+def voiceless_script() -> str:
+    """Script logging "V|TAG" for a voiceless country (THIS = the country); empty when the game has none."""
+    ideos = voiceless_ideologies()
+    if not ideos:
+        return ""
+    cond = " ".join(f"has_government = {i}" for i in ideos)
+    return f'if = {{ limit = {{ OR = {{ {cond} }} }} log = "V|[THIS.GetTag]" }} '
 
 
 def _lore_notes() -> Optional[str]:

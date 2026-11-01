@@ -243,7 +243,8 @@ def covered(camp: campaign.Campaign, w: Dict[str, Dict], scored: List[Tuple]) ->
     """The countries that have an agenda: the major powers, then those in the storyteller's shortlist."""
     c = (camp.snapshot or {}).get("countries", {})
     player = camp.data["player"]
-    ok = lambda t: t in c and t != player and not c[t].get("capitulated") and not (w.get(t) or {}).get("subject")
+    ok = lambda t: (t in c and t != player and not c[t].get("capitulated") and not c[t].get("voiceless")
+                    and not (w.get(t) or {}).get("subject"))
     from . import plots
     story = [t for t in plots.tags(camp) if ok(t)]       # the countries of the player's story first
     majors = [t for t in w if c.get(t, {}).get("major") and ok(t)]

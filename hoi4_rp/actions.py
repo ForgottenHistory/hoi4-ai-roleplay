@@ -144,6 +144,7 @@ class BorderState:
     resources: str = ""       # e.g. "oil 12, steel 4"
     capital: bool = False
     dmz: bool = False         # already a demilitarized zone
+    occupied: bool = False    # controlled by a third country (an enemy, a horde): not the owner's to trade
 
     def note(self, other_name: str) -> str:
         worth = [f"{self.civ} civilian / {self.mil} military factories", f"{self.pop_k:,}k people"]
@@ -217,12 +218,13 @@ _STATE_NAMES: Dict[str, str] = {}      # state id -> name, filled as border stat
 
 _RESOURCES = ["oil", "aluminium", "rubber", "tungsten", "steel", "chromium"]
 _STATE_FLAGS = {"AIRPC": "core", "AIRPK": "claim", "AIRPO": "own_core", "AIRPN": "border", "AIRPX": "capital",
-                "AIRPZ": "dmz"}
+                "AIRPZ": "dmz", "AIRPU": "occupied"}
 
 
 def border_states(owner: str, other: str) -> Dict[str, BorderState]:
     """Every state of `owner`, near or far, with its worth and how it stands: `owner`'s own core or not, its
-    capital, bordering `other` or not, `other`'s cores and claims."""
+    capital, bordering `other` or not, `other`'s cores and claims, occupied by a third country. Occupied states stay
+    listed (a treaty's demilitarized zone still stands there) but can't be traded: see tradeable()."""
     from .gamestate import query
     res = "|".join(f"[?THIS.resource@{r}]" for r in _RESOURCES)
     eff = (f'{owner} = {{ every_owned_state = {{ '
@@ -233,6 +235,8 @@ def border_states(owner: str, other: str) -> Dict[str, BorderState]:
            f'if = {{ limit = {{ is_core_of = {other} }} log = "AIRPC|[THIS.GetID]" }} '
            f'if = {{ limit = {{ is_claimed_by = {other} }} log = "AIRPK|[THIS.GetID]" }} '
            f'if = {{ limit = {{ is_core_of = {owner} }} log = "AIRPO|[THIS.GetID]" }} '
+           f'if = {{ limit = {{ NOT = {{ is_controlled_by = {owner} }} NOT = {{ is_controlled_by = {other} }} }} '
+           f'log = "AIRPU|[THIS.GetID]" }} '
            f'if = {{ limit = {{ any_neighbor_state = {{ is_owned_by = {other} }} }} log = "AIRPN|[THIS.GetID]" }} }} }}')
     num = lambda x: int(float(x)) if x.strip().replace(".", "", 1).isdigit() else 0
     out: Dict[str, BorderState] = {}
@@ -248,6 +252,12 @@ def border_states(owner: str, other: str) -> Dict[str, BorderState]:
         elif sid in out and kind in _STATE_FLAGS:
             setattr(out[sid], _STATE_FLAGS[kind], True)
     return out
+
+
+def tradeable(states: Optional[Dict[str, BorderState]]) -> Dict[str, BorderState]:
+    """The states their owner can hand over or bind: those it controls (or the other side does), not land an enemy
+    or anyone else occupies."""
+    return {sid: s for sid, s in (states or {}).items() if not s.occupied}
 
 
 def relation(them: str, me: str) -> Relation:
@@ -485,13 +495,13 @@ def is_dmz(key: str) -> bool:
 
 
 def dmz_gives(rel: "Relation") -> List[str]:
-    keys = [f"give:dmz:{sid}" for sid, s in (rel.them_border or {}).items() if s.border and not s.dmz and not s.capital]
+    keys = [f"give:dmz:{sid}" for sid, s in tradeable(rel.them_border).items() if s.border and not s.dmz and not s.capital]
     _BORDER_INFO.update({k: rel.them_border[k.rsplit(":", 1)[1]] for k in keys})
     return keys
 
 
 def dmz_asks(rel: "Relation") -> List[str]:
-    keys = [f"ask:dmz:{sid}" for sid, s in (rel.me_border or {}).items() if s.border and not s.dmz and not s.capital]
+    keys = [f"ask:dmz:{sid}" for sid, s in tradeable(rel.me_border).items() if s.border and not s.dmz and not s.capital]
     _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
     return keys
 
@@ -548,7 +558,7 @@ def rights_held(receiver: str, giver: str) -> Set[str]:
 
 
 def rights_gives(rel: "Relation") -> List[str]:
-    keys = [f"give:rights:{sid}" for sid, s in (rel.them_border or {}).items() if s.resources]
+    keys = [f"give:rights:{sid}" for sid, s in tradeable(rel.them_border).items() if s.resources]
     _BORDER_INFO.update({k: rel.them_border[k.rsplit(":", 1)[1]] for k in keys})
     return keys
 
@@ -561,7 +571,7 @@ def rights_after(rel: "Relation") -> List[str]:
     Only meaningful with "ask:state:N" in the package (package() drops them otherwise, and apply() takes them after
     the land has changed hands)."""
     _AFTER.clear()                                  # rebuilt with each letter: a state that changed hands is no longer one
-    keys = [f"give:rights:{sid}" for sid, s in (rel.me_border or {}).items()
+    keys = [f"give:rights:{sid}" for sid, s in tradeable(rel.me_border).items()
             if s.resources and not s.capital and sid not in (rel.them_border or {})]
     _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
     _AFTER.update(keys)
@@ -569,7 +579,7 @@ def rights_after(rel: "Relation") -> List[str]:
 
 
 def rights_asks(rel: "Relation") -> List[str]:
-    keys = [f"ask:rights:{sid}" for sid, s in (rel.me_border or {}).items() if s.resources]
+    keys = [f"ask:rights:{sid}" for sid, s in tradeable(rel.me_border).items() if s.resources]
     _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
     return keys
 
@@ -1043,13 +1053,13 @@ def subject_asks(rel: Relation) -> List[str]:
 
 
 def state_gives(rel: Relation) -> List[str]:
-    keys = [f"give:state:{sid}" for sid, s in (rel.them_border or {}).items() if not s.capital]
+    keys = [f"give:state:{sid}" for sid, s in tradeable(rel.them_border).items() if not s.capital]
     _BORDER_INFO.update({k: rel.them_border[k.rsplit(":", 1)[1]] for k in keys})
     return keys
 
 
 def state_asks(rel: Relation) -> List[str]:
-    keys = [f"ask:state:{sid}" for sid, s in (rel.me_border or {}).items() if not s.capital]
+    keys = [f"ask:state:{sid}" for sid, s in tradeable(rel.me_border).items() if not s.capital]
     _BORDER_INFO.update({k: rel.me_border[k.rsplit(":", 1)[1]] for k in keys})
     return keys
 
@@ -1206,7 +1216,7 @@ def possible(rel: Relation, key: str) -> bool:
         give = key.startswith("give:")
         if (rel.them_subject and rel.bound != "subject") if give else (rel.me_subject and rel.bound != "overlord"):
             return False                               # a subject's land is its overlord's affair
-        state = ((rel.them_border if give else rel.me_border) or {}).get(sid)
+        state = tradeable(rel.them_border if give else rel.me_border).get(sid)
         return not rel.at_war and bool(state and state.border and not state.dmz and not state.capital)
     if is_equipment_key(key):                                  # stockpiled equipment; amount in the command
         parts = key.split(":")
@@ -1261,9 +1271,9 @@ def possible(rel: Relation, key: str) -> bool:
         give = key.startswith("give:")
         if (rel.them_subject and rel.bound != "subject") if give else (rel.me_subject and rel.bound != "overlord"):
             return False                               # a subject's resources are its overlord's to give
-        state = ((rel.them_border if give else rel.me_border) or {}).get(sid)
+        state = tradeable(rel.them_border if give else rel.me_border).get(sid)
         if not state and give and key in _AFTER:         # the land is still mine: it is theirs once the package runs
-            state = (rel.me_border or {}).get(sid)
+            state = tradeable(rel.me_border).get(sid)
         held = (rel.them_rights if give else rel.me_rights) or set()
         return not rel.at_war and bool(state and state.resources) and sid not in held
     if is_state(key):
@@ -1272,7 +1282,7 @@ def possible(rel: Relation, key: str) -> bool:
             return False                               # a subject's land is its overlord's to give
         if key.startswith("ask:") and rel.me_subject and rel.bound != "overlord":
             return False
-        border = (rel.them_border if key.startswith("give:") else rel.me_border) or {}
+        border = tradeable(rel.them_border if key.startswith("give:") else rel.me_border)
         return not rel.at_war and sid in border and not border[sid].capital
     if key == "give:peace":
         return rel.at_war and rel.peace_ok

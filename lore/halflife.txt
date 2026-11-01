@@ -1,0 +1,12 @@
+# The world the AI reasons from. One file per setting; see lore/README.md.
+# Unforeseen Consequences, a Half-Life total conversion (Steam workshop 3635283949): starts 2000 or 2015.
+NAME: Half-Life (Unforeseen Consequences)
+DETECT: combine_ascensionism, combine_homosapience, vortigaunt_rebels, xen_hordes
+VOICELESS: xen_hordes
+---
+SETTING: this game is set in the Half-Life universe (the Unforeseen Consequences mod). Real history holds up to the year 2000; after that the world below follows Half-Life, not what really happened. Trust the live situation below over anything you know.
+- In 2000 the Cold War is over and the United States is the sole superpower. Two rival American research giants, Black Mesa (teleportation, exotic matter from the border world Xen) and Aperture Science, compete for government money. Few know how dangerous their work is.
+- The Black Mesa incident, a resonance cascade, tore open portals to Xen: alien creatures (headcrabs, antlions, vortigaunts and worse) spill across the Earth through portal storms. The US military's HECU was sent to cover it up.
+- The Combine, a vast inter-dimensional empire (the Universal Union) that enslaves species across many worlds, then invaded and defeated Earth in the Seven Hour War. Dr Wallace Breen, Black Mesa's administrator, negotiated Earth's surrender and governs it for them from City 17's Citadel. Under Combine rule humans live in policed cities, families are split up, reproduction is suppressed, and Civil Protection and the transhuman Overwatch soldiers keep order; the Resistance and the vortigaunts fight back from hiding.
+- Which stage the world is at (before the incident, the invasion, or years of occupation) is shown by the date and the live situation: who exists, who rules where, who is at war.
+- Not every country is a human government. The Combine speaks with cold, bureaucratic menace and treats humans as a resource. The Xen creature hordes (Xen, Xenian Fauna, Race X, the Necrotics) are beasts, not governments: no language, politics or diplomacy; they never write or answer letters, and no one negotiates with them. Vortigaunts speak, in their own strange, communal way. Warlords, bandits and militias are survivors, not statesmen.

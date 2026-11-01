@@ -839,7 +839,15 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
         more = f" and {len(s.states) - len(shown)} more" if len(shown) < len(s.states) else ""
         lines.append(f"Owns {len(s.states)} states: {', '.join(x.name for x in shown)}{more}.")
 
-    def items(title: str, entries: List[Named], detailed: Optional[int] = None) -> None:
+    def effects(e: Named) -> str:
+        from . import spirits
+        try:
+            text = spirits.effects_text(e.id, s.name_of)
+        except Exception:                      # the idea files unreadable: names and descriptions still do
+            return ""
+        return f" [{text}]" if text else ""
+
+    def items(title: str, entries: List[Named], detailed: Optional[int] = None, numbers: bool = False) -> None:
         if not entries:
             return
         if not details or detailed == 0:
@@ -851,8 +859,9 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
         lines.append(f"{title}{', latest' if older else ''}:")
         for e in entries[len(older):]:
             desc = clean_loc(e.description)
-            lines.append(f"- {e.name}" + (f": {desc}" if desc else ""))
+            lines.append(f"- {e.name}" + (effects(e) if numbers else "") + (f": {desc}" if desc else ""))
 
-    items("National spirits and laws", s.ideas, None if spirit_details else 0)
+    items("National spirits and laws (effects in brackets)" if spirit_details and details else
+          "National spirits and laws", s.ideas, None if spirit_details else 0, numbers=True)
     items("Completed national focuses", s.focuses, focus_details)
     return "\n".join(lines)

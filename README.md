@@ -43,7 +43,9 @@ After `write-mod`, restart HOI4 (`reload events` is unreliable). Enable the mod 
     hoi4_rp/agendas.py     what each country wants from the world: standing aims, each with a target the map ties it to
     hoi4_rp/storyteller.py blocs from the agendas, and the monthly pick of one AI-to-AI incident (dry run so far)
     hoi4_rp/crises.py      crises between two countries or inside one: flavour only, no game effect; the AI reads them
-    hoi4_rp/world.py       the setting the AI reasons from (vanilla / Kaiserreich, lore notes)
+    hoi4_rp/world.py       the setting the AI reasons from: lore/*.txt (vanilla, Kaiserreich, Half-Life...), lore notes
+    hoi4_rp/plight.py      how much trouble a country is in (secure .. desperate), and how it shows in letters and deals
+    hoi4_rp/spirits.py     national spirits' effects, from the game's and mods' idea files
     hoi4_rp/campaign.py    per-playthrough memory on disk (data/campaigns/<id>.json, git-ignored)
     hoi4_rp/llm.py         NanoGPT client; hoi4_rp/config.py loads config.ini
     hoi4_rp/game.py        show an event, wait for the pick, run effects via eval_effect
@@ -100,7 +102,8 @@ now (another proposal came recently, or you refused it lately), it's told not to
   other countries anything currently possible.
 - Territory: `[[state N]]` in a reply (they cede a state you asked for), `[[offer state N]]` and
   `[[ask state N]]` in proposals. Only states bordering the other country, never a capital, only in
-  peace; the AI sees each candidate with cores and claims and is told territory is a grave matter.
+  peace, never land a third country occupies (the owner can't hand it over; demilitarized zones and resource rights
+  likewise); the AI sees each candidate with cores and claims and is told territory is a grave matter.
 - Factions: `[[faction]]` (they take you into their faction), `[[join]]` (they join yours), as offers or asks
   too; `[[end faction]]` on their own (they leave, or as leader expel you). Only between independent countries
   at peace, the admitting side leading a faction, the joining side in none. `[[offer leave]]` / `[[ask leave]]`:
@@ -316,11 +319,16 @@ countries, parties, leaders and states come through as the mod defines them. Par
 country's own politics block (vanilla's 4 ideology groups or a mod's, e.g. Kaiserreich's 10), with names,
 translations and the ruling party's description from the mod's localisation.
 
-`[world]` in config.ini tells the AI which history to reason from:
+The history the AI reasons from lives in plain-text lore files, one per setting, in `lore/` (`vanilla.txt`,
+`kaiserreich.txt`, `halflife.txt`; format in `lore/README.md`). Edit them freely; a new mod is a new file. Each names
+the ideology groups that give its mod away, and `[world]` in config.ini picks one:
 
-    setting = auto      # auto detects Kaiserreich/Kaiserredux and Half-Life (Unforeseen Consequences) from the
-                        # ideologies in play; or vanilla / kaiserreich / halflife
+    setting = auto      # auto picks the lore file whose ideologies are in play; or a file name (vanilla, halflife...)
     lore_file =         # optional text file with your own setting notes, added to every prompt
+
+Every setting asks the AI to stay true to its lore. Countries ruled by a creature ideology (a lore file's `VOICELESS`
+line: Unforeseen Consequences' `xen_hordes`, i.e. Xen, Xen Fauna, Race X, the Necrotics) are no government: they
+start no letters, a letter to them gets no answer, and they take no part in AI-to-AI diplomacy or agendas.
 
 Enable "AI Roleplay" alongside the other mod in the launcher playset. Total conversions often `replace_path`
 whole folders (Unforeseen Consequences replaces events, on_actions, scripted_guis, opinion and dynamic modifiers...),
@@ -335,3 +343,14 @@ Roleplay below them in the launcher.
 - `serious`: formal, period-appropriate diplomacy from the leader or foreign office
 - `dramatic`: the leader as an over-the-top caricature of their country: stereotypes, bombast, melodrama
 - `players`: casual, as if people were playing those countries in a multiplayer roleplay game
+
+## Countries in trouble
+
+Every country's prompts judge how much trouble it is in (`hoi4_rp/plight.py`): secure, strained, dire or desperate,
+from surrender progress, an occupied capital, lost core states, enemy strength (counted fully only once the war is
+being lost, so a world-wide enemy far away is only a worry), low stability, war goals against it, and crippling
+national spirits. Spirits come with their effects, read from the game's and mods' idea files (`hoi4_rp/spirits.py`):
+"Portal Storms [Division Attack -25%, ...]", not just a name. A country in trouble says so in its own way per letter
+style (dramatic: the caricature cracks; serious: the fear shows through the formality; players: "I'm getting rolled
+here"), asks plainly, pays more for help and settles for less. It also knows how badly off the other side is, in
+letters and AI-to-AI dispatches alike.

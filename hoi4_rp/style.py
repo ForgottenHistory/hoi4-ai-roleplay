@@ -17,6 +17,7 @@ class Style:
     manner: str      # the range of attitudes
     rules: str       # form; {name}, {other}
     length: str = "one or two short paragraphs"   # repeated at the end of the prompt, where it carries most weight
+    plight: str = ""  # how a country in trouble sounds (plight.py)
 
 
 STYLES = {
@@ -27,6 +28,8 @@ STYLES = {
               "words, whatever length earlier letters had. You write from {name}, so any place line is your own "
               "capital, not {other}'s. Open with a short salutation and end with a signature.",
         length="at most two short paragraphs between salutation and signature, 80 words in all (shorter than earlier letters, which ran too long)",
+        plight="the fear shows through the formality: fewer courtesies, plainer and more urgent requests, a "
+               "readiness to name a price, and the dignity of a government that knows how bad things are.",
     ),
     "dramatic": Style(
         voice="as {leader} in person, turned up to a stereotype of themselves: take who this leader really is, "
@@ -36,13 +39,17 @@ STYLES = {
               "vain. Use the idiom, obsessions and pet themes that fit them. It is the same person with the volume "
               "up, not a generic actor: no theatre, slapstick or meta jokes. Still pursuing {name}'s real "
               "interests and policy",
-        manner="Strong, colourful and unmistakably in character: pride, suspicion, warmth or menace as this "
-               "leader would show it, a notch further than real diplomacy would allow.",
+        manner="Strong, colourful and unmistakably in character: pride, suspicion, warmth, menace or desperation "
+               "as this leader would show it, a notch further than real diplomacy would allow.",
         rules="Rules: plain text only, no markdown, no words in capitals for shouting, no stage directions. The "
               "letter itself is one or two short paragraphs, at most 100 words, whatever length earlier letters "
               "had. You write from {name}, so any place line is your own capital, not {other}'s. Open with a "
               "salutation and end with a signature, both in this leader's own manner.",
         length="at most two short paragraphs between salutation and signature, 100 words in all (shorter than earlier letters, which ran too long)",
+        plight="the caricature cracks under it. The same leader, cornered: pride fighting the need for help, "
+               "bravado that keeps slipping, pleading and bargaining, promises bigger than they should be, grief or "
+               "fury over what has been lost, the dread of what comes next. Name the concrete horrors from the "
+               "situation (the lost cities, the dead, the enemy at the gates). Raw, not comic.",
     ),
     "players": Style(
         voice="as the human player running {name} in a multiplayer roleplay game, messaging the player running "
@@ -55,6 +62,8 @@ STYLES = {
               "15 to 60 words, like a chat message or short note: no formal salutation or signature needed (sign "
               "off with a name or just end).",
         length="one short paragraph of 15 to 60 words",
+        plight="a stressed player whose run is going badly: blunt, asks for help straight out ('I'm getting rolled "
+               "here, can you send anything?'), offers whatever it takes, a bit of gallows humour.",
     ),
 }
 
@@ -96,4 +105,4 @@ def current() -> Style:
         print(f"unknown letter style {name!r}; using serious")
         name = "serious"
     st = STYLES[name]
-    return Style(st.voice, st.manner, st.rules + ONE_LETTER, st.length)
+    return Style(st.voice, st.manner, st.rules + ONE_LETTER, st.length, st.plight)

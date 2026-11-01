@@ -94,7 +94,8 @@ def score(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Tuple]:
     for r in treaties.commitments(camp):
         for x, y in ((r["actor"], r["target"]), (r["for"], r["target"])):
             commits[campaign.pair(x, y)] = commits.get(campaign.pair(x, y), 0) + 1
-    tags = sorted(t for t in w if t in c and t != player and not w[t]["subject"] and not c[t].get("capitulated"))
+    tags = sorted(t for t in w if t in c and t != player and not w[t]["subject"] and not c[t].get("capitulated")
+                  and not c[t].get("voiceless"))           # creature hordes do no diplomacy (VOICELESS in lore/*.txt)
     out = []
     for i, a in enumerate(tags):
         for b in tags[i + 1:]:
@@ -323,6 +324,12 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
              "THE TWO COUNTRIES:\n" + card(me, w.get(me.tag, {}), other.tag) + "\n"
              + card(other, w.get(other.tag, {}), me.tag),
              f"BETWEEN YOU: {ties(me.tag, other.tag, me.name, other.name)}."]
+    from . import plight
+    own, theirs = plight.text(me), plight.short(other)
+    if own:
+        parts.append(own)
+    if theirs:
+        parts.append(f"{other.name.upper()}'S SITUATION: {theirs}.")
     from . import world
     wt = world.tension_text({me.tag: me.name, other.tag: other.name})
     if wt:

@@ -28,6 +28,7 @@ _EFFECT = (
     'if = { limit = { is_in_faction = yes } log = "F|[THIS.GetTag]|[THIS.GetFactionName]|[THIS.FactionLeader.GetTag]" } '
     'if = { limit = { is_subject = yes } log = "O|[THIS.GetTag]|[THIS.Overlord.GetTag]" } '
     'if = { limit = { has_capitulated = yes } log = "K|[THIS.GetTag]" } '
+    '%VOICELESS%'                                     # world.voiceless_script(): creature countries, if any
     'if = { limit = { has_war = yes } log = "P|[THIS.GetTag]|[?THIS.surrender_progress]" } '
     'every_enemy_country = { log = "W|[PREV.GetTag]|[THIS.GetTag]" } '
     '} '
@@ -155,7 +156,9 @@ def snapshot(player: str) -> Dict:
     front: {tag: ...} (the player and their enemies, see _read_front)}"""
     snap: Dict = {"campaign": 0, "date": "", "date_text": "", "countries": {}, "wars": [], "states": {}}
     wars: Set[str] = set()
-    lines = query(f"{player} = {{ {_EFFECT} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} }}")
+    from . import world
+    effect = _EFFECT.replace("%VOICELESS%", world.voiceless_script())
+    lines = query(f"{player} = {{ {effect} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} }}")
     snap["ties"] = _read_ties(lines, player)
     snap["tie_kinds"] = sorted(TIES)                  # what was looked for: a kind added later isn't news at first
     snap["player"] = player
@@ -182,6 +185,8 @@ def snapshot(player: str) -> Dict:
             c[f[0]]["overlord"] = f[1]
         elif kind == "K" and f[0] in c:
             c[f[0]]["capitulated"] = True
+        elif kind == "V" and f[0] in c:
+            c[f[0]]["voiceless"] = True                 # creatures, not a government (VOICELESS in lore/*.txt)
         elif kind == "P" and f[0] in c and len(f) >= 2:
             try:
                 c[f[0]]["surrender"] = float(f[1])

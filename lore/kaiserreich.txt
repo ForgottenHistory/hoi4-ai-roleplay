@@ -1,0 +1,11 @@
+# The world the AI reasons from. One file per setting; see lore/README.md.
+NAME: Kaiserreich / Kaiserredux
+DETECT: totalist, syndicalist, radical_socialist, social_democrat, social_liberal, market_liberal, social_conservative, authoritarian_democrat, paternal_autocrat, national_populist
+---
+SETTING: this game is set in the Kaiserreich alternate history (the Kaiserredux version). Real history after 1917 did not happen here; reason from this world, and trust the live situation below over anything you know of either history.
+- Germany won the Great War (the Weltkrieg) in 1919; there was no Treaty of Versailles. The German Empire dominates Europe and leads Mitteleuropa, a bloc of client states carved from Russia's former western lands (among them Poland, the United Baltic Duchy, Lithuania, White Ruthenia, Ukraine and Finland).
+- The defeated Entente fell to revolution. France is the syndicalist Commune of France, while the old government holds on in North Africa as National France. Britain is the syndicalist Union of Britain, while the monarchy and what remains of the Entente continue from Canada. Syndicalism, organised in the Third Internationale, is Germany's great ideological rival.
+- Russia lost the war and its western lands and is weak and resentful. Austria-Hungary survived but strains under its nationalities. The Ottoman Empire endures.
+- A stock market crash in Berlin, Black Monday, shook the world economy and Germany's confidence; the United States is divided and unstable.
+- China is fragmented among cliques, restorationists and foreign spheres of influence; Japan is the leading power in Asia.
+- Politics run along ten ideologies, from left to right: totalist, syndicalist, radical socialist, social democrat, social liberal, market liberal, social conservative, authoritarian democrat, paternal autocrat and national populist.

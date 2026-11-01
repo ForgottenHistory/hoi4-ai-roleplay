@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, bridge, campaign, agendas, chronicle, crises, plots, diplomacy, game, gamestate, leaders, llm, news, origins, peace, policy, reputation,
+from . import (actions, bridge, campaign, agendas, chronicle, crises, plots, diplomacy, game, gamestate, leaders, llm, news, origins, peace, plight, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -331,6 +331,8 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"THE COUNTRY YOU CORRESPOND WITH:\n"
         f"{gamestate.describe(me, focus_details=OTHER_FOCUSES, spirit_details=False)}\n\n"
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
+        + (f"{own}\n\n" if (own := plight.text(them, style.current().plight)) else "")
+        + (f"{me.name.upper()}'S SITUATION: {theirs}.\n\n" if (theirs := plight.short(me)) else "")
         + (f"{sec}\n\n" if (sec := _security(them, me)) else "")
         + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")
         + (f"{began}\n\n" if (began := origins.text(camp, them, me)) else "")
@@ -438,6 +440,11 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         print(f"  {them.name} has capitulated; no reply")
         _show_reply(player, to, f"(No answer comes. {them.name} has capitulated, and no government remains "
                                 f"to receive your letter.)")
+        return
+    if world.voiceless(them):                          # creatures, not a government: nobody to read it
+        print(f"  {them.name} is no government; no reply")
+        _show_reply(player, to, f"(No answer comes. {them.name} is no government but a tide of creatures from beyond "
+                                f"this world: there is no one to read your letter, and the courier does not return.)")
         return
     key = campaign.date_key(them.date)
     camp.at(key)
@@ -917,10 +924,11 @@ def _days(key: str) -> int:
 
 
 def active(snap: Optional[Dict], tag: str) -> bool:
-    """Exists and hasn't capitulated. A capitulated country has no government left: it gets no policy and writes
-    no letters (it comes back, if at all, after the peace)."""
+    """Exists, hasn't capitulated and is a government at all. A capitulated country has no government left: it gets
+    no policy and writes no letters (it comes back, if at all, after the peace). Nor do creature hordes (UC's Xen,
+    VOICELESS in lore/*.txt)."""
     c = (snap or {}).get("countries", {}).get(tag)
-    return bool(c) and not c.get("capitulated")
+    return bool(c) and not c.get("capitulated") and not c.get("voiceless")
 
 
 _CESSIONS = ("give:state", "ask:state", "cede:", "give:annex")

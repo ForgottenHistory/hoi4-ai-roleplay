@@ -95,7 +95,7 @@ class StorySettings:
 
 @dataclass(frozen=True)
 class WorldSettings:
-    setting: str          # auto | vanilla | kaiserreich
+    setting: str          # auto | vanilla | kaiserreich | halflife
     lore_file: str        # optional text file with extra setting notes
     game_dir: str         # HOI4 install folder (found automatically when empty)
     tension_rules: bool   # letter deals keep to the game's world tension rules (guarantees, factions)

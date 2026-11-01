@@ -83,7 +83,7 @@ def messages(camp: campaign.Campaign, snap: Dict) -> List[Dict]:
     now = snap.get("date", "")
     letters = _letters(camp)[-LETTERS_SHOWN:]
     rep = camp.data.get("reputation") or {}
-    deeds = [d for d in rep.get("deeds", []) if abs(d.get("weight", 0)) >= 2][-8:]
+    deeds = [d for d in rep.get("deeds", []) if abs(d.get("weight") or 0) >= 2][-8:]    # weight None: not judged yet
     promises = rep.get("promises", [])[-12:]
     active = [t for t in treaties._store(camp) if t["status"] == "active" and t["me"] == player][-10:]
     parts = [

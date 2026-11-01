@@ -1,7 +1,8 @@
 """The world the game is set in, for the LLM: vanilla history, or a mod's alternate history (Kaiserreich and
-Kaiserredux), plus optional setting notes from a file. Chosen in config.ini [world]:
+Kaiserredux, or Half-Life in Unforeseen Consequences), plus optional setting notes from a file. Chosen in config.ini
+[world]:
 
-    setting = auto          auto (default) detects Kaiserreich from the player's ideology groups
+    setting = auto          auto (default) detects Kaiserreich or Half-Life from the player's ideology groups
     lore_file =             optional text file with extra setting notes, added to every prompt
 
 The setting text opens every prompt (letters, replies, policies). The live game data that follows is
@@ -45,9 +46,38 @@ _KAISERREICH = (
 )
 
 
+# Unforeseen Consequences, a Half-Life total conversion (Steam workshop 3635283949): starts 2000 or 2015.
+HALFLIFE_IDEOLOGIES = {"combine_ascensionism", "combine_homosapience", "vortigaunt_rebels", "xen_hordes"}
+
+_HALFLIFE = (
+    "SETTING: this game is set in the Half-Life universe (the Unforeseen Consequences mod). Real history holds up "
+    "to the year 2000; after that the world below follows Half-Life, not what really happened. Trust the live "
+    "situation below over anything you know.\n"
+    "- In 2000 the Cold War is over and the United States is the sole superpower. Two rival American research "
+    "giants, Black Mesa (teleportation, exotic matter from the border world Xen) and Aperture Science, compete "
+    "for government money. Few know how dangerous their work is.\n"
+    "- The Black Mesa incident, a resonance cascade, tore open portals to Xen: alien creatures (headcrabs, "
+    "antlions, vortigaunts and worse) spill across the Earth through portal storms. The US military's HECU was "
+    "sent to cover it up.\n"
+    "- The Combine, a vast inter-dimensional empire (the Universal Union) that enslaves species across many "
+    "worlds, then invaded and defeated Earth in the Seven Hour War. Dr Wallace Breen, Black Mesa's "
+    "administrator, negotiated Earth's surrender and governs it for them from City 17's Citadel. Under Combine "
+    "rule humans live in policed cities, families are split up, reproduction is suppressed, and Civil "
+    "Protection and the transhuman Overwatch soldiers keep order; the Resistance and the vortigaunts fight back "
+    "from hiding.\n"
+    "- Which stage the world is at (before the incident, the invasion, or years of occupation) is shown by the "
+    "date and the live situation: who exists, who rules where, who is at war.\n"
+    "- Not every country is a human government. The Combine speaks with cold, bureaucratic menace and treats "
+    "humans as a resource. Xen creature hordes (Xenian Fauna) have no politics and cannot negotiate. Warlords, "
+    "bandits and militias are survivors, not statesmen.")
+
+
 def detect(party_ideologies) -> str:
-    """'kaiserreich' if the parties use Kaiserreich's ideology groups, else 'vanilla'."""
-    return "kaiserreich" if KAISERREICH_IDEOLOGIES & set(party_ideologies) else "vanilla"
+    """'halflife' or 'kaiserreich' if the parties use those mods' ideology groups, else 'vanilla'."""
+    found = set(party_ideologies)
+    if HALFLIFE_IDEOLOGIES & found:
+        return "halflife"
+    return "kaiserreich" if KAISERREICH_IDEOLOGIES & found else "vanilla"
 
 
 def setting_for(party_ideologies) -> str:
@@ -57,7 +87,7 @@ def setting_for(party_ideologies) -> str:
 
 def text(party_ideologies) -> str:
     """The setting paragraph(s) for the top of a prompt."""
-    body = _KAISERREICH if setting_for(party_ideologies) == "kaiserreich" else _VANILLA
+    body = {"kaiserreich": _KAISERREICH, "halflife": _HALFLIFE}.get(setting_for(party_ideologies), _VANILLA)
     notes = _lore_notes()
     return body + (f"\n\nSETTING NOTES FROM THE PLAYER:\n{notes}" if notes else "")
 

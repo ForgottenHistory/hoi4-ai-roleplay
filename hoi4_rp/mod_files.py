@@ -154,8 +154,6 @@ def write_mod(mod_root: str = MOD_ROOT) -> None:
                 f' {news_loc_key(slot, "a")}:0 "Interesting."']
 
     files = {
-        os.path.join(mod_root, f"{MOD_FOLDER}.mod"): (descriptor + f'\npath="mod/{MOD_FOLDER}"\n', "utf-8"),
-        os.path.join(mod_dir, "descriptor.mod"): (descriptor + "\n", "utf-8"),
         os.path.join(mod_dir, "events", "airp_templates.txt"): ("\n".join(ev), "utf-8"),
         # HOI4 silently skips loc files without the UTF-8 BOM.
         os.path.join(mod_dir, "localisation", "english", "airp_templates_l_english.yml"):
@@ -166,6 +164,20 @@ def write_mod(mod_root: str = MOD_ROOT) -> None:
     from . import guarantees, peace
     files.update(peace.files(mod_dir))
     files.update(guarantees.files(mod_dir))
+
+    # A mod with replace_path drops that folder from the game and from every mod loaded before it (total
+    # conversions like Unforeseen Consequences replace events, on_actions, scripted_guis...). Naming such mods as
+    # dependencies makes the game load this one after them, so our files survive.
+    ours = {os.path.relpath(os.path.dirname(p), mod_dir).replace(os.sep, "/").lower() for p in files}
+    from . import gamefiles
+    after = [name for name, _, replaces in gamefiles.enabled_mods()
+             if name and name != MOD_NAME and ours & {r.strip("/").lower() for r in replaces}]
+    if after:
+        descriptor += "\ndependencies={\n" + "".join(f'\t"{n}"\n' for n in after) + "}"
+        print(f"loads after {', '.join(after)} (they replace folders this mod writes to)")
+    files[os.path.join(mod_root, f"{MOD_FOLDER}.mod")] = (descriptor + f'\npath="mod/{MOD_FOLDER}"\n', "utf-8")
+    files[os.path.join(mod_dir, "descriptor.mod")] = (descriptor + "\n", "utf-8")
+
     for path, (text, enc) in files.items():
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding=enc, newline="\n") as f:

@@ -129,8 +129,8 @@ def game_dir() -> Optional[str]:
     return None
 
 
-def mod_dirs() -> List[Tuple[str, List[str]]]:
-    """(folder, replace_paths) of each enabled mod, in load order."""
+def enabled_mods() -> List[Tuple[str, str, List[str]]]:
+    """(name, folder, replace_paths) of each enabled mod, in load order."""
     try:
         with open(os.path.join(DOCS_DIR, "dlc_load.json"), encoding="utf-8") as f:
             enabled = json.load(f).get("enabled_mods", [])
@@ -147,8 +147,15 @@ def mod_dirs() -> List[Tuple[str, List[str]]]:
         if not m:
             continue                                         # zipped (archive=) mods aren't read
         path = m.group(1) if os.path.isabs(m.group(1)) else os.path.join(DOCS_DIR, m.group(1))
-        out.append((os.path.normpath(path), re.findall(r'replace_path\s*=\s*"([^"]+)"', desc)))
+        name = re.search(r'^\s*name\s*=\s*"([^"]*)"', desc, re.M)
+        out.append((name.group(1) if name else "", os.path.normpath(path),
+                    re.findall(r'replace_path\s*=\s*"([^"]+)"', desc)))
     return out
+
+
+def mod_dirs() -> List[Tuple[str, List[str]]]:
+    """(folder, replace_paths) of each enabled mod, in load order."""
+    return [(path, replaces) for _, path, replaces in enabled_mods()]
 
 
 def files(folder: str, ext: str = ".txt") -> List[str]:

@@ -318,10 +318,15 @@ translations and the ruling party's description from the mod's localisation.
 
 `[world]` in config.ini tells the AI which history to reason from:
 
-    setting = auto      # auto detects Kaiserreich/Kaiserredux from the ideologies in play; or vanilla / kaiserreich
+    setting = auto      # auto detects Kaiserreich/Kaiserredux and Half-Life (Unforeseen Consequences) from the
+                        # ideologies in play; or vanilla / kaiserreich / halflife
     lore_file =         # optional text file with your own setting notes, added to every prompt
 
-Enable "AI Roleplay" alongside the other mod in the launcher playset.
+Enable "AI Roleplay" alongside the other mod in the launcher playset. Total conversions often `replace_path`
+whole folders (Unforeseen Consequences replaces events, on_actions, scripted_guis, opinion and dynamic modifiers...),
+which drops those folders from every mod loaded before them, ours included. `write-mod` names such enabled mods as
+dependencies so the game loads AI Roleplay after them; run it again after changing the playset, and keep AI
+Roleplay below them in the launcher.
 
 ## Letter style
 

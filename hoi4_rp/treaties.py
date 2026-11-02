@@ -15,6 +15,8 @@ Kept in the campaign (data["treaties"]) and played out by tick() each time the w
     the term ends            -> its agreements end in the game
     an instalment them owes  -> paid automatically (if it can't be paid, it is missed and remembered)
     an instalment I owe      -> the player is asked: Accept pays, Decline refuses (the reply window's buttons)
+    a war joined by letter   -> entered 30 days after the deal (actions.WAR_DELAY_DAYS): them joins then; when the
+                                player is to join, the player is asked; if that war is over, nothing comes of it
     a war pledge is called   -> them joins the war at once; for my pledge the player is asked to honour it
                                 (already at war with that country: honoured as it stands)
     war between the two      -> the treaty lapses
@@ -201,6 +203,8 @@ def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optiona
                  "paid": [] if _start(spec) else [key], "missed": []}
                 for k, spec in terms["payments"].items()]
     clauses = [{"key": k, "fired": "", "asked": ""} for k in applied if actions.is_pledge(k)]
+    clauses += [{"key": k, "fired": "", "asked": "", "due": campaign.shift(key, actions.WAR_DELAY_DAYS)}
+                for k in applied if actions.is_war(k)]       # a war joined by letter: entered when due
     held = standing_pair(camp, tag, me)              # a commitment already standing isn't made twice
     countries = (camp.snapshot or {}).get("countries", {})
     clauses += [{"key": k, "fired": "", "asked": "", "base": _against(k, tag, me),
@@ -461,6 +465,17 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
                 continue
             if c["fired"] or c["asked"]:
                 continue
+            if actions.is_war(c["key"]):
+                if today < c.get("due", ""):
+                    continue
+                changed = True
+                text, ask = _join_war(camp, t, c, tag, player, today)
+                if ask:                                 # the player's turn: asked, never bound
+                    c["asked"] = today
+                    _due(camp).append({"treaty": t["id"], "kind": "clause", "key": c["key"], "date": today, "n": 0})
+                elif text and c["key"].startswith("give:"):
+                    letters.append((tag, text))
+                continue
             verb, _, enemy = c["key"].split(":")
             side, joiner = (player, tag) if verb == "give" else (tag, player)
             if not bridge.trigger(f"{side} = {{ has_war_with = {enemy} }}"):
@@ -494,6 +509,36 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
     return letters
 
 
+def _join_war(camp: campaign.Campaign, t: Dict, c: Dict, them: str, me: str, today: str,
+              player: str = "") -> Tuple[str, bool]:
+    """A war joined by letter falls due (`them` wrote the deal; "give" = them joins my war). Carried out unless the
+    joiner is the player: (what happened, or ''; True if the player is to be asked)."""
+    player = player or camp.data["player"]
+    countries = (camp.snapshot or {}).get("countries", {})
+    name = lambda x: countries.get(x, {}).get("name", x)
+    verb, _, enemy = c["key"].split(":")
+    joiner, side = (them, me) if verb == "give" else (me, them)
+    if not bridge.trigger(f"{side} = {{ has_war_with = {enemy} }}"):
+        c["fired"], c["how"] = today, "the war was over"
+        text = (f"{name(side)}'s war with {name(enemy)} ended before {name(joiner)} joined it, as agreed on "
+                f"{t['when']}.")
+    elif bridge.trigger(f"{joiner} = {{ has_war_with = {enemy} }}"):
+        c["fired"] = today
+        text = f"{name(joiner)} stands at war with {name(enemy)} beside {name(side)}, as agreed on {t['when']}."
+    elif joiner == player:
+        return "", True
+    elif actions._effect(actions.war_script(joiner, side, enemy)) and \
+            bridge.trigger(f"{joiner} = {{ has_war_with = {enemy} }}"):
+        c["fired"] = today
+        text = f"As agreed on {t['when']}, {name(joiner)} joined {name(side)}'s war against {name(enemy)}."
+    else:
+        c["fired"], c["how"] = today, "the game would not allow it"
+        print(f"  treaty {t['id']}: {joiner} could not join the war with {enemy}")
+        return "", False
+    _event(camp, "clause", [them, me, enemy], text, joiner=joiner)
+    return text, False
+
+
 def _shown(camp: campaign.Campaign, tid: int, key: str) -> bool:
     """This obligation is the one waiting in the reply window right now."""
     offer = camp.data.get("pending_offer") or {}
@@ -525,8 +570,11 @@ def next_prompt(camp: campaign.Campaign, player: str) -> Optional[Tuple[Dict, st
         else:
             enemy = d["key"].rsplit(":", 1)[1]
             enemy_name = (camp.snapshot or {}).get("countries", {}).get(enemy, {}).get("name", enemy)
+            promise = (f"agreed to join {them_name}'s war against {enemy_name}, and the day has come"
+                       if actions.is_war(d["key"]) else
+                       f"pledged to join {them_name} whenever it goes to war with {enemy_name}")
             text = (f"§Y{them_name} is at war with {enemy_name}. Under the treaty of {t['when']}, {me_name} "
-                    f"pledged to join {them_name} whenever it goes to war with {enemy_name}.§!\n\nAccept honours "
+                    f"{promise}.§!\n\nAccept honours "
                     f"the treaty: we go to war with {enemy_name} at once. Decline breaks our word: {them_name} and the "
                     f"world will remember it.")
         return d, t["with"], text
@@ -580,7 +628,9 @@ def answer(camp: campaign.Campaign, player: str, due: Dict, accepted: bool) -> s
                 _close(t, "fulfilled", today, "all of it was carried out")
             camp.save()
             return ""
-        deed = (f"{them_name} went to war with {enemy_name}, and {me_name} refused to join it as it had pledged in "
+        deed = (f"{me_name} agreed on {t['when']} to join {them_name}'s war with {enemy_name}, then refused to "
+                f"enter it, breaking its word." if actions.is_war(due["key"]) else
+                f"{them_name} went to war with {enemy_name}, and {me_name} refused to join it as it had pledged in "
                 f"the treaty of {t['when']} ({t['text']}), breaking its word.")
     _close(t, "broken", today, f"broken by {me_name}")
     _event(camp, "broken", [tag, player], deed)
@@ -628,6 +678,9 @@ def tick_ai(camp: campaign.Campaign) -> None:
                     changed |= moved
                     if broke:
                         break
+                elif actions.is_war(c["key"]) and not c["fired"] and today >= c.get("due", ""):
+                    _join_war(camp, t, c, a, b, today, player)
+                    changed = True
             if t["status"] == "active" and t["clauses"] and all(c["fired"] for c in t["clauses"]):
                 _close(t, "ended", today, "nothing of it stands any more")
             continue
@@ -693,6 +746,11 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
                                 + (f" ({c.get('how', 'ended')} {campaign.date_words(c['fired'])})." if c["fired"]
                                    else " (stands)."))
                     continue
+                if actions.is_war(c["key"]):
+                    bits.append(f"{who} joins {whom}'s war with {enemy} on {campaign.date_words(c.get('due', ''))}"
+                                + (f" ({c.get('how') or 'done'}, {campaign.date_words(c['fired'])})." if c["fired"]
+                                   else "."))
+                    continue
                 bits.append(f"War pledge: {who} joins {whom} whenever {whom} goes to war with {enemy}"
                             + (f" (honoured {campaign.date_words(c['fired'])})." if c["fired"] else " (stands)."))
         else:
@@ -740,6 +798,9 @@ def _panel_lines(camp: campaign.Campaign, t: Dict, them: str) -> List[str]:
         if actions.is_align(c["key"]):
             promise = _PROMISE[c["key"].split(":")[1]].format(x=x)[3:]      # "work against X"
             out.append(f"{them if theirs else 'We'}: {promise}")
+        elif actions.is_war(c["key"]):
+            when = campaign.date_words(c.get("due", ""))
+            out.append(f"{them} joins our war with {x} on {when}" if theirs else f"We join {them}'s war with {x} on {when}")
         else:
             out.append(f"{them} joins our wars with {x}" if theirs else f"We join {them}'s wars with {x}")
     return out

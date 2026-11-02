@@ -564,9 +564,12 @@ def apply_deal(camp: campaign.Campaign, writer: str, other: str, items: List[str
     done = [e["type"] for e in events]
     guarantees.record(camp, writer, done, None, other=other)
     commits = [k for k in done if actions.is_align(k)]
+    wars = [k for k in done if actions.is_war(k)]          # entered actions.WAR_DELAY_DAYS later (treaties.tick_ai)
+    if commits or wars:
+        from . import treaties
+        treaties.record(camp, writer, commits + wars, {"months": COMMIT_MONTHS}, key, name(writer), me=other)
     if commits:
-        from . import steering, treaties
-        treaties.record(camp, writer, commits, {"months": COMMIT_MONTHS}, key, name(writer), me=other)
+        from . import steering
         for tag in (writer, other):                # the committed side's AI turns toward its new line
             for line in steering.sync(camp, tag):
                 print(line)

@@ -586,6 +586,7 @@ def rights_asks(rel: "Relation") -> List[str]:
 
 # ---------------------------------------------------------------- joining a war, and war pledges
 # "give:war:ETH": them joins my war against Ethiopia; "ask:war:ETH": them asks me to join its war against Ethiopia.
+# Entered WAR_DELAY_DAYS after the deal: treaties.py keeps it as a clause (for the player: asked then, never bound).
 # "give:pledge:GER": a war pledge: whenever I go to war with Germany, them joins (treaties.py keeps it and carries
 # it out); "ask:pledge:GER": them asks me to pledge the same. Only between countries at peace. "Goes to war" is any
 # war: declaring it, being attacked, or being called in (the UK and France "declared war" on Germany in 1939 by
@@ -595,6 +596,8 @@ def rights_asks(rel: "Relation") -> List[str]:
 #                                                                       (checked in game; undone by white_peace)
 
 _COUNTRY_NAMES: Dict[str, str] = {}     # tag -> name, for war and pledge keys
+WAR_DELAY_DAYS = 30                     # a war joined by letter is entered this long after the deal (treaties.py):
+                                        # time to mobilize, and for the war to end first
 
 
 def joinable_enemies(side: str, joiner: str) -> Dict[str, str]:
@@ -680,7 +683,8 @@ PLEDGES = False
 _WAR_JOIN = ("Joining a war is the gravest commitment short of submission: your soldiers die in another's cause, and "
              "the enemy will treat you as one. A government joins only where its own interests are at stake (an "
              "enemy it fears or covets, a friend it cannot let fall) or for a great price, and only if it can fight; "
-             "it asks it of a country able to help.")
+             f"it asks it of a country able to help. The joiner enters the war {WAR_DELAY_DAYS} days after the deal, "
+             "to mobilize; if the war is over by then, nothing comes of it.")
 PLEDGE_NOTE = ("A war pledge is a promise for later: whenever one side goes to war with "
             "the named country (declaring war itself, being attacked, or called in by an ally or guarantee), the "
             "other joins at once, as Italy pledged itself to Germany in the Pact of Steel. Unlike a guarantee it "
@@ -1114,14 +1118,17 @@ def get_deal(key: str) -> Optional[Deal]:
         name = _COUNTRY_NAMES.get(tag, tag)
         if what == "war":
             if verb == "give":
-                return Deal(key, "war", False, True, f"join {{me_name}}'s war against {name} ({tag}) at once",
+                return Deal(key, "war", False, True, f"join {{me_name}}'s war against {name} ({tag}), your "
+                            f"armies entering it {WAR_DELAY_DAYS} days after the deal",
                             f"to join our war against {name}", "",
-                            f"{{them_name}} joined our war against {name}.",
-                            f"{{them_name}} joined {{me_name}}'s war against {name}.")
-            return Deal(key, "war", False, True, f"ask {{me_name}} to join your war against {name} ({tag})",
+                            f"{{them_name}} will join our war against {name} in {WAR_DELAY_DAYS} days.",
+                            f"{{them_name}} agreed to join {{me_name}}'s war against {name} within {WAR_DELAY_DAYS} days.")
+            return Deal(key, "war", False, True, f"ask {{me_name}} to join your war against {name} ({tag}), its "
+                        f"armies entering it {WAR_DELAY_DAYS} days after the deal",
                         f"our joining their war against {name}", "",
-                        f"We joined {{them_name}}'s war against {name}.",
-                        f"{{me_name}} joined {{them_name}}'s war against {name}.", True)
+                        f"We agreed to join {{them_name}}'s war against {name} in {WAR_DELAY_DAYS} days.",
+                        f"{{me_name}} agreed to join {{them_name}}'s war against {name} within {WAR_DELAY_DAYS} days.",
+                        True)
         if verb == "give":
             return Deal(key, "pledge", False, True, f"pledge to join {{me_name}} at once whenever {{me_name}} goes "
                         f"to war with {name} ({tag}), whoever starts it", f"a pledge to join our wars with {name}", "",
@@ -1868,13 +1875,11 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 if info := (rel.third or {}).get(target):
                     info["flags"].add(f"embargoed_{'them' if verb == 'give' else 'me'}")
             continue
-        if is_war(key):
+        if is_war(key):                            # the joining comes WAR_DELAY_DAYS later: treaties.py keeps it
             verb, _, enemy = key.split(":")
-            joiner, side = (them, me) if verb == "give" else (me, them)
-            if _effect(war_script(joiner, side, enemy)) and bridge.trigger(f"{joiner} = {{ has_war_with = {enemy} }}"):
-                shown.append((deal.shown.format(**fmt), verb == "ask"))
-                events.append({"type": key, "tags": [them, me, enemy], "text": deal.remembered.format(**fmt)})
-                (rel.me_enemies if verb == "give" else rel.them_enemies).pop(enemy, None)
+            shown.append((deal.shown.format(**fmt), verb == "ask"))
+            events.append({"type": key, "tags": [them, me, enemy], "text": deal.remembered.format(**fmt)})
+            (rel.me_enemies if verb == "give" else rel.them_enemies).pop(enemy, None)
             continue
         if is_equipment_key(key):
             verb, kind, n = key.split(":")

@@ -410,6 +410,34 @@ def _history_note(camp: campaign.Campaign, them: gamestate.CountryState, me: gam
             f"letters, offers and answers that actually appear there or in what you remember.{since} {silence}")
 
 
+OPENINGS = 5                 # other governments' latest letters to the player shown by how they opened
+
+
+def _opening(text: str) -> str:
+    """The first sentence of a letter's body: past the address line and the salutation."""
+    for para in (p.strip() for p in text.split("\n\n")):
+        if not para or para.startswith(("To ", "From ")) or (len(para) < 60 and para.endswith((",", ":", "!"))):
+            continue
+        m = re.match(r"(.+?[.!?])(\s|$)", para.replace("\n", " "))
+        return (m.group(1) if m else para)[:200]
+    return ""
+
+
+def _others_openings(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+    """How the player's latest letters from other governments opened. Each writer sees only its own correspondence,
+    so without this they all lead with the same great event of the day."""
+    got = sorted((x for other, ls in camp.threads(me.tag).items() if other != them.tag
+                  for x in ls if x["from"] == other), key=lambda x: x["date"])[-OPENINGS:]
+    lines = [f'- {x["when"]}: "{o}"' for x in got if (o := _opening(x["text"]))]
+    if not lines:
+        return ""
+    return (f"{me.name} has lately had letters from other governments that opened like this (you haven't read them; "
+            f"this is so your letter doesn't sound like theirs):\n" + "\n".join(lines) + "\n"
+            f"Don't open the same way, and don't dwell on an event they already made much of: everyone in "
+            f"{me.name}'s capital knows the great news of the day. Lead with what is particular to you and "
+            f"{me.name}; mention such an event only where it bears on what you want, briefly.")
+
+
 def _transcript(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
     """The correspondence as plain text (for prompts that aren't the letter conversation itself)."""
     lines = []
@@ -431,7 +459,8 @@ def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState, cam
     return (
         f"{_context(them, me, camp)}\n\n"
         f"{_history_note(camp, them, me)}\n\n"
-        f"{task or _reply_task(them, me)}\n\n"
+        + (f"{fresh}\n\n" if (fresh := _others_openings(camp, them, me)) else "")
+        + f"{task or _reply_task(them, me)}\n\n"
         f"{style.current().rules.format(name=them.name, other=me.name)}\n\n{style.diplomacy()}\n\n{consequences}"
     )
 

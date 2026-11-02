@@ -48,7 +48,11 @@ allows: its civilian, army, navy and air intel on you, read live. Your factories
 estimates, the less intel the rougher (up to 60% off at none, exact from 90%), steady over a game quarter. A whole
 branch is over- or underestimated together (planes and airmen alike), and each country's service errs its own way. Stability
 and war support are estimated too, and political power is known only at 90%+. Your national focuses are unknown below
-20% civilian intel, and the one under way below 50%. Population, spirits, parties and wars stay public.
+20% civilian intel, and the one under way below 50%. Whether your divisions are short of equipment is known only from
+50% army intel, and then only roughly. Population, spirits, parties and wars stay public.
+
+Each country knows its own equipment: what lies in storage and how fully its divisions are equipped (rifles, support
+equipment, artillery, trucks), so it knows when it needs arms and when it has some to spare.
 
 This covers its letters and replies to you, its policy toward you, and its ultimatum decisions (it weighs your
 estimated strength when deciding on war). AI countries' knowledge of each other is unchanged.
@@ -82,5 +86,13 @@ resource rights, demilitarization, submission, annexation, handing over a subjec
 commitments, as many items as the deal needs. A storyteller incident's proposal holds its guarantee, commitment or
 faction, and may add what is paid or asked for it. A pair waits `cooldown_days` (90) before talking again. AI ultimatums demand only land the sender has a core or
 claim on, and play out like those against you. A guarantee costs its guarantor factories, as yours do.
+
+**Peace between AI countries.** HOI4's AI ends a war only by capitulation, so once a game month up to two wars
+between AI countries get peace talks: wars with no front between the two sides (no border between them or their
+allies, and one has no coast), wars whose front hasn't moved in three months, and wars one side is clearly losing.
+The side worse off may offer peace and the other accepts or declines, both knowing whether they can reach each other,
+how the war has gone and the terms (the game's own measure, as for your letter peace: a white peace when even). With
+`mode = on` an accepted peace starts the game's peace conference and is world news. Wars whose conference you would
+sit at (your faction, your overlord) are left to you.
 
 `python -m hoi4_rp ai-undo` ends pacts, market access, guarantees and commitments it put in place (stop `run` first).

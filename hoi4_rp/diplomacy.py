@@ -197,6 +197,8 @@ def card(s: gamestate.CountryState, w: Dict, other: str, camp: Optional[campaign
             f"{'a major power' if s.is_major else 'a minor power'}",
             f"{w.get('civ', 0)} civilian / {w.get('mil', 0)} military factories, {w.get('divisions', 0)} divisions; "
             f"stability {pct(s.stability)}, war support {pct(s.war_support)}"]
+    if (short := gamestate.equipment_short(s)):
+        bits.append(short)
     if s.faction:
         bits.append(f"in the faction {s.faction}" + (" as its leader" if s.faction_leader == s.tag else
                                                      f" led by {s.name_of(s.faction_leader)}" if s.faction_leader

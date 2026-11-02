@@ -883,7 +883,9 @@ EQUIPMENT = {"rifles": ("infantry_equipment", "infantry equipment (rifles)"),
              "artillery": ("artillery_equipment", "artillery pieces"),
              "trucks": ("motorized_equipment", "trucks")}
 EQUIPMENT_NOTE = ("Equipment is sent from the stockpile, not taken from divisions: arms aid of the kind governments "
-                  "send friends and clients, or pay for what they want. Weigh it against your own army's needs.")
+                  "send friends and clients, or pay for what they want. Weigh it against your own army's needs: "
+                  "storage your own divisions are short of is no surplus (see your equipment above), and a country "
+                  "whose divisions are short needs arms more than anything.")
 
 
 def equipment_counts(tag: str) -> Dict[str, int]:

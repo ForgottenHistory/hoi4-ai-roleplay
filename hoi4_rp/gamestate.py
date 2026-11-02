@@ -155,6 +155,7 @@ class CountryState:
     names: Dict[str, str] = field(default_factory=dict)       # display name of every tag above
     fallen: Set[str] = field(default_factory=set)             # faction members and enemies that have capitulated
     strength: Dict[str, float] = field(default_factory=dict)  # STRENGTH_FIELDS -> value (industry, army, manpower)
+    equipment: Dict[str, tuple] = field(default_factory=dict)  # EQUIPMENT_KINDS name -> (in storage, held, needed)
     # At war only:
     surrender: Optional[float] = None       # surrender progress 0..1: occupation / limit (1 = capitulation)
     occupation: Optional[float] = None      # share of its victory points others control (bridge.surrender)
@@ -192,6 +193,12 @@ STRENGTH_FIELDS = {
     "population_k": "max_manpower_k",     # total population
 }
 
+# Equipment a country's army runs on: name -> archetype. For each, what lies in storage (num_equipment), what its
+# divisions hold (num_equipment_in_armies) and what they need at full strength (num_target_equipment_in_armies).
+# The stockpile alone says nothing: it can be empty with every division full, or full with divisions short.
+EQUIPMENT_KINDS = {"rifles": "infantry_equipment", "support equipment": "support_equipment",
+                   "artillery": "artillery_equipment", "trucks": "motorized_equipment"}
+
 
 def _effect(tag: str) -> str:
     """One effect that logs everything script can tell us about a country, as `key|value` lines."""
@@ -209,6 +216,8 @@ def _effect(tag: str) -> str:
         f'if = {{ limit = {{ has_capitulated = yes }} log = "{p}capitulated|yes" }}',
         f'log = "{p}strength|{"|".join(f"[?THIS.{v}]" for v in STRENGTH_FIELDS.values())}"',
     ]
+    lines += [f'log = "{p}equipment|{name}|[?THIS.num_equipment@{arch}]|[?THIS.num_equipment_in_armies@{arch}]|'
+              f'[?THIS.num_target_equipment_in_armies@{arch}]"' for name, arch in EQUIPMENT_KINDS.items()]
     for ideo, prop in _PARTY_PROPS.items():
         lines.append(f'log = "{p}party|{ideo}|[THIS.Get{prop}Party]|[THIS.Get{prop}Leader]"')
     tn = "[THIS.GetTag]|[THIS.GetName]"
@@ -482,6 +491,10 @@ def country(tag: str) -> CountryState:
                     s.strength[name] = float(value.strip())
                 except ValueError:
                     pass
+        elif key == "equipment":
+            name, *nums = (rest.split("|") + ["", "", ""])[:4]
+            vals = [max(0.0, _float(x) or 0.0) for x in nums]     # a deficit shows as a stock below zero
+            s.equipment[name.strip()] = (vals[0], vals[1], vals[2])
         elif key == "war":
             sp, esr, asr = (rest.split("|") + ["", ""])[:3]
             s.surrender, s.enemy_strength, s.side_strength = _float(sp), _float(esr), _float(asr)
@@ -629,6 +642,68 @@ def strength_text(s: CountryState) -> str:
             f"dockyards. Armed forces: {n('divisions')} divisions ({men('army_k')} soldiers deployed), "
             f"navy {men('navy_k')} sailors, air force {n('planes')} planes ({men('air_k')} airmen). "
             f"Manpower available to recruit: {men('manpower_k')}; population {men('population_k')}.")
+
+
+FULL = 0.95            # divisions holding this share of what they need count as fully equipped
+
+
+def equipment_text(s: CountryState) -> str:
+    """What the army has of its equipment: in storage, and how fully its divisions are equipped. Seen through
+    another's intelligence (intel.view), only in words, and only with army intel at intel.ROUGH or more."""
+    from . import intel
+    eq = {k: v for k, v in s.equipment.items() if v[0] or v[2]}
+    if not eq:
+        return ""
+    if s.intel is not None:
+        if s.intel["army"] < intel.ROUGH:
+            return ""
+        short = [k for k, (_, have, need) in eq.items() if need and have / need < 0.8]
+        return ("Its army, as your intelligence sees it: " +
+                (f"short of {', '.join(short)}, divisions under strength." if short else "well equipped."))
+    parts = []
+    for k, (stock, have, need) in eq.items():
+        held = (f"divisions fully equipped" if not need or have / need >= FULL else
+                f"divisions hold {have / need:.0%} of what they need ({need - have:,.0f} short)")
+        parts.append(f"{k}: {stock:,.0f} in storage, {held}")
+    return ("Equipment (in storage, and how fully the divisions are equipped; storage refills divisions first, and "
+            "what is given away comes out of storage): " + "; ".join(parts) + ".")
+
+
+def _touches(a: str, b: str) -> bool:
+    """Do `a`'s side and `b`'s side meet by land: `a`, or a faction member or subject of `a` at war with `b`,
+    bordering `b` or one of its faction members or subjects at war with `a`?"""
+    from . import bridge
+    side = lambda x, foe: f"OR = {{ tag = {x} AND = {{ has_war_with = {foe} OR = {{ is_in_faction_with = {x} is_subject_of = {x} }} }} }}"
+    return bridge.trigger(f"any_country = {{ {side(a, b)} any_neighbor_country = {{ {side(b, a)} }} }}")
+
+
+def reach(a: CountryState, b: CountryState) -> str:
+    """Whether the two at war can get at each other: a land front (their own or their allies' borders), or only by
+    sea, or not at all. In words for a prompt (empty when they aren't at war)."""
+    from . import bridge
+    if b.tag not in a.enemies:
+        return ""
+    if _touches(a.tag, b.tag):
+        return "The two sides meet by land: there is a front between them."
+    coast = lambda t: bridge.trigger(f"{t} = {{ any_owned_state = {{ is_coastal = yes }} }}")
+    ca, cb = coast(a.tag), coast(b.tag)
+    if ca and cb:
+        return (f"The two sides don't meet by land: {a.name} and {b.name} can reach each other only across the sea, "
+                f"by naval invasion or a front opened through a third country.")
+    landlocked = " and ".join(x.name for x, c in ((a, ca), (b, cb)) if not c)
+    return (f"The two sides don't meet anywhere: no land front between them or their allies, and {landlocked} "
+            f"{'has' if ' and ' not in landlocked else 'have'} no coast. Neither army can reach the other, so this war "
+            f"can't be won or lost between them as things stand; only a new front (an ally's, military access "
+            f"through a third country) would change that.")
+
+
+def equipment_short(s: CountryState) -> str:
+    """'its divisions short of rifles (66% equipped), trucks (47%)', or '' when they are full: for short cards."""
+    short = [(k, have / need) for k, (_, have, need) in s.equipment.items() if need and have / need < FULL]
+    if not short:
+        return ""
+    return "its divisions short of " + ", ".join(f"{k} ({r:.0%}{' equipped' if i == 0 else ''})"
+                                                 for i, (k, r) in enumerate(short))
 
 
 def _state_list(states: List[Occupied], limit: int = 12) -> str:
@@ -830,6 +905,7 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
         f"Stability {pct(s.stability)}, war support {pct(s.war_support)}"
         + (f", political power {s.political_power:.0f}." if s.political_power is not None else "."),
         strength_text(s),
+        *([eq] if (eq := equipment_text(s)) else []),
         "Parties: " + "; ".join(
             f"{p.name}" + (f" [{p.long_name}]" if p.long_name and p.long_name != p.name else "")
             + f" ({p.ideology_name or p.ideology}, {round(p.popularity, 1):g}% support"

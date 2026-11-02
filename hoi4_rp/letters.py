@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
+from . import (actions, aipeace, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -284,6 +284,8 @@ def _war(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.Co
     if me.tag not in them.enemies:
         return ""
     lines = [gamestate.war_balance(them, me)]
+    if (where := gamestate.reach(them, me)):
+        lines.append(where)
     today = campaign.date_key(them.date)
     war = next((w for w in them.wars if w.enemy == me.tag), None)
     start = campaign.save_key(war.start_date) if war and war.start_date else ""
@@ -1342,6 +1344,20 @@ class _Session:
                 continue
             self.ai_jobs.append(("ultimatum", u, self.ai_pool.submit(llm.chat, msgs, None, 0.5, None, "ai:ultimatum",
                                                                      u["from"]), camp.id, None))
+        # wars between AI countries that went nowhere: once a month, peace talks (aipeace.py)
+        if aipeace.due(camp):
+            for a, b, why in aipeace.candidates(camp):
+                try:
+                    w = diplomacy.world()
+                    sa, sb = gamestate.country(a), gamestate.country(b)
+                    msgs = aipeace.offer_messages(camp, sa, sb, w)
+                except gamestate.StateError as e:
+                    print(f"  [ai] peace talks {a} -> {b} could not start: {e}")
+                    continue
+                print(f"  [ai] peace talks: {a} -> {b} ({why})")
+                self.ai_jobs.append(("peace_offer", [a, b], self.ai_pool.submit(llm.chat, msgs, None, None, None,
+                                                                                "ai:peace", a), camp.id, (why, w)))
+            camp.save()
         if cfg.driver == "storyteller":
             self.storyteller(camp)
         elif diplomacy.due(camp):
@@ -1510,6 +1526,26 @@ class _Session:
         except llm.LLMError as e:
             print(f"  [ai] {a} -> {b} failed: {e}")
             self.failed()
+            return None
+        if stage == "peace_offer":
+            why, w = ctx
+            offered, text = aipeace.read_offer(raw)
+            if not offered:
+                aipeace.record(camp, a, b, why, False, text)
+                camp.save()
+                return None
+            try:
+                msgs = aipeace.answer_messages(camp, gamestate.country(b), gamestate.country(a), w, text)
+            except gamestate.StateError as e:
+                print(f"  [ai] {b} could not answer {a}'s peace offer: {e}")
+                return None
+            return ("peace_answer", item, self.ai_pool.submit(llm.chat, msgs, None, None, None, "ai:peace", b),
+                    camp.id, (why, text))
+        if stage == "peace_answer":
+            why, text = ctx
+            accepted, reply = aipeace.read_answer(raw)
+            aipeace.record(camp, a, b, why, True, text, accepted, reply)
+            camp.save()
             return None
         if stage == "dispatch":
             offers, asks, w, threat_ok = ctx

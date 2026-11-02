@@ -142,12 +142,15 @@ def blocker(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
     return ""
 
 
-def estimate(me: gamestate.CountryState, them: gamestate.CountryState) -> Tuple[float, str]:
-    """(the player's share of the conference score, negative = the other side's; the line for the offer)."""
+def estimate(me: gamestate.CountryState, them: gamestate.CountryState,
+             player_leads: bool = True) -> Tuple[float, str]:
+    """(`me`'s share of the conference score, negative = the other side's; the line for the offer). `me` is the
+    player unless `player_leads` is False (two AI countries: aipeace.py)."""
     whole = gamestate.whole_war(me, them)
     if whole:                                   # factions at war: the whole war counts, not the two leaders alone
         margin = whole["favour"]
-        sides = " (both sides' allies come to the conference; on our side we alone make the demands)"
+        sides = (" (both sides' allies come to the conference"
+                 + ("; on our side we alone make the demands)" if player_leads else ")"))
     else:
         margin = gamestate._war_score(them, me) - gamestate._war_score(me, them)
         sides = ""
@@ -176,14 +179,16 @@ def table(me: gamestate.CountryState, them: gamestate.CountryState) -> str:
               f"them, so what you agree with {me.name} holds for its whole side.")
 
 
-def make(me: str, other: str) -> Optional[str]:
-    """Start the peace conference, scored now. Returns the outcome line, or None if it couldn't be started."""
+def make(me: str, other: str, player_leads: bool = True) -> Optional[str]:
+    """Start the peace conference, scored now. Returns the outcome line, or None if it couldn't be started.
+    `player_leads`: `me` is the player, whose AI allies demand nothing (_AI_PEACE); between two AI countries
+    (aipeace.py) both sides' members make their own demands, as in any conference the game runs."""
     try:
         a, b = gamestate.country(me), gamestate.country(other)
     except gamestate.StateError as e:
         print("  peace: could not read the countries:", e)
         return None
-    margin, line = estimate(a, b)
+    margin, line = estimate(a, b, player_leads)
     # Checked in game: the scope country is the winner and `tag` the loser (whatever ROOT is).
     winner, loser = (me, other) if margin >= 0 else (other, me)
     # Our demand costs (_COSTS) apply to everyone at the table: both sides, their faction members and subjects.
@@ -191,7 +196,7 @@ def make(me: str, other: str) -> Optional[str]:
             f"every_subject_country = {{ set_country_flag = {FLAG} }}")
     # The player (`me`) leads their side: their AI allies and subjects take nothing (_AI_PEACE)
     follow = (f"every_country = {{ limit = {{ NOT = {{ tag = {me} }} OR = {{ is_in_faction_with = {me} "
-              f"is_subject_of = {me} }} }} set_country_flag = {FOLLOW} }}")
+              f"is_subject_of = {me} }} }} set_country_flag = {FOLLOW} }}") if player_leads else ""
     reply = bridge.send(f"eval_effect {winner} = {{ {follow} {flag} {loser} = {{ {flag} }} start_peace_conference = {{ "
                         f"tag = {loser} score_factor = {abs(margin):.3f} }} }}")[0]
     if not reply.startswith("OK"):

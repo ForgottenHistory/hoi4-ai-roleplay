@@ -219,7 +219,7 @@ def main(args: List[str]) -> int:
     camp = campaign.Campaign(campaign.read_id(player), player)
     camp.snapshot = snap = chronicle.snapshot(player)
     if "--write" in args:
-        raw = llm.chat(messages(camp, snap), None, 0.7, 700, "ai:plots", "")
+        raw = llm.chat(messages(camp, snap), None, 0.7, 1500, "ai:plots", "")
         found = parse(raw)
         print(f"{len(found)} plotlines read; {len(keep(camp, found, snap['date']))} new or changed\n")
         camp.save()

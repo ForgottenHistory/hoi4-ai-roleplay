@@ -132,7 +132,12 @@ _SENTENCE = re.compile(r'[^.!?]+(?:[.!?]+["\')]*|$)')
 
 
 def _trim(body: str, cap: int) -> str:
-    """Keep whole sentences up to `cap` characters (the model runs long)."""
+    """Keep whole sentences up to `cap` characters (the model runs long, or is cut off mid-sentence)."""
+    body = body.strip()
+    if not re.search(r'[.!?]["\')]*$', body):          # cut off: drop the unfinished sentence, if one came before
+        whole = re.match(r'^(.*[.!?]["\')]*)\s', body, re.S)
+        if whole:
+            body = whole.group(1)
     if len(body) <= cap:
         return body
     out = ""
@@ -159,7 +164,7 @@ def parse(raw: str, clean) -> Optional[Draft]:
     one = lambda k: " ".join(parts.get(k, [])).strip().strip('"*').strip()
     title = clean(one("title")).rstrip(".")
     body = _trim(clean(" ".join(parts.get("body", []))), 450)
-    if not title or not body:
+    if not title or not body or not re.search(r'[.!?]["\')]*$', body):     # not one whole sentence: cut off
         return None
     if len(title) > MAX_TITLE:
         title = title[:MAX_TITLE + 1].rsplit(" ", 1)[0].rstrip(",;:-")

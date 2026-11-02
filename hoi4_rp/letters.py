@@ -1293,7 +1293,7 @@ class _Session:
             print(f"  [ai] storyteller: {item[2]} {item[0]} -> {item[1]} ({item[3][0]})")
         if not self.plot_job and plots.due(camp):
             plots._store(camp)["tick"] = month.snap.get("date", "")
-            self.plot_job = (self.ai_pool.submit(llm.chat, plots.messages(camp, month.snap), None, 0.7, 700,
+            self.plot_job = (self.ai_pool.submit(llm.chat, plots.messages(camp, month.snap), None, 0.7, 1500,
                                                  "ai:plots", ""), camp.id)
         if not self.crisis and crises.due(camp):
             self._start_crisis(camp, month)
@@ -1331,7 +1331,7 @@ class _Session:
         pairs, tags = crises.candidates(camp, snap, month.w, month.scored)
         msgs = crises.messages(camp, snap, month.w, pairs, tags, month.now)
         if msgs:
-            self.crisis = (self.ai_pool.submit(llm.chat, msgs, None, 0.9, 500, "ai:crisis", ""), camp.id, pairs, tags)
+            self.crisis = (self.ai_pool.submit(llm.chat, msgs, None, 0.9, 1500, "ai:crisis", ""), camp.id, pairs, tags)
 
     def _expiry_notice(self, snap: Dict, texts: List[str]) -> None:
         """One popup for the agreements that ran out today, with the reminder that renewing takes a letter."""
@@ -1548,7 +1548,7 @@ class _Session:
         camp.save()
         print(f"  news event: writing one about: {ev['text'][:200]}")
         msgs = news.messages(camp, ev, me.name, [p.ideology for p in me.parties])
-        self.news_job = (self.story_pool.submit(llm.chat, msgs, None, 1.0, 500, "news", ev["tags"][0]), camp.id,
+        self.news_job = (self.story_pool.submit(llm.chat, msgs, None, 1.0, 1500, "news", ev["tags"][0]), camp.id,
                          ev["date"])
 
     def news_tick(self, player: str, block: str) -> None:

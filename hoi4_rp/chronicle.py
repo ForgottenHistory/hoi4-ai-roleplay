@@ -140,7 +140,7 @@ def front(tags: List[str]) -> Dict[str, Dict]:
 # (agreements granted, proposals answered). Only these refresh policies or lift a refusal.
 WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_left", "faction_founded",
                "faction_joined", "independence", "subject", "capitulation", "war", "peace", "territory",
-               "justification", "wargoal",
+               "justification", "wargoal", "civil_war", "faction_dissolved",
                # treaties.py: a treaty broken, renounced, called on or lapsing changes what the two are to each other
                "treaty:broken", "treaty:renounced", "treaty:clause", "treaty:lapsed",
                # ultimatums.py: a threat of war, and how it ended
@@ -241,6 +241,36 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
     for t in oc.keys() - nc.keys():
         add([t], f"{name(t)} ceased to exist.", "country_gone")
 
+    # A civil war: a new country, no one's subject, at war with an old one and holding its land from the start.
+    # One event tells it; the appearing, war and territory lines stay (other code reads them) but are marked
+    # `part`, so the ledger and prompts leave them out.
+    new_wars = set(new["wars"]) - set(old["wars"])
+    split: Dict[str, str] = {}              # rebel -> the country it rose in
+    for t in nc.keys() - oc.keys():
+        if nc[t]["overlord"]:
+            continue
+        for o in oc.keys() & nc.keys():
+            pair = "|".join(sorted((t, o)))
+            took = [s for sid, (s, owner) in new["states"].items()
+                    if owner == t and (old["states"].get(sid) or ["", ""])[1] == o]
+            if pair in new_wars and took:
+                split[t] = o
+                r, g = nc[t], nc[o]
+                held = ", ".join(took[:MAX_LIST]) + (f" and {len(took) - MAX_LIST} more" if len(took) > MAX_LIST
+                                                     else "")
+                was = oc[o]
+                if (g["party"], g["ideology"]) != (was["party"], was["ideology"]) and r["party"] == was["party"]:
+                    # the rising took the state itself, and the old government fights on under a new tag
+                    text = (f"Civil war broke out in {was['name']}: the {g['party']} ({g['ideology']}, led by "
+                            f"{g['leader']}) seized power as {g['name']}, while the {r['party']} government "
+                            f"({r['ideology']}) fights on as {r['name']}, holding {held}.")
+                else:
+                    text = (f"Civil war broke out in {was['name']}: {r['name']} ({r['ideology']}, led by "
+                            f"{r['leader']}) rose against the {g['party']} government ({g['ideology']}), "
+                            f"holding {held}.")
+                add([o, t], text, "civil_war", world=True)          # world news, a major power or not
+                break
+
     for t in nc.keys() & oc.keys():
         a, b = oc[t], nc[t]
         if a["party"] != b["party"] or a["ideology"] != b["ideology"]:
@@ -264,6 +294,22 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
                 add([t, b["overlord"]], f"{b['name']} became a subject of {name(b['overlord'])}.", "subject")
         if b["capitulated"] and not a["capitulated"]:
             add([t], f"{b['name']} capitulated.", "capitulation")
+
+    # A faction gone altogether: one line, not one per member leaving (each still kept, marked `part`)
+    still = {c["faction"] for c in nc.values() if c["faction"]}
+    for fname in sorted({c["faction"] for c in oc.values() if c["faction"]} - still):
+        members = [t for t, c in oc.items() if c["faction"] == fname]
+        lead = next((c["faction_leader"] for c in oc.values() if c["faction"] == fname), "")
+        for e in events:
+            if e["type"] == "faction_left" and e["text"].endswith(f" left the {fname}."):
+                e["part"] = "faction_dissolved"
+        others = sorted((t for t in members if t != lead), key=lambda t: (not major(t), name(t)))
+        shown = [name(t) for t in others[:MAX_SIDE]] + (
+            [f"{len(others) - MAX_SIDE} others"] if len(others) > MAX_SIDE else [])
+        listed = shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " and " + shown[-1] if shown else ""
+        add([lead] + others, f"The {fname}, led by {oc.get(lead, {}).get('name') or name(lead)}, dissolved" +
+            (f"; {listed} {'were its other members' if len(others) > 1 else 'was its other member'}."
+             if others else "."), "faction_dissolved")
 
     ow, nw = set(old["wars"]), set(new["wars"])
     for pair in sorted(nw - ow):
@@ -341,6 +387,14 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
                 cause = None
             if cause:
                 e["text"] += f" This followed {name(tag)}'s national focus \"{cause}\"."
+
+    for e in events:
+        tags = e["tags"]
+        if (e["type"] == "country_new" and tags[0] in split or
+                e["type"] in ("war", "territory") and len(tags) == 2 and split.get(tags[0]) == tags[1] or
+                e["type"] == "war" and len(tags) == 2 and split.get(tags[1]) == tags[0] or
+                e["type"] in ("government", "leader") and tags[0] in split.values()):      # the civil war line tells it
+            e["part"] = "civil_war"
     return events
 
 
@@ -383,7 +437,8 @@ def _shorten_lists(text: str) -> str:
     """'took A, B, C, ... Z from X' -> 'took A, ..., H and 18 more from X'."""
     def cut(m: re.Match) -> str:
         items = m.group(0).split(", ")
-        return ", ".join(items[:MAX_LIST]) + f" and {len(items) - MAX_LIST} more"
+        end = "." if items[-1].endswith(".") else ""      # the sentence's full stop, caught by the last name
+        return ", ".join(items[:MAX_LIST]) + f" and {len(items) - MAX_LIST} more{end}"
     return _LONG_LIST.sub(cut, text)
 
 
@@ -427,8 +482,48 @@ def _merge_alike(lines: List[Tuple[str, str]], events: List[Dict], names: Dict[s
     return out
 
 
+def retell(events: List[Dict]) -> List[Dict]:
+    """Events recorded before diff() told civil wars, with them told: a country appearing, at war with another
+    and taking its land at the same moment. The three become one civil war line (copies; the stored ones stay)."""
+    out = list(events)
+    told = {(e["date"], tuple(e["tags"][:2])) for e in events if e.get("type") == "civil_war"}
+    at: Dict[str, List[int]] = defaultdict(list)
+    for i, e in enumerate(events):
+        at[e["date"]].append(i)
+    for i, e in enumerate(events):
+        if e.get("type") != "country_new" or e.get("part") or len(e["tags"]) != 1:
+            continue
+        t, date = e["tags"][0], e["date"]
+        land = next((j for j in at[date] if events[j].get("type") == "territory" and events[j]["tags"][:1] == [t]
+                     and len(events[j]["tags"]) == 2), None)
+        if land is None:
+            continue
+        o = events[land]["tags"][1]
+        war = next((j for j in at[date] if events[j].get("type") == "war" and set(events[j]["tags"]) == {t, o}), None)
+        if war is None or (date, (o, t)) in told:
+            continue
+        rebel = e["text"][:-len(" appeared as a country.")] if e["text"].endswith(" appeared as a country.") else t
+        took = events[land]["text"][len(rebel) + len(" took "):]
+        held, _, gov = took.rpartition(" from ")
+        if not held:
+            continue
+        out[i] = {**e, "part": "civil_war"}
+        out[war] = {**events[war], "part": "civil_war"}
+        out[land] = {**events[land], "type": "civil_war", "tags": [o, t], "major": True,
+                     "text": f"Civil war broke out: {rebel} rose against {gov.rstrip('.')}, holding {held}."}
+    # "X ceased to exist." when a war's end at the same moment already says X was defeated and ceased to exist
+    for i, e in enumerate(events):
+        if e.get("type") == "country_gone" and not e.get("part") and e["text"].endswith(" ceased to exist."):
+            gone = e["text"][:-len(" ceased to exist.")]
+            if any(events[j].get("type") == "peace" and e["tags"][0] in events[j]["tags"]
+                   and events[j]["text"].endswith(f"{gone} was defeated and ceased to exist.") for j in at[e["date"]]):
+                out[i] = {**out[i], "part": "peace"}
+    return out
+
+
 def compact(events: List[Dict], snapshot: Optional[Dict] = None) -> List[Tuple[str, str]]:
     """[(when, text)] for a prompt, oldest first: each moment's war and peace pairs grouped into a few lines."""
+    events = retell(events)
     countries = (snapshot or {}).get("countries", {})
     names = {**_names_from_events(events), **{t: c["name"] for t, c in countries.items()}}
     major = lambda t: bool(countries.get(t, {}).get("major"))
@@ -440,6 +535,7 @@ def compact(events: List[Dict], snapshot: Optional[Dict] = None) -> List[Tuple[s
             shown.append(f"{len(tags) - MAX_SIDE} others")
         return shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " and " + shown[-1]
 
+    events = [e for e in events if not e.get("part")]      # told by a civil war or dissolution line
     out: List[Tuple[str, str]] = []
     i = 0
     while i < len(events):

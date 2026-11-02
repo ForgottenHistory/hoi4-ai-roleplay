@@ -273,8 +273,7 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
                  f"({pc['ultimatums_90']} ultimatums); {len(pc['open_ultimatums'])} ultimatums standing in the world. "
                  f"After a quiet stretch for the player, a reach_out (if one is listed) or something near their region "
                  f"brings them news; after a busy one, choose quiet or something distant. Most incidents should be "
-                 f"between other countries: favour the player's corner only moderately, and name the player's country "
-                 f"in WHY only when the incident really concerns it. Aim for an incident most months: "
+                 f"between other countries: favour the player's corner only moderately. Aim for an incident most months: "
                  f"if you picked one in the last 25 days, choose quiet unless something truly calls for another. "
                  f"Choosing QUIET is right whenever nothing earns an incident.")
     kinds = "\n".join(f"  {k}: {v}" for k, v in KINDS.items())
@@ -282,7 +281,10 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
                  "else:\n"
                  f"INCIDENT: one of {', '.join(KINDS)}, quiet\nFROM: tag of the country that acts\n"
                  "TO: tag of the other country (for quiet, none)\nAIM: the aim in the brackets of that incident, copied\n"
-                 f"WHY: one sentence: why now, and why it fits both countries\nKinds:\n{kinds}")
+                 f"WHY: one sentence, as a historian would put it: what moves FROM to act toward TO now, from the two "
+                 f"countries' own interests. It is shown in the game and given to FROM's diplomats, so it is never "
+                 f"about the player or their country (unless TO is the player), nor about pacing, news reaching "
+                 f"anyone or your reasons as storyteller\nKinds:\n{kinds}")
     return [{"role": "system", "content": "\n\n".join(parts)}, {"role": "user", "content": "Choose now."}]
 
 
@@ -445,7 +447,7 @@ class Month:
             print(f"  [storyteller] no agenda for {tag}: {e}")
             return
         cands = agendas.candidates(me, self.snap, self.w)
-        self.jobs.append((me, cands, self.pool.submit(llm.chat, agendas.prompt(me, cands, self.snap, self.camp), None, 0.7, 600,
+        self.jobs.append((me, cands, self.pool.submit(llm.chat, agendas.prompt(me, cands, self.snap, self.camp), None, 0.7, 1500,
                                                       "ai:agenda", tag)))
 
     def _agendas_done(self) -> bool:
@@ -498,7 +500,7 @@ class Month:
                     msgs = messages(self.camp, self.snap, self.w, self.shortlist, self.opts, self.now, [])
                     if not msgs:
                         return {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "", "pairs": 0}
-                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 400, "ai:storyteller", "")
+                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 1200, "ai:storyteller", "")
                     self.phase = "wait"
             else:
                 if not self.fut.done():
@@ -601,7 +603,7 @@ def main(args: List[str]) -> int:
             continue
         if show and i == 0:
             print(f"\n----- prompt\n{msgs[0]['content']}\n-----")
-        raw = llm.chat(msgs, None, 0.8, 400, "ai:storyteller", "")
+        raw = llm.chat(msgs, None, 0.8, 1200, "ai:storyteller", "")
         pick = parse(raw)
         ok, why, aim = check(camp, pick, w, snap, now, sim, opts)
         if not pick["kind"]:

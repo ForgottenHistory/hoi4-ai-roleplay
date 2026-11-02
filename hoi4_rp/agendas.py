@@ -37,7 +37,8 @@ AIM_WORDS = 12
 PARALLEL = 4
 # Events that change what a country is, so that its agenda written before them is stale
 TRIGGERS = {"war", "peace", "capitulation", "government", "country_new", "country_gone", "faction_left",
-            "faction_founded", "faction_joined", "independence", "subject", "crisis", "fork"}
+            "faction_founded", "faction_joined", "independence", "subject", "crisis", "fork", "civil_war",
+            "faction_dissolved"}
 KINDS = {"oppose": "work against TARGET: contain it, isolate it, prepare for a clash",
          "befriend": "seek TARGET's friendship",
          "back": "stand behind TARGET: protect and support it",
@@ -292,7 +293,7 @@ def generate(camp: campaign.Campaign, w: Dict[str, Dict], tags: List[str], show:
             msgs = prompt(me, cands, snap)
             if show:
                 print(f"----- prompt for {me.name}\n{msgs[0]['content']}\n-----")
-            jobs.append((me, cands, pool.submit(llm.chat, msgs, None, 0.7, 600, "ai:agenda", tag)))
+            jobs.append((me, cands, pool.submit(llm.chat, msgs, None, 0.7, 1500, "ai:agenda", tag)))
         for me, cands, fut in jobs:
             r = {"me": me, "tag": me.tag, "cands": cands, "aims": [], "dropped": [], "raw": "", "error": ""}
             try:

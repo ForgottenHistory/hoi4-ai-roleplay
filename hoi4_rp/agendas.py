@@ -117,6 +117,10 @@ def prompt(me: gamestate.CountryState, cands: Dict[str, List[str]], snap: Dict, 
         + gamestate.describe(me, max_states=10, details=False, spirit_details=False),
         "COUNTRIES THAT TIE YOU (the only ones an aim may name, by tag):\n" + listed,
     ]
+    from . import course
+    way = course.text(me)
+    if way:
+        parts.append(way + " Your aims should serve this course.")
     wt = world.tension_text({me.tag: me.name})
     if wt:
         parts.append(wt)

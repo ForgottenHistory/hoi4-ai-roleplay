@@ -137,6 +137,8 @@ class CountryState:
     parties: List[Party] = field(default_factory=list)
     ideas: List[Named] = field(default_factory=list)          # visible national ideas, save order
     focuses: List[Named] = field(default_factory=list)        # completed national focuses
+    current_focus: str = ""                                    # the focus under way (id)
+    focus_progress: Optional[int] = None                       # its days done
     faction: Optional[str] = None
     faction_leader: Optional[str] = None
     faction_members: List[str] = field(default_factory=list)
@@ -490,6 +492,10 @@ def country(tag: str) -> CountryState:
     s.ideas = _named((_sub_block(politics, "ideas", 3) or "").split(), hide_missing=True)
     focus_block = _sub_block(block, "focus", 2) or ""
     s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
+    cur = re.search(r'\bcurrent="([^"]+)"', focus_block)
+    s.current_focus = cur.group(1) if cur else ""
+    prog = re.search(r'\bprogress=(-?[\d.]+)', focus_block)
+    s.focus_progress = int(float(prog.group(1))) if prog and cur else None
     _diplomacy(s, block)
     _justifications(s, block)
     if s.surrender is not None:

@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, bridge, campaign, agendas, chronicle, crises, plots, diplomacy, game, gamestate, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
+from . import (actions, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -350,8 +350,10 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"{world.text([p.ideology for p in me.parties + them.parties])}\n\n"
         + (f"{wt}\n\n" if (wt := world.tension_text({them.tag: them.name, me.tag: me.name})) else "") +
         f"YOUR COUNTRY:\n{gamestate.describe(them, focus_details=OWN_FOCUSES)}\n\n"
+        + (f"{way}\n\n" if (way := course.text(them)) else "") +
         f"THE COUNTRY YOU CORRESPOND WITH:\n"
-        f"{gamestate.describe(me, focus_details=OTHER_FOCUSES, spirit_details=False)}\n\n"
+        f"{gamestate.describe(me, focus_details=OTHER_FOCUSES, spirit_details=False)}\n"
+        + (f"{way}\n" if (way := course.text(me, own=False)) else "") + "\n"
         f"BETWEEN YOU: {_relation(them, me)}\n\n"
         + (f"{own}\n\n" if (own := plight.text(them, style.current().plight)) else "")
         + (f"{me.name.upper()}'S SITUATION: {theirs}.\n\n" if (theirs := plight.short(me)) else "")

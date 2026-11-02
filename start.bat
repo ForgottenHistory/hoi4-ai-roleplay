@@ -1,0 +1,1 @@
+python -m hoi4_rp run

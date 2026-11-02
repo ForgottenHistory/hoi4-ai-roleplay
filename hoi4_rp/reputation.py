@@ -1,4 +1,5 @@
-"""Reputation: an impartial game master's record of how the player keeps faith, known to every country.
+"""Reputation: an impartial game master's record of whether the player keeps its word, known to every country.
+Not whether it is good or aggressive: whether others can rely on what it says, agrees and promises.
 
 Deeds are found by rules (detect(), from the chronicle each time the world moves):
     the player declared war on a country, with what bound the two just before (ties in the snapshot: a
@@ -14,7 +15,8 @@ threats came true, so a threat from a power that follows through carries weight,
 
 Each deed is then judged in the background by the LLM acting as an impartial game master (not any country): the
 facts, the ties, the letters and promises between the two, and the player's record so far ->
-    WEIGHT: -3..+3      how it reflects on the player's honour and reliability
+    WEIGHT: -3..+3      how far others can rely on its word (a break made openly, with notice and cause, weighs
+                        little; one by surprise or deceit, much)
     VERDICT: one sentence
 Plain lines, parsed leniently (no JSON). The standing every country sees (describe()) sums the weights, older
 deeds fading (half-life HALF_LIFE_YEARS), with the most telling deeds listed and the ones against that country
@@ -346,21 +348,33 @@ def judge_messages(camp: campaign.Campaign, player: str, deed: Dict, world_text:
                + "\n\nTHEIR RECENT LETTERS:\n" + ("\n\n".join(letters) or "None.")
                + f"\n\n{name(player).upper()}'S RECORD SO FAR:\n{record(camp, player, name(player)) or 'Nothing yet.'}")
     return [{"role": "system", "content":
-             f"You are the impartial game master of a Hearts of Iron IV game. You judge how a deed of "
-             f"{name(player)} reflects on its honour and reliability: whether it keeps its word, treaties and "
-             f"promises, as the governments of the world would weigh it. You are not any country and take no side. "
-             f"Breaking a guarantee, pact or promise is grave; attacking without cause or war goal is dishonourable; "
-             f"keeping faith at a cost, defending those it guaranteed, and lenient peace terms are honourable. "
-             f"Context matters: a war against a country that wronged it first is not a betrayal.\n"
+             f"You are the impartial game master of a Hearts of Iron IV game. You judge one thing about a deed of "
+             f"{name(player)}: what it shows about whether other governments can rely on its word, its treaties and "
+             f"its promises. Not whether it is good, peaceful or aggressive: a ruthless power that does exactly what "
+             f"it says is trustworthy, a gentle one that breaks its word is not. You are not any country and take "
+             f"no side.\n"
+             f"- Breaking its word counts: attacking a country it had a pact with, had guaranteed or had assured of "
+             f"peace; dropping a guarantee, a treaty or a promise; not doing what it agreed to.\n"
+             f"- How it was broken counts as much. Openly, with notice, for a reason others can see (the other side "
+             f"broke its terms or wronged it first, the circumstances the deal rested on are gone, the deal was "
+             f"forced on it) is a small mark or none: governments renounce treaties, and saying so plainly is itself "
+             f"keeping faith. Without notice, by surprise after fresh assurances, by deceit, or only for gain is a "
+             f"grave betrayal.\n"
+             f"- War, conquest or harsh terms where it had promised nothing say nothing about its word: weight 0. "
+             f"Carrying out a threat or doing what it announced is no broken promise; if anything it shows its word "
+             f"means something.\n"
+             f"- Keeping its word, above all at a cost (defending a country it guaranteed, paying what it owes when "
+             f"it could get away with not paying, peace terms as promised), earns trust.\n"
              f"Judge only what the record shows. The promises listed are a summary of the letters: where they disagree "
-             f"with the letters themselves, the letters are right. An offer, deal or bet the other side refused binds "
-             f"nothing, and a promise tied to a condition that never came about (a coin toss never made, terms never "
-             f"accepted) was not broken. Carrying out a threat is not breaking a promise: judge it as the aggression "
-             f"it is. Never state as fact anything the record doesn't show.\n\n{context}"},
+             f"with the letters themselves, the letters are right, and the letters show whether it gave notice and "
+             f"why. An offer, deal or bet the other side refused binds nothing, and a promise tied to a condition "
+             f"that never came about (a coin toss never made, terms never accepted) was not broken. Never state as "
+             f"fact anything the record doesn't show.\n\n{context}"},
             {"role": "user", "content":
-             "Answer with exactly two lines:\nWEIGHT: a whole number from -3 (a grave betrayal) to +3 (keeping "
-             "faith at real cost); 0 if it says nothing about honour\nVERDICT: one sentence, plain and neutral, "
-             "saying what was done and why it counts"}]
+             "Answer with exactly two lines:\nWEIGHT: a whole number from -3 (a grave betrayal: its word broken "
+             "without notice or cause) to +3 (its word kept at real cost); 0 if it says nothing about whether its "
+             "word can be relied on\nVERDICT: one sentence, plain and neutral, saying what was done and why it "
+             "counts"}]
 
 
 def read_verdict(text: str) -> Tuple[int, str]:

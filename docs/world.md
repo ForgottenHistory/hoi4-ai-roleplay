@@ -17,7 +17,11 @@ Background work (AI letters, popups, LLM jobs) waits until the game has run a fe
 
 ## Reputation
 
-An impartial game master keeps a record of how you keep faith, known to every country:
+An impartial game master keeps a record of whether your word can be relied on, known to every country. It is about
+trust, not about being good: war or conquest where you promised nothing counts for nothing, and doing what you
+threatened shows your word means something. Breaking a deal openly, with notice and a reason others can see (they
+broke it first, the circumstances are gone), weighs little; breaking it by surprise, after fresh assurances or by
+deceit is a betrayal. Say so in a letter before you break one.
 
 - **Deeds**, found from the chronicle: wars you declared (and what bound you to the victim), wars fought for a country
   you guaranteed, guarantees and pacts you ended in peacetime, peaces you made. Each is judged in the background.

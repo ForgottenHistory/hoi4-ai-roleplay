@@ -1482,7 +1482,7 @@ class _Session:
             return None
         if stage == "dispatch":
             offers, asks, w, threat_ok = ctx
-            text, stance, items, threat = diplomacy.read_dispatch(raw, offers, asks, threat_ok)
+            text, stance, items, threat = diplomacy.read_dispatch(raw, offers, asks, threat_ok, a, b)
             try:
                 msgs, c_offers, c_asks = diplomacy.answer_prompt(camp, gamestate.country(b), gamestate.country(a), w,
                                                                  text, items, threat)
@@ -1493,7 +1493,7 @@ class _Session:
                     (text, stance, items, w, c_offers, c_asks, threat))
         if stage == "answer":
             text, stance, items, w, c_offers, c_asks, threat = ctx
-            reply, answer, b_stance, counter = diplomacy.read_answer(raw, items, c_offers, c_asks)
+            reply, answer, b_stance, counter = diplomacy.read_answer(raw, items, c_offers, c_asks, b, a)
             if answer == "counter":                     # the proposer has the last word on the counter
                 try:
                     msgs = diplomacy.final_prompt(camp, gamestate.country(a), gamestate.country(b), w, text, reply,

@@ -77,7 +77,10 @@ Countries other than you write to each other (`[ai_diplomacy]` in config.ini), l
     `python -m hoi4_rp storyteller [--months N]` simulates it.
 
 An exchange is a dispatch with at most one proposal, the other side's answer (accept, decline or a counter) and a last
-word. A pair waits `cooldown_days` (90) before talking again. AI ultimatums demand only land the sender has a core or
+word. A proposal draws on the same items as a letter to you: agreements, factories, equipment, political power, land,
+resource rights, demilitarization, submission, annexation, handing over a subject, a change of government, wars and
+commitments, as many items as the deal needs. A storyteller incident's proposal holds its guarantee, commitment or
+faction, and may add what is paid or asked for it. A pair waits `cooldown_days` (90) before talking again. AI ultimatums demand only land the sender has a core or
 claim on, and play out like those against you. A guarantee costs its guarantor factories, as yours do.
 
 `python -m hoi4_rp ai-undo` ends pacts, market access, guarantees and commitments it put in place (stop `run` first).

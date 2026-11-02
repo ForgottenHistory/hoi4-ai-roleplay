@@ -1567,7 +1567,7 @@ def _new_goods_notes(keys: List[str]) -> List[str]:
     if any(k in ("give:faction", "give:join", "ask:faction", "ask:join", "give:leave", "ask:leave") for k in keys):
         out.append(FACTION_NOTE)
     if any(is_equipment_key(k) for k in keys):
-        out.append(f"{EQUIPMENT_NOTE} N is a whole number of pieces, at most what the sender has in stock. "
+        out.append(f"{EQUIPMENT_NOTE} N is the whole number of pieces, written out (5000, not 5 for five thousand): an infantry division holds about 1,000 rifles, a few dozen artillery pieces and a few hundred trucks. At most what the sender has in stock. "
                    f"{ECONOMY.get('equipment', '')}".strip())
     if any(is_pp_key(k) for k in keys):
         out.append(f"{PP_NOTE.format(max=MAX_PP)} {ECONOMY.get('pp', '')}".strip())
@@ -1885,6 +1885,11 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
     events: List[Dict] = []
     fmt = {"them": them, "me": me, "them_name": them_name, "me_name": me_name}
     rel = relation(them, me)
+    if any(is_govt_key(k) for k, _ in commands):     # the parties each side could put in power, for possible()
+        try:
+            set_parties(rel, gamestate.country(them), gamestate.country(me))
+        except gamestate.StateError as e:
+            print(f"  parties not read: {e}")
     done = set()
     for key, value in commands:
         if key.startswith(("cede:", "free:", "transfer:")):

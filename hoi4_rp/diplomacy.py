@@ -1,15 +1,17 @@
 """AI-to-AI diplomacy: countries other than the player write to each other.
 
-[ai_diplomacy] mode = dry: exchanges are written and logged, nothing reaches the game. mode = on: an agreed package of
-live kinds (pacts, market access, guarantees, commitments) takes effect, as chronicle news; anything else stays
-logged. A dispatch may also set an ultimatum (ultimatums.py, with `to` another AI country): land demands come only
-this way; the other gives in, counters or lets it stand, and at its deadline the sender decides
-(ultimatum_messages(), ultimatums.decide()).
+[ai_diplomacy] mode = dry: exchanges are written and logged, nothing reaches the game. mode = on: an agreed package
+takes effect, as chronicle news. The menu (menu()) is the player's: agreements, factories, equipment, political
+power, dismantling, land, resource rights, demilitarized border states, submission, annexation, subjects, a change
+of government, wars and commitments, amounts up to what the giver has. A dispatch may also set an ultimatum
+(ultimatums.py, with `to` another AI country) demanding land where the sender holds a core or claim; the other
+gives in, counters or lets it stand, and at its deadline the sender decides (ultimatum_messages(),
+ultimatums.decide()).
 One exchange is two short LLM calls: a dispatch from one government (a few sentences, its stance, at most one
-proposal from a short menu) and the other's answer: accept, decline, or counter with a package of its own (often
-theirs without what it refuses), on which the proposer has the last word in a third call. One round only. The prompts are short by
-design (about 1.5-2k tokens, a tenth of a letter to the player): a card per country, what is in force between
-them, their last few events together.
+proposal) and the other's answer: accept, decline, or counter with a package of its own (often theirs without what
+it refuses, or with its price), on which the proposer has the last word in a third call. One round only. The
+prompts are kept short: a card per country, what is in force between them, their last few events together, and
+the menu.
 
 Who talks to whom (score()): pairs within reach of each other, weighted by what binds or divides them:
     neighbours                       +4    same continent (capitals)        +2
@@ -262,14 +264,20 @@ def _last_exchange(camp: campaign.Campaign, a: str, b: str, name) -> str:
 SHORT_NOTE = ("A proposal is one package the other side accepts or declines whole: propose only what your government "
               "wants and could get, often nothing at all. A guarantee means defending them if attacked; joining a war "
               "or a faction is the gravest step; a commitment (oppose, befriend, back) is a standing diplomatic line "
-              "toward a third country, not a war.")
+              "toward a third country, not a war. Goods, land and resources are traded as well as agreements: a "
+              "package often pairs what you want with what you pay for it (factories, equipment or political power "
+              "for a province or its resources, arms for a pact), as shrewd governments do.")
 WEIGH_NOTE = ("Weigh each item for your own country alone: what it gains and what it costs. A guarantee can drag you "
               "into the other's wars and ties up factories; military access lets foreign armies through your land; "
-              "joining a faction or a war is for life and death; a commitment against a country makes it your enemy. "
+              "joining a faction or a war is for life and death; a commitment against a country makes it your enemy; "
+              "factories, equipment, political power, land and resources given are your strength gone to another. "
               "Take what serves you, counter what only half serves you, decline what serves only them: courtesy is "
               "no reason to agree, and most governments say no more often than yes.")
-MENU_GIVES = ("give:pact", "give:access", "give:guarantee", "give:market", "give:faction", "give:join")
-MENU_ASKS = ("ask:access", "ask:guarantee", "ask:faction", "ask:join")
+# The agreements on the AI menu; goods, land, resource rights, subjects, disarmament and governments come from
+# actions (menu()).
+MENU_GIVES = ("give:pact", "give:access", "give:docking", "give:guarantee", "give:market", "give:faction",
+              "give:join", "give:submit", "give:annex")
+MENU_ASKS = ("ask:access", "ask:docking", "ask:guarantee", "ask:faction", "ask:join", "ask:submit")
 STANCES = ("friendly", "cordial", "indifferent", "wary", "hostile")
 
 
@@ -282,32 +290,57 @@ def may_threaten(camp: campaign.Campaign, a: str, b: str, rel) -> bool:
             and not ultimatums.open_from(camp, a, "*"))
 
 
-def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool = False, only=None
+def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool = False, only=None,
+         states: Optional[Tuple[gamestate.CountryState, gamestate.CountryState]] = None
          ) -> Tuple[List[str], List[str], str]:
-    """What `a` could propose to `b`: (offers, asks, help lines). No factories or governments yet; land only as an
-    ultimatum's demand (`threat`): `b`'s states where `a` holds a core or a claim. `only`: a test on each key, to cut
-    the menu to what an incident (storyteller.py) is about."""
-    from . import actions
+    """What `a` could propose to `b`: (offers, asks, help lines with the notes they need). Agreements, goods
+    (factories, equipment, political power, dismantling), land, resource rights, demilitarized border states,
+    submission, annexation, handing over a subject, wars and commitments, and with `states` (a's and b's
+    CountryState) a change of government. `threat`: an
+    ultimatum may be set (its land demands are the states asked). `only`: a test on each key, to cut the menu to
+    what an incident (storyteller.py) is about."""
+    from . import actions, agendas
     from . import treaties
     rel = actions.relation(a, b)
     rel.pledged = frozenset(treaties.standing_pair(camp, a, b))   # a commitment standing isn't made twice
-    offers = actions.possible_keys(rel, list(MENU_GIVES) + actions.war_gives(rel) + actions.commit_gives(rel))
-    asks = actions.possible_keys(rel, list(MENU_ASKS) + actions.war_asks(rel) + actions.commit_asks(rel))
-    if threat:
-        asks += [k for k in actions.state_asks(rel) if actions.possible(rel, k)
-                 and (s := actions._BORDER_INFO.get(k)) and (s.core or s.claim)]
+    if states:
+        actions.set_parties(rel, *states)
+    offers = actions.possible_keys(rel, list(MENU_GIVES) + actions.GOODS_GIVES + ["give:dismantle"]
+                                   + actions.state_gives(rel) + actions.rights_gives(rel) + actions.dmz_gives(rel)
+                                   + actions.subject_gives(rel) + actions.govt_gives(rel)
+                                   + actions.war_gives(rel) + actions.commit_gives(rel))
+    asks = actions.possible_keys(rel, list(MENU_ASKS) + actions.GOODS_ASKS + actions.state_asks(rel)
+                                 + actions.rights_asks(rel) + actions.dmz_asks(rel)
+                                 + actions.subject_asks(rel) + actions.govt_asks(rel)
+                                 + actions.war_asks(rel) + actions.commit_asks(rel))
     if only:
         offers, asks = [k for k in offers if only(k)], [k for k in asks if only(k)]
     f = actions._fmt(an, bn)
+    actions.economy(an, bn, rel)                   # both sides' industry, stock and political power for the notes
+    actions.union(bn, agendas.wants(camp, a, b))   # an aim of union makes annexation the end of a path
     lines = actions._item_lines("offer ", offers, f) + actions._item_lines("ask ", asks, f)
+    if lines:
+        lines += actions._notes(offers + asks)
     return offers, asks, "\n".join(lines)
+
+
+def valid(giver: str, other: str, items: List[str], allowed: List[str]) -> List[str]:
+    """The items of a package `giver` wrote to `other` that stand: on its menu, an amount where one is needed
+    ([[offer civ 3]], not [[offer civ]]), and no more than the side that pays has."""
+    from . import actions
+    items = [k for k in items if actions.factory_base(k) in allowed
+             and (actions.factory_base(k) not in actions.AMOUNT_KEYS or actions.is_factory_key(k))]
+    if any(actions.is_factory_key(k) for k in items):
+        rel = actions.relation(giver, other)
+        items = [k for k in items if not actions.is_factory_key(k) or actions.possible(rel, k)]
+    return items
 
 
 def _threat_help(an: str, bn: str) -> str:
     from . import ultimatums
     return (f"ULTIMATUM. Only if {an} is truly ready to go to war with {bn} over a grave quarrel: add "
             f"[[ultimatum N months: what you demand]] (N from {ultimatums.MIN_MONTHS} to {ultimatums.MAX_MONTHS}), "
-            f"with your demands as asks above (land only this way: the states listed, where you hold a core or a "
+            f"with your demands as asks above (land you demand on threat of war: a state where you hold a core or a "
             f"claim). It is real: your armies turn toward {bn} at once, and when the deadline passes unmet you must "
             f"choose between war and backing down, before the world. Rare: most dispatches, even hostile ones, set "
             f"none.")
@@ -316,8 +349,8 @@ def _threat_help(an: str, bn: str) -> str:
 def _set_ultimatum_help(an: str, bn: str) -> str:
     from . import ultimatums
     return (f"ULTIMATUM. Your government has decided on it: add [[ultimatum N months: what you demand]] (N from "
-            f"{ultimatums.MIN_MONTHS} to {ultimatums.MAX_MONTHS}), with your demands as asks above (the states "
-            f"listed, where you hold a core or a claim). It is real: your armies turn toward {bn} at once, and when "
+            f"{ultimatums.MIN_MONTHS} to {ultimatums.MAX_MONTHS}), with your demands as asks (the states above "
+            f"where you hold a core or a claim). It is real: your armies turn toward {bn} at once, and when "
             f"the deadline passes unmet you must choose between war and backing down, before the world.")
 
 
@@ -388,26 +421,36 @@ def _only(brief: Dict):
         return lambda key: key in ("give:faction", "ask:faction", "give:join", "ask:join")
     if kind == "commit":
         return lambda key: key in (f"give:{k}:{t}", f"ask:{k}:{t}")
-    return lambda key: actions.is_state(key)
+    return lambda key: (key.startswith("ask:state:") and (s := actions._BORDER_INFO.get(key)) is not None
+                        and (s.core or s.claim))
 
 
 def dispatch_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: gamestate.CountryState,
                     w: Dict[str, Dict], brief: Optional[Dict] = None) -> Tuple[List[Dict], List[str], List[str], bool]:
     """`a`'s dispatch to `b`: (messages, offers, asks, whether it may set an ultimatum). `brief`: the storyteller's
-    incident (storyteller.finish()): the dispatch is about it, the menu is cut to it, and an ultimatum is set only
-    for an ultimatum incident."""
+    incident (storyteller.finish()): the dispatch is about it, its proposal holds the incident's item (anything
+    else on the menu may come with it, given or asked in return), and an ultimatum is set only for an ultimatum
+    incident."""
     from . import actions
     threat = may_threaten(camp, a.tag, b.tag, actions.relation(a.tag, b.tag))
     if brief:
         threat = threat and brief["kind"] == "ultimatum"
-    offers, asks, lines = menu(camp, a.tag, b.tag, a.name, b.name, threat, _only(brief) if brief else None)
+    offers, asks, lines = menu(camp, a.tag, b.tag, a.name, b.name, threat, states=(a, b))
+    n = ("one command per item, as many as a real treaty of this kind would hold (usually a few; more only for "
+         "a grand settlement)")
     if brief:
-        proposal = (f"{_moment(brief, a.name, b.name)} Add the proposal that does it, one command per item (at most "
-                    f"three), unless something in the situation makes {a.name} think better of it:\n{lines}\n{SHORT_NOTE}"
-                    if lines else f"{_moment(brief, a.name, b.name)} Nothing of it is possible any longer: propose "
-                                  f"nothing.")
+        test = _only(brief)
+        f = actions._fmt(a.name, b.name)
+        core = "\n".join(actions._item_lines("offer ", [k for k in offers if test(k)], f)
+                         + actions._item_lines("ask ", [k for k in asks if test(k)], f))
+        proposal = (f"{_moment(brief, a.name, b.name)} Add the proposal that does it, {n}, unless something in the "
+                    f"situation makes {a.name} think better of it. It holds one of these:\n{core}\nand may add "
+                    f"anything below that a real treaty of this kind would bring with it (what you pay for it, or "
+                    f"ask in return):\n{lines}\n{SHORT_NOTE}"
+                    if core else f"{_moment(brief, a.name, b.name)} Nothing of it is possible any longer: propose "
+                                 f"nothing.")
     else:
-        proposal = (f"Only if {a.name} really wants a deal now, add a proposal, one command per item (at most three):\n"
+        proposal = (f"Only if {a.name} really wants a deal now, add a proposal, {n}:\n"
                     f"{lines}\n{SHORT_NOTE}" if lines else "No agreement is possible between you now: propose nothing.")
     help_text = ""
     if threat:
@@ -433,14 +476,15 @@ def answer_prompt(camp: campaign.Campaign, b: gamestate.CountryState, a: gamesta
                  f"already turning toward you. Accepting gives in now; declining leaves {a.name} to choose between "
                  f"war and backing down when the deadline passes; a counter offers less, which {a.name} may take "
                  f"as satisfaction. Weigh the balance of arms and who would stand with you.")
-    c_offers, c_asks, lines = menu(camp, b.tag, a.tag, b.name, a.name) if items else ([], [], "")
+    c_offers, c_asks, lines = menu(camp, b.tag, a.tag, b.name, a.name, states=(b, a)) if items else ([], [], "")
     answer = ""
     if items:
         answer = (f"ANSWER: accept, decline or counter. accept: every item of the package. decline: none of it. "
                   f"counter: you refuse part of it but would agree to a different package; write ANSWER: counter, "
-                  f"then your package as commands, one per item (at most three). Often it is their package without "
-                  f"what you refuse; it may also ask something modest in return (not always a guarantee: market "
-                  f"access, a pact, a commitment, or simply less). {a.name} then accepts or declines it.\n"
+                  f"then your package as commands, one per item. Often it is their package without "
+                  f"what you refuse; it may also name your price: what you want in return (factories, equipment, "
+                  f"political power, resource rights, land, market access, a pact, a commitment), or simply less "
+                  f"of what they ask. {a.name} then accepts or declines it.\n"
                   f"{WEIGH_NOTE}\n")
         if lines:
             answer += f"Commands for a counter (your offers to {a.name} and your requests of it):\n{lines}\n"
@@ -458,7 +502,9 @@ def final_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: gamestat
     task = (f"You wrote to {b.name}:\n\"{text}\"\n\n{b.name} answered:\n\"{reply}\"\nand made a counter-proposal "
             f"instead of yours, a package you accept or decline as a whole: {actions.package_text(counter, b.name)}."
             f"\n\nAnswer in 1 or 2 sentences in {a.name}'s own voice: is the counter-proposal still worth it to "
-            f"{a.name}? {WEIGH_NOTE}\nThen, on lines of their own:\nANSWER: accept or decline\n"
+            f"{a.name}? There is no further round: you cannot change it or offer something else instead. "
+            f"{WEIGH_NOTE}\nThen, on lines of their own:\nANSWER: accept or decline (accept takes every item of it "
+            f"as it stands; if you would refuse any item, decline)\n"
             f"STANCE: one of {', '.join(STANCES)} (how {a.name} regards {b.name} now)")
     return [{"role": "system", "content": _situation(camp, a, b, w) + "\n\n" + task},
             {"role": "user", "content": "Write the answer now."}]
@@ -487,33 +533,34 @@ def _strip(text: str) -> str:
     return re.sub(r"^[\W_]*(stance|answer)[*_\s]*[:\-–].*$", "", text, flags=re.I | re.M).strip()
 
 
-def read_dispatch(raw: str, offers: List[str], asks: List[str], threat_ok: bool = False
-                  ) -> Tuple[str, str, List[str], Optional[Tuple[int, str]]]:
-    """(text, stance, proposal items, the ultimatum's (months, demand) or None) from a dispatch. Land demands stand
-    only with an ultimatum, and an ultimatum only where it may be set and from a stance that means it."""
+def read_dispatch(raw: str, offers: List[str], asks: List[str], threat_ok: bool = False,
+                  a: str = "", b: str = "") -> Tuple[str, str, List[str], Optional[Tuple[int, str]]]:
+    """(text, stance, proposal items, the ultimatum's (months, demand) or None) from `a`'s dispatch to `b`. An
+    ultimatum only where it may be set and from a stance that means it."""
     from . import actions, ultimatums
     stance = next((s for s in STANCES if s in _line(raw, "stance")), "indifferent")
     raw, threat = ultimatums.parse(raw)
     if not threat_ok or stance in ("friendly", "cordial"):
         threat = None
     text, _, proposals = actions.parse(_strip(raw))
-    items = actions.package([p for p in proposals if p in offers + asks], offers + asks)
-    if not threat:
-        items = [k for k in items if not actions.is_state(k)]
-    return _tidy(text), stance, items[:4 if threat else 3], threat
+    allowed = list(offers) + list(asks)
+    items = actions.package(valid(a, b, proposals, allowed) if a else
+                            [p for p in proposals if p in allowed], allowed)
+    return _tidy(text), stance, items, threat
 
 
-def read_answer(raw: str, items: List[str], c_offers: List[str] = (), c_asks: List[str] = ()
-                ) -> Tuple[str, str, str, List[str]]:
-    """(text, answer: accept | decline | counter | '', stance, the counter's items) from an answer. A counter
-    without a valid item is a decline."""
+def read_answer(raw: str, items: List[str], c_offers: List[str] = (), c_asks: List[str] = (),
+                b: str = "", a: str = "") -> Tuple[str, str, str, List[str]]:
+    """(text, answer: accept | decline | counter | '', stance, the counter's items) from `b`'s answer to `a`. A
+    counter without a valid item is a decline."""
     import re
     from . import actions
     stance = next((s for s in STANCES if s in _line(raw, "stance")), "indifferent")
     said = _line(raw, "answer")
     text, _, proposals = actions.parse(_strip(raw))
     allowed = list(c_offers) + list(c_asks)
-    counter = actions.package([p for p in proposals if p in allowed], allowed)[:3] if allowed else []
+    counter = (actions.package(valid(b, a, proposals, allowed) if b else
+                               [p for p in proposals if p in allowed], allowed) if allowed else [])
     if not items:
         answer = ""
     elif "counter" in said and counter:

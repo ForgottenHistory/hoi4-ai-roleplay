@@ -1,0 +1,33 @@
+# Settings and other mods
+
+## config.ini
+
+Your personal copy, created from `config.example.ini` on first run; each key is explained there. Sections:
+
+- `[llm]`: endpoint, model, temperature, token cap, timeout, retries, `log_prompts`
+- `[letters]`: countries writing on their own, gaps between letters and proposals, `style`, `diplomacy`
+- `[story]`: story events and news events, and their gaps
+- `[ai_diplomacy]`: `mode`, `driver`, exchanges per month, cooldown
+- `[world]`: `setting`, `lore_file`, `tension_rules`
+
+The API key is never in the file: it's read from the environment variable named by `api_key_env` (`NANOGPT_API_KEY`).
+
+## Lore and other settings
+
+Nothing depends on vanilla content: countries, parties, leaders and states are read from the running game, so a
+mod's come through as it defines them (Kaiserreich's 10 ideology groups, for instance).
+
+The history the AI reasons from is in plain-text lore files in `lore/`: `vanilla.txt`, `kaiserreich.txt`,
+`halflife.txt` (format in `lore/README.md`). Edit them freely; a new mod is a new file.
+
+    setting = auto      # picks the lore file whose ideologies are in play, or a file name (vanilla, halflife...)
+    lore_file =         # optional text file with your own setting notes, added to every prompt
+
+Countries ruled by a creature ideology (a lore file's `VOICELESS` line, e.g. Xen in Unforeseen Consequences) are no
+government: they write no letters, answer none, and take no part in AI diplomacy or agendas.
+
+## Total conversions
+
+Enable "AI Roleplay" alongside the other mod. Total conversions often `replace_path` whole folders, which drops those
+folders from every mod loaded before them. `write-mod` names such enabled mods as dependencies so AI Roleplay loads
+after them: run it again after changing the playset, and keep AI Roleplay below them in the launcher.

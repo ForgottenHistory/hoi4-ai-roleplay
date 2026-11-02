@@ -1,0 +1,71 @@
+# How the AI countries think
+
+HOI4's own AI plays the countries. This mod decides where they want to go (policies, agendas, the storyteller) and
+pushes HOI4's AI that way. What the game AI is already doing is feedback, so letters don't contradict it.
+
+## Policies toward you
+
+Every country that matters to you (neighbours, overlord and subjects, enemies, faction members, major powers) keeps a
+policy toward you:
+
+- a stance: friendly, cordial, indifferent, wary, hostile
+- urgency 0-3
+- what it would offer you, what it wants from you, what it means to end or impose
+- a few sentences on what it wants and fears
+
+Refreshed every 90 game days or after something happens between you, in the background. Policies shape every letter
+the country writes and when it writes: urgent ones (3) write soon and may make a proposal the point of the letter.
+
+## Steering HOI4's AI
+
+A policy steers the country's game AI, so what it says it does:
+
+- How it answers your diplomatic requests (access, docking, market, call to arms, joining its faction): friendly +40,
+  cordial +15, wary -20, hostile -50 on the game's acceptance score ("Strategic reasons"), +30 for what its policy
+  says it would grant.
+- What it does with you: friendly befriends, protects and supports you; cordial befriends mildly; wary contains;
+  hostile contains and antagonizes. Within the game's own rules (tension thresholds etc).
+- Subjects, overlords and faction members only answer requests. At war with you, nothing: the war is the game's.
+
+Commitments made by letter steer toward their target too. Only differences are pushed and every push is kept, so it
+can be undone exactly; loading an earlier save forgets later pushes.
+
+## What countries know about themselves
+
+- **Course**: the focus under way and the likely next ones, from the AI strategy plans in force, followed through the
+  focus tree, with rival paths at a fork. Taking a side at a fork is a chronicle event.
+- **Intent**: what the country's game AI is set on toward others (its AI strategies, decoded). For realism only;
+  agendas never read it.
+- **National spirits** with their effects, read from the game's and mods' files.
+- **Leader**: name, sub-ideology, traits and biography from the game files.
+
+`python -m hoi4_rp course [TAG]` and `intent [TAG]` print them.
+
+## Agendas
+
+What each country wants from the world: one to four aims, each with a target and a kind (`oppose`, `befriend`,
+`back`, `land`, `build`, `neutral`), e.g. `contain Germany [oppose GER]`. An aim may only name a country the map ties
+to it (neighbour, enemy, war goal, faction tie, strong opinion, rival major), so a scrambled map gets aims that follow
+it, not real history. Refreshed every 180 days or after a war, a new government and the like.
+`python -m hoi4_rp agendas [TAG ...]`
+
+Countries in your story may aim at union with you, and treat annexation as the end of their own path.
+
+## AI-to-AI diplomacy
+
+Countries other than you write to each other (`[ai_diplomacy]` in config.ini), logged to `data/logs/ai_diplomacy.txt`.
+
+- `mode`: `off` (default), `dry` (written and logged only) or `on` (every deal kind they agree takes effect, as it
+  would in a letter to you, and enters the chronicle as news).
+- `driver`: who starts the exchanges.
+  - `random` (default): a few pairs a month (`exchanges_per_month`), weighted by what ties them; more on your continent.
+  - `storyteller`: once a month one incident is picked from the agendas, blocs (countries whose aims line up) and your
+    plotlines: a guarantee, a commitment, an ultimatum (needs 10% tension, at most every 6 months), a country reaching
+    out to you, or a quiet month. Python lists what the game allows first; the LLM picks from that list.
+    `python -m hoi4_rp storyteller [--months N]` simulates it.
+
+An exchange is a dispatch with at most one proposal, the other side's answer (accept, decline or a counter) and a last
+word. A pair waits `cooldown_days` (90) before talking again. AI ultimatums demand only land the sender has a core or
+claim on, and play out like those against you. A guarantee costs its guarantor factories, as yours do.
+
+`python -m hoi4_rp ai-undo` ends pacts, market access, guarantees and commitments it put in place (stop `run` first).

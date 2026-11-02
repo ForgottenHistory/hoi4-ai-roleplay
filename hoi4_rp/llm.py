@@ -134,23 +134,35 @@ def usage_report(days: float = 1.0) -> str:
 
 
 def _strip_thinking(text: str) -> str:
-    # Some models inline their reasoning as <think>...</think> before the answer.
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    # Some models inline their reasoning as <think>...</think> before the answer; one cut off mid-thought
+    # has no closing tag and no answer.
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    return re.sub(r"<think>.*", "", text, flags=re.S).strip()
 
 
 def chat(messages: List[Dict[str, str]], model_name: Optional[str] = None,
          temperature: Optional[float] = None, max_tokens: Optional[int] = None,
          kind: str = "", about: str = "") -> str:
     """Send a chat and return the reply text. Arguments left as None use config.ini.
-    Retries server errors (5xx) and timeouts. `kind` and `about` (a country tag) label the call in the log."""
-    started = time.monotonic()
-    try:
-        reply, usage = _chat(messages, model_name, temperature, max_tokens)
-    except LLMError as e:
-        _log(kind, about, messages, "", {}, time.monotonic() - started, model_name or model(), str(e))
-        raise
-    _log(kind, about, messages, reply, usage, time.monotonic() - started, model_name or model())
-    return reply
+    Retries server errors (5xx) and timeouts. `kind` and `about` (a country tag) label the call in the log.
+    A reply left empty because the model's reasoning used up the token budget is asked again once, with
+    twice the budget."""
+    budget = max_tokens or settings().llm.max_tokens
+    for attempt in range(2):
+        started = time.monotonic()
+        try:
+            reply, usage, finish = _chat(messages, model_name, temperature, budget)
+        except LLMError as e:
+            _log(kind, about, messages, "", {}, time.monotonic() - started, model_name or model(), str(e))
+            raise
+        out_of_budget = not reply and finish == "length"
+        _log(kind, about, messages, reply, usage, time.monotonic() - started, model_name or model(),
+             "empty: reasoning used the token budget" if out_of_budget else "")
+        if not out_of_budget or attempt:
+            return reply
+        print(f"  [LLM] {kind or 'call'} {about}: reasoning used all {budget} tokens, asking again with {budget * 2}")
+        budget *= 2
+    return ""
 
 
 def _chat(messages: List[Dict[str, str]], model_name: Optional[str], temperature: Optional[float],
@@ -183,7 +195,9 @@ def _chat(messages: List[Dict[str, str]], model_name: Optional[str], temperature
                 continue
             raise LLMError(f"LLM request failed: {e}") from None
     try:
-        content = data["choices"][0]["message"]["content"] or ""
+        choice = data["choices"][0]
+        content = choice["message"]["content"] or ""
     except (KeyError, IndexError, TypeError):
         raise LLMError(f"unexpected LLM reply: {str(data)[:500]}") from None
-    return _strip_thinking(content), (data.get("usage") or {}) if isinstance(data, dict) else {}
+    usage = (data.get("usage") or {}) if isinstance(data, dict) else {}
+    return _strip_thinking(content), usage, choice.get("finish_reason") or ""

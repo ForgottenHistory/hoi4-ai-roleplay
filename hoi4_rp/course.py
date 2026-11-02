@@ -14,14 +14,20 @@ focuses' ai_will_do.
                                       or the fork it is undecided at; own=False: the focus under way only (what any
                                       country can see in the game)
 
+    short(tag)                        one line of it, for the short prompts (AI-to-AI cards, storyteller, crises)
+    track(camp)                       weekly: a country that took a side at a remembered fork becomes a chronicle
+                                      event, type "fork" (news popups, the ledger's World tab, a fresh agenda)
+
     python -m hoi4_rp course [TAG ...]   print the course of these countries
 
-Nothing is stored: everything is read from the running game and its files, so a loaded earlier save needs nothing.
-The focus trees and plans are read once per run (`write-mod` or a restart of `run` brings in changed mods).
+The course is read from the running game and its files. Only the open forks are stored (data["forks"] = {"checked",
+"open": {tag: {"date", "sides": [{"key": the focus where the side begins, "names"}]}}}), so that taking a side can be
+noticed. The focus trees and plans are read once per run (a restart of `run` brings in changed mods).
 """
 
 from __future__ import annotations
 
+import re
 import time
 from functools import lru_cache
 from typing import Dict, List, Optional, Set, Tuple
@@ -37,7 +43,7 @@ PLAN_CACHE_S = 600        # which plans are in force, re-checked after this long
 
 
 class Focus:
-    __slots__ = ("id", "prereqs", "exclusive", "days", "ai")
+    __slots__ = ("id", "prereqs", "exclusive", "days", "ai", "reward")
 
     def __init__(self, fid: str):
         self.id = fid
@@ -45,6 +51,37 @@ class Focus:
         self.exclusive: Set[str] = set()
         self.days = 70
         self.ai = 1.0                            # ai_will_do base factor
+        self.reward: Set[str] = set()            # every word of its completion_reward (effects, tags, values)
+
+
+def _words(node) -> Set[str]:
+    out: Set[str] = set()
+    for k, _, v in node:
+        out.add(k)
+        if isinstance(v, list):
+            out |= _words(v)
+        elif v:
+            out.add(v)
+    return out
+
+
+# What a focus must hold to have caused a chronicle event about another country (besides naming its tag)
+CAUSES = {
+    "subject": {"puppet", "set_autonomy", "annex_country"},
+    "independence": {"end_puppet", "release", "release_puppet", "set_autonomy"},
+    "faction_joined": {"create_faction", "add_to_faction", "join_faction"},
+    "faction_founded": {"create_faction"},
+    "territory": {"transfer_state", "set_state_owner", "annex_country", "set_state_controller"},
+}
+
+
+def caused(fid: str, kind: str, other: str = "") -> bool:
+    """Could the focus `fid` have brought about a chronicle event of `kind` with `other`? Its completion reward
+    names `other`, or holds an effect of that kind. A focus that does it through an event it fires is missed."""
+    f = focuses().get(fid)
+    if not f:
+        return False
+    return bool(other and other in f.reward) or bool(f.reward & CAUSES.get(kind, set()))
 
 
 def _read(path: str):
@@ -67,6 +104,8 @@ def _focus(body) -> Optional[Focus]:
             f.exclusive |= {v for kk, _, v in val if kk.lower() == "focus" and isinstance(v, str)}
         elif k == "cost":
             f.days = int((g.num(val) or 10) * 7)
+        elif k in ("completion_reward", "select_effect") and isinstance(val, list):
+            f.reward |= _words(val)
         elif k == "ai_will_do" and isinstance(val, list):
             base = g.num(g.get(val, "factor"))
             f.ai = base if base is not None else (g.num(g.get(val, "base")) or 1.0)
@@ -238,6 +277,126 @@ def branches(tag: str, completed: List[str], current: str = "", count: int = FOR
     return [_simulate(grp, completed, current, count) for grp in groups]
 
 
+def fork(tag: str, completed: List[str], current: str = "") -> Optional[Tuple[List[str], List[List[str]]]]:
+    """(the focuses taken either way, [each side's own focuses, from where they split]) when the plans in force for
+    `tag` pull different ways, else None."""
+    if len(plans_of(tag)) < 2:
+        return None
+    forks = branches(tag, completed, current)
+    if len(forks) < 2:
+        return None
+    sides = [_side(b, [o for o in forks if o is not b]) for b in forks]
+    if sum(1 for x in sides if x) < 2:
+        return None
+    shared = [f for f in forks[0] if all(f in b for b in forks[1:])]
+    return shared, [x for x in sides if x]
+
+
+def _names(ids) -> Dict[str, str]:
+    """Display names of focuses, those without one left out."""
+    ids = sorted(set(ids))
+    return {n.id: n.name for n in gamestate._named(ids, hide_missing=False) if n.name != n.id} if ids else {}
+
+
+def focus_state(tag: str) -> Tuple[List[str], str]:
+    """(completed focus ids, the one under way) of `tag`, from one read of its block."""
+    block = gamestate._sub_block(bridge.country_block(tag.upper()), "focus", 2) or ""
+    cur = re.search(r'\bcurrent="([^"]+)"', block)
+    return re.findall(r'completed="([^"]+)"', block), cur.group(1) if cur else ""
+
+
+@lru_cache(maxsize=1)
+def _player() -> str:
+    try:
+        return gamestate.player_tag()
+    except Exception:
+        return ""
+
+
+def short(tag: str, own: bool = True) -> str:
+    """One line for the short prompts (AI-to-AI cards, the storyteller, crises): 'working on X; next: A, B' or
+    'undecided between A and B'. own=False, and always for the player's country: the focus under way only."""
+    try:
+        completed, current = focus_state(tag)
+        if tag == _player():
+            own = False
+        split = fork(tag, completed, current) if own else None
+        nxt = path(tag, completed, current, count=3)[0] if own and not split else []
+        named = _names(([current] if current else []) + nxt
+                       + ([f for x in split[1] for f in x[:2]] if split else []))
+    except (gamestate.StateError, bridge.BridgeError):
+        return ""
+    bits = [f"working on the national focus {named[current]}"] if current in named else []
+    if split:
+        sides = [" then ".join(named[f] for f in x[:2] if f in named) for x in split[1]]
+        bits.append("undecided between " + " or ".join(x for x in sides if x))
+    elif nxt and any(f in named for f in nxt):
+        bits.append("next: " + ", ".join(named[f] for f in nxt if f in named))
+    return "; ".join(bits)
+
+
+# ---------------------------------------------------------------- forks as events
+
+TRACK_DAYS = 7            # game days between checks
+
+
+def _forks(camp) -> Dict:
+    return camp.data.setdefault("forks", {"checked": "", "open": {}})
+
+
+def track(camp) -> List[Dict]:
+    """Every TRACK_DAYS: the forks of the major powers and the countries with agendas or letters. A fork the country
+    has now taken a side of (the focus where its side begins completed or under way) becomes a chronicle event, type
+    "fork"; new forks are remembered. Returns the new events (not yet added)."""
+    from . import campaign, chronicle
+    snap = camp.snapshot or {}
+    today = snap.get("date", "")
+    st = _forks(camp)
+    if not today or (st["checked"] and today < campaign.shift(st["checked"], TRACK_DAYS)):
+        return []
+    st["checked"] = today
+    c = snap.get("countries", {})
+    player = camp.data["player"]
+    tags = ({t for t, x in c.items() if x.get("major")} | set(camp.data.get("agendas") or {}) | chronicle.WATCH)
+    events = []
+    for tag in sorted(t for t in tags if t in c and t != player and not c[t].get("capitulated")):
+        try:
+            completed, current = focus_state(tag)
+            split = fork(tag, completed, current)
+        except (gamestate.StateError, bridge.BridgeError):
+            continue
+        taken = set(completed) | {current}
+        old = st["open"].get(tag)
+        chosen = next((x for x in old["sides"] if x["key"] in taken), None) if old else None
+        if chosen:
+            name = c[tag].get("name", tag)
+            toward = f" (toward {', '.join(chosen['names'][1:])})" if len(chosen["names"]) > 1 else ""
+            away = " and ".join(x["names"][0] for x in old["sides"] if x is not chosen and x["names"])
+            text = (f"{name} settled its course: it took up {chosen['names'][0]}{toward}, turning away from "
+                    f"{away}.")
+            events.append({"date": today, "when": campaign.date_words(today), "type": "fork", "tags": [tag],
+                           "text": text, "major": bool(c[tag].get("major"))})
+            print(f"  [course] {text}")
+        if split:
+            sides = split[1]
+            named = _names(f for x in sides for f in x[:FORK_SHOWN])
+            keys = [x[0] for x in sides]
+            if not old or chosen or [x["key"] for x in old["sides"]] != keys:
+                st["open"][tag] = {"date": today, "sides": [
+                    {"key": x[0], "names": [named[f] for f in x[:FORK_SHOWN] if f in named] or [x[0]]}
+                    for x in sides]}
+        else:
+            st["open"].pop(tag, None)
+    return events
+
+
+def drop_after(camp, key: str) -> None:
+    """An earlier save was loaded: forks first seen from then on are forgotten, and the next check reads them again."""
+    st = _forks(camp)
+    st["open"] = {t: x for t, x in st["open"].items() if x["date"] < key}
+    st["checked"] = ""
+
+
 def open_next(completed: List[str], current: str = "") -> List[str]:
     """The focuses open once the current one is done (for a country without a plan): those it unlocks first, then by
     ai_will_do."""
@@ -278,12 +437,11 @@ def text(s: gamestate.CountryState, own: bool = True) -> str:
         if not own:
             return f"{s.name} is working on the national focus {now}." if now else ""
         completed = [f.id for f in s.focuses]
-        forks = branches(s.tag, completed, s.current_focus) if len(plans_of(s.tag)) > 1 else []
+        split = fork(s.tag, completed, s.current_focus)
         nxt, planned = path(s.tag, completed, s.current_focus)
         if not planned:
             nxt = open_next(completed, s.current_focus) if s.current_focus else nxt
-        ids = set(nxt) | {f for b in forks for f in b}
-        named = {n.id: n.name for n in gamestate._named(sorted(ids), hide_missing=False) if n.name != n.id}
+        named = _names(set(nxt) | ({f for x in split[1] for f in x} | set(split[0]) if split else set()))
     except (gamestate.StateError, bridge.BridgeError):
         return ""
     names = lambda fs: [named[f] for f in fs if f in named]
@@ -292,17 +450,15 @@ def text(s: gamestate.CountryState, own: bool = True) -> str:
     lines = ["YOUR GOVERNMENT'S COURSE (its national focuses: where it is headed in the months to come; events may "
              "change it):"]
     lines.append(f"- Now: {now}" if now else "- No national focus under way.")
-    if len(forks) > 1:
-        shared = [f for f in forks[0] if all(f in b for b in forks[1:])]
-        sides = [names(_side(b, [o for o in forks if o is not b]))[:FORK_SHOWN] for b in forks]
-        if any(sides):
-            if names(shared):
-                lines.append(f"- Either way: {', '.join(names(shared)[:FORK_SHOWN])}.")
-            lines.append("- Undecided between rival courses, and the choice is not made yet: "
-                         + "; or ".join(", ".join(x) for x in sides if x) + ".")
-            lines.append("Your government is torn between them: let that show (factions pulling different ways, "
-                         "caution about committing), without naming focuses as game mechanics.")
-            return "\n".join(lines)
+    if split:
+        shared, sides = split
+        if names(shared):
+            lines.append(f"- Either way: {', '.join(names(shared)[:FORK_SHOWN])}.")
+        lines.append("- Undecided between rival courses, and the choice is not made yet: "
+                     + "; or ".join(", ".join(names(x)[:FORK_SHOWN]) for x in sides) + ".")
+        lines.append("Your government is torn between them: let that show (factions pulling different ways, "
+                     "caution about committing), without naming focuses as game mechanics.")
+        return "\n".join(lines)
     if names(nxt) and planned:
         lines.append(f"- Then, as it plans: {', '.join(names(nxt))}.")
     elif names(nxt):

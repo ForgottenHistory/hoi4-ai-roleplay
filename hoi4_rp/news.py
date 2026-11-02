@@ -83,7 +83,8 @@ def due(camp: campaign.Campaign) -> Optional[Dict]:
     if n["shown"] and _days(today) - _days(n["shown"][-1]["date"]) < cfg.news_gap_days:
         return None
     fresh = campaign.shift(today, -FRESH_DAYS)
-    found = [e for e in camp.data["events"] if e.get("type") in ("news", "crisis") and e["date"] > n["told"]
+    found = [e for e in camp.data["events"] if (e.get("type") in ("news", "crisis")
+                                                or e.get("type") == "fork" and e.get("major")) and e["date"] > n["told"]
              and e["date"] >= fresh and camp.data["player"] not in e["tags"]]
     return found[-1] if found else None
 

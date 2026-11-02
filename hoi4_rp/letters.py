@@ -85,16 +85,28 @@ def show_reputation(camp: campaign.Campaign, player: str, last: Tuple[str, float
     return text, time.monotonic()
 
 
-def show_ledger(camp: campaign.Campaign, player: str, block: str, last: str) -> str:
-    """While the ledger window is open (airp_ledger_open), set its heading and body for the chosen tab
-    (airp_ledger_tab) whenever they change. `last` is the text last set ("" while closed); returns the new one.
-    Not set again while unchanged: that would scroll the player back to the top."""
-    if not re.search(r"\bairp_ledger_open=", block):
+def ledger_tab(player: str) -> Optional[int]:
+    """The ledger tab chosen (airp_ledger_tab), or None while the window is closed (no airp_ledger_open). One small
+    query, not a read of the country block, as it is asked twice a second."""
+    lines = gamestate.query(f'{player} = {{ if = {{ limit = {{ has_variable = airp_ledger_open }} '
+                            f'log = "AIRPLEDGER|[?airp_ledger_tab]" }} }}')
+    for line in lines:
+        if line.startswith("AIRPLEDGER|"):
+            try:
+                return int(float(line[11:].strip()) or 1)
+            except ValueError:
+                return 1
+    return None
+
+
+def show_ledger(camp: campaign.Campaign, player: str, tab: Optional[int], last: str) -> str:
+    """While the ledger window is open (tab not None), set its heading and body for the chosen tab whenever they
+    change. `last` is the text last set ("" while closed); returns the new one. Not set again while unchanged: that
+    would scroll the player back to the top."""
+    if tab is None:
         return ""
-    m = re.search(r"\bairp_ledger_tab=(\d+)", block)
     names = (camp.snapshot or {}).get("countries", {})
-    head, body = ledger.text(camp, player, int(m.group(1)) if m else 1,
-                             lambda t: names.get(t, {}).get("name", t), _clean_for_game)
+    head, body = ledger.text(camp, player, tab, lambda t: names.get(t, {}).get("name", t), _clean_for_game)
     text = head + "|" + body
     if text == last:
         return last
@@ -1155,6 +1167,10 @@ class _Session:
                 for d in reputation.detect(camp, player, old, snap, events):
                     print(f"  reputation: deed to judge: {d['facts']}")
             camp.snapshot = snap
+            if old is not None:
+                settled = course.track(camp)            # a country that took a side at a fork of its course
+                camp.add_events(settled)
+                events = events + settled
             camp.record_surrender(snap)
             camp.save()
             if old is not None:
@@ -1863,12 +1879,33 @@ def _log_to_file() -> str:
     return path
 
 
+def _ledger_loop(session: "_Session") -> None:
+    """Keep the ledger window's text up to date, whatever the main loop is busy with."""
+    failed = ""
+    while True:
+        try:
+            camp = session.camp
+            if camp:
+                player = camp.data["player"]
+                session.ledger_shown = show_ledger(camp, player, ledger_tab(player), session.ledger_shown)
+            failed = ""
+        except (bridge.BridgeUnavailable, gamestate.StateError, RuntimeError):
+            time.sleep(3)                          # no game, or not in one: the main loop says so
+        except Exception as e:                     # e.g. the campaign changing while it was read: next time
+            if repr(e) != failed:
+                print(f"  ledger: {e!r}")
+                failed = repr(e)
+        time.sleep(POLL_SECONDS)
+
+
 def run() -> int:
     path = _log_to_file()
     print(f"watching for letters and world events (model {llm.model()}). Ctrl+C to stop. Log: {path}")
     session = _Session()
     # Leader biographies are indexed from the game and mod files (several seconds for big mods): do it now.
     threading.Thread(target=leaders.warm, daemon=True).start()
+    # The ledger window answers in its own thread: this loop waits on the model while it writes a reply
+    threading.Thread(target=_ledger_loop, args=(session,), daemon=True).start()
     while True:
         try:
             player = bridge.player_tag()
@@ -1877,8 +1914,6 @@ def run() -> int:
                 session.rep_shown = show_reputation(session.camp, player, session.rep_shown)
                 session.treaties_shown = show_treaties(session.camp, player, session.treaties_shown)
             block = bridge.country_block(player)
-            if session.camp:
-                session.ledger_shown = show_ledger(session.camp, player, block, session.ledger_shown)
             to = read_outbox(block)
             if to:
                 # Clear first so the same letter is never handled twice.

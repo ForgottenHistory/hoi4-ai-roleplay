@@ -40,7 +40,7 @@ import re
 import time
 from typing import Dict, List, Optional, Tuple
 
-from . import agendas, campaign, gamestate, world
+from . import agendas, campaign, course, gamestate, world
 
 KINDS = {"guarantee": "FROM and TO exchange a guarantee: one of them will defend the other",
          "commit": "FROM asks TO to join it in its AIM: to work against, befriend or stand behind the AIM's target "
@@ -240,8 +240,9 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
         parts.append(f"COUNTRIES THAT MAY WRITE TO THE PLAYER (INCIDENT reach_out; TO is {player}):\n" + "\n".join(
             f"- {name(t)} ({t}) [{o[0]['aim']['aim']}]" for (t, _), o in reach.items()))
     if tags:
-        parts.append("AGENDAS (what each country wants):\n" + "\n".join(
-            f"{name(t)} ({t}):\n{_aims_lines(camp, t)}" for t in tags))
+        course_line = lambda t: f"\n  course: {way}" if (way := course.short(t)) else ""
+        parts.append("AGENDAS (what each country wants, and the course its national focuses take):\n" + "\n".join(
+            f"{name(t)} ({t}):\n{_aims_lines(camp, t)}{course_line(t)}" for t in tags))
 
     def possible(x: str, y: str) -> str:
         found = opts.get((x, y), [])

@@ -29,7 +29,8 @@ MAX_CHARS = 20000       # the game draws the whole text each frame the window is
 _CHRONICLE = {"war", "peace", "territory", "subject", "capitulation", "country_gone", "country_new", "government",
               "leader", "faction_founded", "faction_joined", "faction_left", "independence", "wargoal",
               "justification", "focus"}
-_HEADLINES = _CHRONICLE - {"territory", "focus"}     # territory changes come by the dozen in a big war
+_HEADLINES = _CHRONICLE - {"territory", "focus"} | {"fork"}  # territory changes come by the dozen in a big war;
+                                                              # a fork: a country settling its course (course.py)
 
 # Colour of an event kind's date, so the eye finds the bad news.
 _RED = ("treaty:broken", "ultimatum:issued", "ultimatum:war", "war", "capitulation", "crisis", "country_gone")
@@ -59,7 +60,7 @@ def entries(camp: campaign.Campaign, player: str, tab: int, name: Callable[[str]
         if tab == 1:
             keep = player in e.get("tags", []) and kind != "focus"
         elif tab == 2:
-            keep = not _chronicle(kind)
+            keep = not _chronicle(kind) and kind != "fork"
         elif tab == 3:
             keep = kind in _HEADLINES and e.get("major")
         else:

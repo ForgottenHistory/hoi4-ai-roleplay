@@ -322,19 +322,25 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
     # Older snapshots held the player's alone, as a list.
     as_dict = lambda f: f if isinstance(f, dict) else ({player: f} if player else {})
     of, nf = as_dict(old.get("focuses")), as_dict(new.get("focuses"))
+    from . import course
     for tag in nf.keys() & of.keys():
         done = {f[0] for f in of[tag]}
-        fresh = [f[1] for f in nf[tag] if f[0] not in done]
-        for focus in fresh:
+        fresh = [f for f in nf[tag] if f[0] not in done]
+        for _, focus in fresh:
             add([tag], f"{name(tag)} completed the national focus \"{focus}\".", "focus")
             events[-1]["major"] = tag == player          # a major power's focus is not world news in itself
-        if fresh:
-            because = f" This followed {name(tag)}'s national focus \"{fresh[-1]}\"."
-            for e in events:
-                if (e["type"] in ("subject", "independence", "faction_joined", "faction_founded", "territory")
-                        and tag in e["tags"][:1 if e["type"] == "territory" else 2]
-                        and "national focus" not in e["text"]):
-                    e["text"] += because
+        for e in events if fresh else ():
+            if (e["type"] not in course.CAUSES or tag not in e["tags"][:1 if e["type"] == "territory" else 2]
+                    or "national focus" in e["text"]):
+                continue
+            other = next((t for t in e["tags"][:2] if t != tag), "")
+            # only a focus that could have done it (it names the other country, or holds such an effect)
+            try:
+                cause = next((n for fid, n in reversed(fresh) if course.caused(fid, e["type"], other)), None)
+            except Exception:                            # the game files unreadable: say nothing
+                cause = None
+            if cause:
+                e["text"] += f" This followed {name(tag)}'s national focus \"{cause}\"."
     return events
 
 

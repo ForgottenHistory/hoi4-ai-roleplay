@@ -207,6 +207,10 @@ def card(s: gamestate.CountryState, w: Dict, other: str) -> str:
         bits.append("holds war goals on " + ", ".join(dict.fromkeys(s.name_of(g.other) for g in s.wargoals[:4])))
     if other in s.opinion:
         bits.append(f"its opinion of {s.name_of(other)}: {round(s.opinion[other]):+d}")
+    from . import course
+    way = course.short(s.tag)
+    if way:
+        bits.append(way)
     return "- " + "; ".join(bits) + "."
 
 

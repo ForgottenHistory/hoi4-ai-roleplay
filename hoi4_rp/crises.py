@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-from . import agendas, campaign, chronicle, plots, world
+from . import agendas, campaign, chronicle, course, plots, world
 
 GAP_DAYS = 28            # a try about this often (most come to nothing)
 MAX_OPEN = 3
@@ -140,6 +140,9 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], pairs: Lis
         taken = chronicle.recent_focuses(camp.data["events"], t, now)
         if taken:
             bits.append("recent national focuses: " + ", ".join(taken))
+        way = course.short(t)
+        if way:
+            bits.append(way)
         aims = agendas.describe(camp, t, name)
         lines.append("; ".join(bits) + ("\n" + "\n".join("    " + a for a in aims.splitlines()) if aims else ""))
     parts = [

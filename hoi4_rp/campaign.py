@@ -166,8 +166,9 @@ class Campaign:
                 rep["threats"] = [x for x in rep.get("threats", []) if x["date"] < key]
             self.data["surrender"] = {t: [x for x in h if x[0] < key]
                                       for t, h in self.data.get("surrender", {}).items()}
-            from . import agendas, crises, plots, diplomacy, guarantees, news, steering, story, storyteller, treaties, ultimatums
+            from . import agendas, course, crises, plots, diplomacy, guarantees, news, steering, story, storyteller, treaties, ultimatums
             agendas.drop_after(self, key)
+            course.drop_after(self, key)
             crises.drop_after(self, key)
             plots.drop_after(self, key)
             storyteller.drop_after(self, key)

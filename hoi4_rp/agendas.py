@@ -37,7 +37,7 @@ AIM_WORDS = 12
 PARALLEL = 4
 # Events that change what a country is, so that its agenda written before them is stale
 TRIGGERS = {"war", "peace", "capitulation", "government", "country_new", "country_gone", "faction_left",
-            "faction_founded", "faction_joined", "independence", "subject", "crisis"}
+            "faction_founded", "faction_joined", "independence", "subject", "crisis", "fork"}
 KINDS = {"oppose": "work against TARGET: contain it, isolate it, prepare for a clash",
          "befriend": "seek TARGET's friendship",
          "back": "stand behind TARGET: protect and support it",

@@ -1962,13 +1962,14 @@ def outcome_text(shown: List[Tuple[str, bool]]) -> str:
     return "\n".join(f"§{'R' if hostile else 'G'}{line}§!" for line, hostile in shown)
 
 
-def package(proposals: List[str], allowed: List[str]) -> List[str]:
+def package(proposals: List[str], allowed: List[str], wager: bool = False) -> List[str]:
     """The proposal items to keep: allowed ones, each once, as many as the letter proposes (no limit: a cut once
     left Italy's 8-item deal with only the 3 things it gave). The resource rights or demilitarization of a state
-    that changes hands in the same package go (the state carries them)."""
+    that changes hands in the same package go (the state carries them). In a wager only one side's stake is paid,
+    so submission or annexation may be staked against other things."""
     kept = list(dict.fromkeys(p for p in proposals if factory_base(p) in allowed))
     for alone in ("give:peace", "give:submit", "ask:submit", "give:annex"):         # offered on their own, never bundled
-        if alone in kept:
+        if alone in kept and not (wager and alone != "give:peace"):
             return [alone]
     moved = {(k.split(":")[0], k.rsplit(":", 1)[1]) for k in kept if is_state(k)}
     kept = [k for k in kept if not ((is_rights(k) or is_dmz(k)) and (k.split(":")[0], k.rsplit(":", 1)[1]) in moved)]

@@ -65,6 +65,7 @@ _TERM = re.compile(r"\[\[\s*for\s+(\d+)\s*(months?|years?)\s*\]\]", re.I)
 _INSTALMENTS = re.compile(r"\[\[\s*((?:offer|ask)\s+)?(" + "|".join(actions.AMOUNT_KINDS) + r")\s+(\d+)\s*"
                           r"(?:(?:x|×|times)\s*(\d+))?(?:\s*,?\s*every\s+(\d+)\s*(?:months?)?)?"
                           r"(?:\s*,?\s*(?:in|after)\s+(\d+)\s*(months?|years?)?)?\s*\]\]", re.I)
+_WAGER = re.compile(r"\[\[\s*(?:wager|bet|gamble|coin(?:\s*(?:flip|toss))?)\s*\]\]", re.I)
 
 
 # ---------------------------------------------------------------- reading terms from a letter
@@ -73,8 +74,11 @@ def parse_terms(text: str) -> Tuple[str, Dict]:
     """Take terms out of the letter: (text with plain commands left, {"months": N, "payments": {key: [count,
     every, start]}}). An instalment command becomes the plain one: [[offer civ 2 x3]] -> [[offer civ 2]], the first
     payment made now; with "in N months" ([[offer civ 1 in 12 months]]) the first payment waits that long and
-    nothing is paid now (deferred())."""
+    nothing is paid now (deferred()). [[wager]] makes the proposal a coin toss ("wager": True)."""
     terms: Dict = {"months": 0, "payments": {}}
+    if _WAGER.search(text):
+        terms["wager"] = True
+        text = _WAGER.sub("", text)
     m = _TERM.search(text)
     if m:
         n = int(m.group(1)) * (12 if m.group(2).lower().startswith("year") else 1)
@@ -107,9 +111,16 @@ def deferred(terms: Optional[Dict], key: str) -> bool:
 def for_items(terms: Optional[Dict], items: List[str]) -> Dict:
     """The part of a letter's terms that concerns these deal items."""
     terms = terms or {}
-    pay = {k: v for k, v in (terms.get("payments") or {}).items() if k in items}
+    wager = is_wager(terms, items)                     # the stakes change hands once, now: no instalments
+    pay = {} if wager else {k: v for k, v in (terms.get("payments") or {}).items() if k in items}
     lasting = any(_endable(k) or actions.is_pledge(k) or actions.is_align(k) for k in items)
-    return {"months": terms.get("months", 0) if lasting else 0, "payments": pay}
+    return {"months": terms.get("months", 0) if lasting else 0, "payments": pay, **({"wager": True} if wager else {})}
+
+
+def is_wager(terms: Optional[Dict], items: List[str]) -> bool:
+    """A coin toss: [[wager]] on a proposal with stakes on both sides (something offered, something asked)."""
+    return (bool((terms or {}).get("wager")) and any(k.startswith("give:") for k in items)
+            and any(k.startswith("ask:") for k in items))
 
 
 def _endable(key: str) -> bool:
@@ -124,6 +135,9 @@ def terms_line(terms: Optional[Dict], items: List[str], them_name: str) -> str:
     """Under a proposal: what its terms mean, in plain words ('' if none)."""
     terms = for_items(terms, items)
     parts = []
+    if terms.get("wager"):
+        parts.append(f"a wager: a coin is tossed when you accept; win and {them_name} gives what it offers, lose and "
+                     f"we give what it asks, nothing else changes hands")
     if terms["months"]:
         parts.append(f"the agreements last {terms['months']} months, then end")
     for key, spec in terms["payments"].items():
@@ -135,8 +149,18 @@ def terms_line(terms: Optional[Dict], items: List[str], them_name: str) -> str:
     return f"\n§YTerms: {'; '.join(parts)}.§!" if parts else ""
 
 
-def help_text() -> str:
-    """For the LLM: how to put terms on a deal."""
+WAGER_HELP = (
+    "- [[wager]]: the proposal is a coin toss instead of a trade. Your [[offer ...]] items are what you stake, your "
+    "[[ask ...]] items what they stake; if they accept, a coin is tossed and only the winner gets the other's stake. "
+    "Use it only when they propose a wager, a bet or a coin toss (you may set other stakes than theirs), or, rarely, "
+    "when your leader is a gambler by nature. Judge a wager as a shrewd player would: take it when what you risk is "
+    "about worth what you could win, or less; a stake you'd never trade away may still be wagered for a big enough "
+    "prize, and a lopsided bet is refused or answered with fairer stakes. A wager's items are proposed, never "
+    "granted at once, and paid once (no instalments).\n")
+
+
+def help_text(wager: bool = False) -> str:
+    """For the LLM: how to put terms on a deal (wager: a reply, where the proposal may be a coin toss)."""
     return (f"TERMS. A deal can run over time. Add these next to the deal's commands; they apply to the agreements and "
             f"proposal in this letter:\n"
             f"- [[for N months]]: its agreements (pact, access, docking rights, guarantee, faction membership, resource "
@@ -149,6 +173,7 @@ def help_text() -> str:
             f"(the same amount now and later is [[offer civ 1 x2]]). Later instalments fall due on their own; a side "
             f"that stops "
             f"paying breaks the treaty, and it is remembered.\n"
+            + (WAGER_HELP if wager else "") +
             f"Use terms where they make a deal fairer or more believable (access for a year, aid paid over years, a "
             f"price paid in parts), not in every deal.")
 

@@ -535,7 +535,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                  + ("\n\n" + actions.subject_help(them.name, me.name, actions.subjects_of(to)) if not rel.at_war else "")
                  + ("\n\n" + actions.subject_note(them.name, them.name_of(them.overlord))
                     if them.overlord and them.overlord != player else "")
-                 + ("\n\n" + treaties.help_text() if not rel.at_war else "")
+                 + ("\n\n" + treaties.help_text(wager=True) if not rel.at_war else "")
                  + ("\n\n" + ultimatums.help_text(them.name, me.name) if _may_threaten(camp, to, rel) else ""))
     try:
         prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
@@ -585,7 +585,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
     # Proposal items are only kept if still possible after what was just applied.
     after = actions.relation(to, player) if events else rel
     items = _attach_proposal(camp, to, actions.package([p for p in proposals if actions.possible(after, p)],
-                                                       offers + asks), key, terms)
+                                                       offers + asks, wager=bool(terms.get("wager"))), key, terms)
     _dropped(to, proposals, items)
     outcomes += _set_ultimatum(camp, to, player, rel, ultimatum, items, key, them.name, me.name)
     outcomes += [n] if (n := steering.take_notice(camp, to, them.name)) else []
@@ -958,7 +958,9 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
     actions.state_gives(rel), actions.state_asks(rel), actions.rights_gives(rel), actions.rights_asks(rel)
     actions.dmz_gives(rel), actions.dmz_asks(rel)
     what = actions.package_text(items, them_name)          # "France offers ...; France asks for ..."
-    if answer == 1:
+    if answer == 1 and treaties.is_wager(offer.get("terms"), items):
+        _toss(camp, player, offer, items, tag, them_name, me_name, key)
+    elif answer == 1:
         later = [k for k in items if treaties.deferred(offer.get("terms"), k)]   # paid later, not now
         now = [k for k in items if k not in later]
         outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in now], allowed=now)
@@ -980,10 +982,45 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
         print(f"declined {tag}'s proposal: {items}")
         if offer.get("ultimatum"):
             ultimatums.rejected(camp, tag, me_name, them_name)
-    camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "offer_answer",
-                      "tags": [tag, player], "text": text, "major": False}])
+    if answer != 1 or not treaties.is_wager(offer.get("terms"), items):
+        camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "offer_answer",
+                          "tags": [tag, player], "text": text, "major": False}])
     camp.save()
     return ""
+
+
+def _toss(camp: campaign.Campaign, player: str, offer: Dict, items: List[str], tag: str, them_name: str,
+          me_name: str, key: str) -> None:
+    """An accepted wager: toss the coin, hand over the loser's stake, and tell the player how it fell."""
+    won = random.random() < 0.5
+    gives = [k for k in items if k.startswith("give:")]      # what they staked
+    asks = [k for k in items if k.startswith("ask:")]        # what we staked
+    paid = gives if won else asks
+    outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in paid], allowed=paid)
+    camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
+    treaties.record(camp, tag, [e["type"] for e in events], offer.get("terms"), key, them_name)
+    guarantees.record(camp, tag, [e["type"] for e in events], offer.get("terms"))
+    for line in steering.sync(camp, tag):
+        print(line)
+    winner, loser = (me_name, them_name) if won else (them_name, me_name)
+    missed = len(paid) - len(events)
+    text = (f"{me_name} and {them_name} tossed a coin for their stakes ({actions.package_text(items, them_name)}). "
+            f"{winner} won, and {loser} paid."
+            + (f" {missed} part(s) of the stake could no longer be handed over." if missed else ""))
+    camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "wager",
+                      "tags": [tag, player], "text": text, "major": False}])
+    print(f"wager with {tag}: {'won' if won else 'lost'}; paid {paid}: {[o for o, _ in outcomes] or 'nothing applied'}")
+    body = (f"The coin is tossed before both envoys, and it falls for {winner}. "
+            + (f"{them_name} pays its stake." if won else "We pay our stake.")
+            + (" " + " ".join(o for o, _ in outcomes) if outcomes else "")
+            + (f" ({missed} part(s) could no longer be handed over.)" if missed else ""))
+    if len(body) > 480:
+        body = body[:480].rsplit(" ", 1)[0] + " ..."
+    try:
+        game.show_news("Fortune Smiles" if won else "Fortune Frowns", body,
+                       "A fine day!" if won else "So be it.", "handshake")
+    except Exception as err:                               # the game may be busy; the chronicle holds it anyway
+        print(f"  wager result not shown: {err}")
 
 
 def _days(key: str) -> int:

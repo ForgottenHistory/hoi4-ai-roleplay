@@ -735,7 +735,13 @@ def _security(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
                 f"than invite war; it refuses only what would end it as a nation, and then courteously, without "
                 f"taunts, lectures or moralising; and it takes no hostile step (an embargo, ending agreements) it "
                 f"cannot back up. "
-                + ("Its protectors may stiffen its back, but their help is never certain. " if guards else "")
+                + ("Its protectors may stiffen its back, but their help is never certain. " if guards else
+                   f"If {me.name} demands its submission or land and credibly threatens war, it weighs what the war "
+                   f"would cost: alone and hopelessly outmatched it would lose, and conquest ends the nation outright, "
+                   f"while a subject keeps its government, army, name and the hope of better days. So it yields, as "
+                   f"Lithuania did to Poland in 1938 and the Baltic states to Moscow in 1939, bargaining for the best "
+                   f"terms it can get rather than refusing again and again; pride, history and its dead are reasons "
+                   f"to haggle, not to choose a war it cannot win. ")
                 + "Only a leader reckless by nature would act otherwise.")
     if ratio >= 1.5 and guards:
         return (f"YOUR SECURITY: {them.name} is weaker than {me.name} on its own (about {ratio:.1f} to 1), but not "

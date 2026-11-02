@@ -94,8 +94,10 @@ def diplomacy() -> str:
     return DIPLOMACY[name]
 
 
-ONE_LETTER = (" Write exactly one letter: no drafts, alternatives or notes about it. Don't repeat stock phrases or "
-              "arguments from your earlier letters; say what is new. Write in English (a greeting or phrase in your "
+ONE_LETTER = (" Write exactly one letter: no drafts, alternatives or notes about it. Don't repeat stock phrases, "
+              "images, sayings, sign-offs or arguments from your earlier letters (a proverb, a metaphor, a battle's "
+              "dead, a closing line used once is spent); say what is new, and if your answer is the same, say it "
+              "in one plain sentence instead of restating why. Write in English (a greeting or phrase in your "
               "own language is fine).")
 
 

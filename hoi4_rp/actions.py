@@ -453,7 +453,9 @@ _BORDER_INFO: Dict[str, BorderState] = {}       # territory key -> state info, f
 
 SUBMIT_NOTE = ("Submission is the gravest step of all. A government offers it only when it cannot survive alone, "
                "or its people and rulers truly want the other's protection; it demands it only of a country far "
-               "weaker than itself that it could crush, and knows a proud nation may sooner fight. Annexation goes "
+               "weaker than itself that it could crush, and knows a proud nation may sooner fight while it has a "
+               "chance or allies; alone against a war it would surely lose, a shrewd government submits rather than "
+               "be conquered, since a subject still lives as a nation and a conquered country does not. Annexation goes "
                "further still: it ends the state for ever, so a government agrees to it only when its people and "
                "rulers truly want union, or it has no other way out. Never offer, demand or grant either lightly, "
                "or in the same breath as small favours.")

@@ -5,8 +5,8 @@ guarantee given in a letter cost nothing and lasted forever, so Austria could ga
 asking. Now (letter guarantees only; the game's Guarantee button is unchanged):
 
     a guarantee lasts TERM_MONTHS (or the deal's own [[for N months]]), then ends on its own; a new letter renews it
-    the guarantor pays upkeep in civilian factories, more for each letter guarantee it holds: its 1st costs 1, its 2nd
-    2 more, its 3rd 3 more (1, 3, 6, 10 in all), as the game's PP cost grows with each guarantee
+    the guarantor pays upkeep in civilian factories for each letter guarantee it holds: 1 each for the first two,
+    2 each after that (1, 2, 4, 6 in all), as the game's PP cost grows with each guarantee
     the upkeep is a dynamic modifier on the guarantor: civilian_factory_use = airp_guarantee_civs (a country
     variable), defined by the mod (files()); `python -m hoi4_rp write-mod` and a restart of HOI4 bring it in
 
@@ -35,8 +35,9 @@ VARIABLE = "airp_guarantee_civs"
 
 
 def upkeep(n: int) -> int:
-    """Civilian factories tied up by n letter guarantees: 1, 3, 6, 10..."""
-    return n * (n + 1) // 2
+    """Civilian factories tied up by n letter guarantees: the first two cost 1 each, every one after that 2
+    (1, 2, 4, 6, 8...)."""
+    return n if n <= 2 else 2 + 2 * (n - 2)
 
 
 def _all(camp: campaign.Campaign) -> List[Dict]:
@@ -49,7 +50,8 @@ def _active(camp: campaign.Campaign, by: str) -> List[Dict]:
 
 def next_cost(camp: campaign.Campaign, by: str) -> int:
     """What one more letter guarantee would add to `by`'s upkeep."""
-    return len(_active(camp, by)) + 1
+    n = len(_active(camp, by))
+    return upkeep(n + 1) - upkeep(n)
 
 
 def _charge(camp: campaign.Campaign, by: str) -> None:
@@ -152,8 +154,8 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
     mine, theirs = len(_active(camp, tag)), len(_active(camp, player))
     return ("GUARANTEES BY LETTER: a guarantee given in a letter lasts " + f"{TERM_MONTHS} months (or the deal's own "
             f"term) and ties up the guarantor's civilian factories while it lasts, more for each it holds. You hold "
-            f"{mine} (upkeep {upkeep(mine)} civilian factories); one more would cost you {mine + 1} more. "
-            f"{me_name} holds {theirs} (upkeep {upkeep(theirs)}); one more would cost it {theirs + 1} more. A "
+            f"{mine} (upkeep {upkeep(mine)} civilian factories); one more would cost you {next_cost(camp, tag)} more. "
+            f"{me_name} holds {theirs} (upkeep {upkeep(theirs)}); one more would cost it {next_cost(camp, player)} more. A "
             f"guarantee is worth giving only to a country whose survival matters to you."
             + ("\n" + "\n".join(lines) if lines else ""))
 

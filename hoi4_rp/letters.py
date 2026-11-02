@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, bridge, campaign, agendas, chronicle, crises, plots, diplomacy, game, gamestate, leaders, llm, news, origins, peace, plight, policy, reputation,
+from . import (actions, bridge, campaign, agendas, chronicle, crises, plots, diplomacy, game, gamestate, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -83,6 +83,28 @@ def show_reputation(camp: campaign.Campaign, player: str, last: Tuple[str, float
     if bad:
         print("  could not set the reputation box:", " | ".join(bad))
     return text, time.monotonic()
+
+
+def show_ledger(camp: campaign.Campaign, player: str, block: str, last: str) -> str:
+    """While the ledger window is open (airp_ledger_open), set its heading and body for the chosen tab
+    (airp_ledger_tab) whenever they change. `last` is the text last set ("" while closed); returns the new one.
+    Not set again while unchanged: that would scroll the player back to the top."""
+    if not re.search(r"\bairp_ledger_open=", block):
+        return ""
+    m = re.search(r"\bairp_ledger_tab=(\d+)", block)
+    names = (camp.snapshot or {}).get("countries", {})
+    head, body = ledger.text(camp, player, int(m.group(1)) if m else 1,
+                             lambda t: names.get(t, {}).get("name", t), _clean_for_game)
+    text = head + "|" + body
+    if text == last:
+        return last
+    bad = [r for r in bridge.send(
+        f"bridge.setloc airp_ledger_head {_loc_line(head)}",
+        f"bridge.setloc airp_ledger_body {_loc_line(body)}",
+        f"eval_effect {player} = {{ add_to_variable = {{ airp_ledger_refresh = 1 }} }}") if not r.startswith("OK")]
+    if bad:
+        print("  could not set the ledger:", " | ".join(bad))
+    return text
 
 
 def _loc_line(text: str) -> str:
@@ -1034,6 +1056,7 @@ class _Session:
         self.resumed: Dict[tuple, float] = {}   # (campaign id, country) -> when its waiting letter was resumed
         self.rep_shown: Tuple[str, float] = ("", 0.0)   # the reputation box's text as last set, and when
         self.treaties_shown: Tuple[str, float] = ("", 0.0)   # the same for the diplomacy view's treaty box
+        self.ledger_shown = ""                               # the ledger window's text as last set ("" while closed)
         self.steered = 0                         # campaign whose game AI strategies were last brought in line
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
@@ -1852,6 +1875,8 @@ def run() -> int:
                 session.rep_shown = show_reputation(session.camp, player, session.rep_shown)
                 session.treaties_shown = show_treaties(session.camp, player, session.treaties_shown)
             block = bridge.country_block(player)
+            if session.camp:
+                session.ledger_shown = show_ledger(session.camp, player, block, session.ledger_shown)
             to = read_outbox(block)
             if to:
                 # Clear first so the same letter is never handled twice.

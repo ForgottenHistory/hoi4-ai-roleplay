@@ -206,14 +206,22 @@ def next_job(camp: campaign.Campaign, player: str) -> Optional[Tuple[str, Dict]]
     """The next piece of judging to do: ("promises", letter) or ("deed", deed), oldest first; None if done."""
     rep = _rep(camp)
     for tag, letters in camp.threads().items():
-        for x in letters:
+        for i, x in enumerate(letters):
             if x["from"] == player and not x.get("promises_read") and x["date"] >= rep["since"]:
-                return "promises", {**x, "to": tag}
+                # the letter it answers, and their answer if already written: an offer they refused binds nothing
+                before = next((y["text"] for y in reversed(letters[:i]) if y["from"] != player), "")
+                after = next((y["text"] for y in letters[i + 1:] if y["from"] != player), "")
+                return "promises", {**x, "to": tag, "before": before, "after": after}
     pending = [d for d in rep["deeds"] if d["weight"] is None and d.get("by", player) == player]
     return ("deed", pending[0]) if pending else None
 
 
 def promise_messages(player_name: str, to_name: str, letter: Dict) -> List[Dict[str, str]]:
+    around = ""
+    if letter.get("before"):
+        around += f"\n\nThe letter from {to_name} it answers (context only, not to be recorded):\n{letter['before']}"
+    if letter.get("after"):
+        around += f"\n\n{to_name}'s answer to it (context only):\n{letter['after']}"
     return [{"role": "system", "content":
              f"You keep an impartial record of what governments promise in Hearts of Iron IV. Below is a letter "
              f"{player_name}'s government sent to {to_name}. List every concrete promise, assurance or commitment "
@@ -222,7 +230,13 @@ def promise_messages(player_name: str, to_name: str, letter: Dict) -> List[Dict[
              f"against {to_name} (war, invasion, destruction, taking land, or worse if a demand is refused), one line "
              f"each starting THREAT:, and if the threat names a deadline, put it first in brackets in months, like "
              f"THREAT: [24 months] war unless Danzig is returned. If there is nothing of either, answer NONE. Demands "
-             f"alone are neither."},
+             f"alone are neither.\n"
+             f"Record only what the letter says, close to its own words. Never infer a promise from a threat or a "
+             f"demand (\"I take Memel if I win\" promises nothing about losing), and never turn a threat into its "
+             f"opposite. An offer of terms, a proposed deal or a proposed bet or coin toss is not a promise: it binds "
+             f"only if {to_name} accepts it, so leave it out unless {to_name}'s answer below accepts it; a threat made "
+             f"as the stake of a refused bet is recorded as the threat it plainly makes, without the bet."
+             f"{around}"},
             {"role": "user", "content": letter["text"]}]
 
 
@@ -337,7 +351,12 @@ def judge_messages(camp: campaign.Campaign, player: str, deed: Dict, world_text:
              f"promises, as the governments of the world would weigh it. You are not any country and take no side. "
              f"Breaking a guarantee, pact or promise is grave; attacking without cause or war goal is dishonourable; "
              f"keeping faith at a cost, defending those it guaranteed, and lenient peace terms are honourable. "
-             f"Context matters: a war against a country that wronged it first is not a betrayal.\n\n{context}"},
+             f"Context matters: a war against a country that wronged it first is not a betrayal.\n"
+             f"Judge only what the record shows. The promises listed are a summary of the letters: where they disagree "
+             f"with the letters themselves, the letters are right. An offer, deal or bet the other side refused binds "
+             f"nothing, and a promise tied to a condition that never came about (a coin toss never made, terms never "
+             f"accepted) was not broken. Carrying out a threat is not breaking a promise: judge it as the aggression "
+             f"it is. Never state as fact anything the record doesn't show.\n\n{context}"},
             {"role": "user", "content":
              "Answer with exactly two lines:\nWEIGHT: a whole number from -3 (a grave betrayal) to +3 (keeping "
              "faith at real cost); 0 if it says nothing about honour\nVERDICT: one sentence, plain and neutral, "

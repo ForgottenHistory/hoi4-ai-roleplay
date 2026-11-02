@@ -188,7 +188,7 @@ def draw(camp: campaign.Campaign, n: int, cooldown_days: int) -> List[List]:
 
 # ---------------------------------------------------------------- the short prompts
 
-def card(s: gamestate.CountryState, w: Dict, other: str) -> str:
+def card(s: gamestate.CountryState, w: Dict, other: str, camp: Optional[campaign.Campaign] = None) -> str:
     """A country in a few lines: government, weight, alignment, wars, and its opinion of `other`."""
     pct = lambda v: f"{round(v * 100)}%" if v is not None else "?"
     bits = [f"{s.name} ({s.tag}): {s.ideology} government, {s.ruling_party or 'ruling party'} under {s.leader}; "
@@ -207,10 +207,13 @@ def card(s: gamestate.CountryState, w: Dict, other: str) -> str:
         bits.append("holds war goals on " + ", ".join(dict.fromkeys(s.name_of(g.other) for g in s.wargoals[:4])))
     if other in s.opinion:
         bits.append(f"its opinion of {s.name_of(other)}: {round(s.opinion[other]):+d}")
-    from . import course
+    from . import course, intent
     way = course.short(s.tag)
     if way:
         bits.append(way)
+    stance = intent.short(s, other, camp) if other and s.tag != course._player() else ""
+    if stance:
+        bits.append(stance)
     return "- " + "; ".join(bits) + "."
 
 
@@ -325,8 +328,8 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
     parts = [f"You are the government of {me.name} in Hearts of Iron IV. The date is {me.date.strip()}. Act as a "
              f"shrewd player of {me.name} would: its interests first, true to its leader and ideology. Write in "
              f"English, whatever your country's language.",
-             "THE TWO COUNTRIES:\n" + card(me, w.get(me.tag, {}), other.tag) + "\n"
-             + card(other, w.get(other.tag, {}), me.tag),
+             "THE TWO COUNTRIES:\n" + card(me, w.get(me.tag, {}), other.tag, camp) + "\n"
+             + card(other, w.get(other.tag, {}), me.tag, camp),
              f"BETWEEN YOU: {ties(me.tag, other.tag, me.name, other.name)}."]
     from . import plight
     own, theirs = plight.text(me), plight.short(other)

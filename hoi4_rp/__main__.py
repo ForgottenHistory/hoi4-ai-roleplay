@@ -98,6 +98,9 @@ if __name__ == "__main__":
     if cmd == "agendas":
         from . import agendas
         sys.exit(agendas.main(sys.argv[2:]))
+    if cmd == "intent":
+        from . import intent
+        sys.exit(intent.main(sys.argv[2:]))
     if cmd == "course":
         from . import course
         sys.exit(course.main(sys.argv[2:]))

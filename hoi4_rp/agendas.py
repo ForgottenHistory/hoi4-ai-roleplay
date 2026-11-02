@@ -121,6 +121,7 @@ def prompt(me: gamestate.CountryState, cands: Dict[str, List[str]], snap: Dict, 
     way = course.text(me)
     if way:
         parts.append(way + " Your aims should serve this course.")
+    # Not the game AI's own strategies (intent.py): the aims decide where the country goes, and are pushed into its AI
     wt = world.tension_text({me.tag: me.name})
     if wt:
         parts.append(wt)

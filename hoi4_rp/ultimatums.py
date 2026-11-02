@@ -38,7 +38,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-from . import actions, bridge, campaign, gamestate
+from . import actions, bridge, campaign, gamestate, intel
 
 MAX_MONTHS = 12          # the longest deadline an ultimatum may set
 MIN_MONTHS = 1
@@ -390,6 +390,15 @@ def balance(camp: campaign.Campaign, tag: str, player: str, them_name: str, me_n
                 stats[f[1].strip()] = (f[2].strip(), float(f[3]), float(f[4]), float(f[5]))
             except ValueError:
                 pass
+    guessed = False
+    if player in stats and intel.enabled():         # the player's own numbers as `tag`'s intelligence estimates them
+        lv = intel.levels(tag, player)
+        if lv:
+            date = (camp.snapshot or {}).get("date", "")
+            n, divs, men, mil = stats[player]
+            est = lambda k, x: intel.estimate(tag, player, k, x, lv[intel.FIELD_KIND[k]], date)
+            stats[player] = (n, est("divisions", divs), est("army_k", men), est("mil", mil))
+            guessed = min(lv["army"], lv["civilian"]) < intel.EXACT
     total = lambda tags: [sum(stats[t][i] for t in tags if t in stats) for i in (1, 2, 3)]
     names = lambda tags: ", ".join(stats[t][0] for t in tags if t in stats) or "none"
     a, b = total(theirs), total(mine + helpers)
@@ -404,6 +413,7 @@ def balance(camp: campaign.Campaign, tag: str, player: str, them_name: str, me_n
             + f": {b[0]:.0f} divisions, {b[1]:.0f}k soldiers, {b[2]:.0f} military factories.\n"
             f"A guarantor usually honours its guarantee, a faction is called in, a treaty pledge is kept. Your side "
             f"is {word} (about {ratio:.1f} to 1 in soldiers and arms industry)."
+            + (f" {me_name}'s own numbers are your intelligence's estimates." if guessed else "")
             + (f" You are already fighting another war: a new one waits until your generals are free." if busy else ""))
     return text, ratio > 1 and not busy
 

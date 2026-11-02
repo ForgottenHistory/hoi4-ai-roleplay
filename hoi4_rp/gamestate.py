@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from . import bridge, leaders
 
@@ -168,6 +168,8 @@ class CountryState:
     leader_info: Optional["leaders.Leader"] = None   # the leader as a person (leaders.py)
     justifying: List[Dict] = field(default_factory=list)  # war goals it is justifying: {target, wargoal, states}
     justified_by: List[str] = field(default_factory=list)  # countries justifying a war goal against it
+    # Set only on a copy another country sees through its intelligence (intel.view): kind -> level 0..1
+    intel: Optional[Dict[str, float]] = None
 
     def name_of(self, tag: Optional[str]) -> str:
         return self.names.get(tag, tag) if tag else ""
@@ -388,9 +390,36 @@ def _diplomacy_level(s: CountryState) -> None:
         s.autonomy[s.overlord] = _field(rel[pup.end():_walk(rel, pup.end()) - 1], "autonomy_state") or ""
 
 
-def _named(ids: List[str], hide_missing: bool) -> List[Named]:
+_RESOLVED: Dict[Tuple[str, str], str] = {}    # (country, raw name) -> the name with its [...] filled in
+
+
+def _resolve(texts: List[str], scope: str) -> List[str]:
+    """Fill in the scripted references in names ("Construct the [GetAutobahnName]") as the game shows them to
+    `scope`, by logging them in that country's scope; what can't be filled is left out (clean_loc). Cached."""
+    todo = list(dict.fromkeys(t for t in texts if "[" in t and (scope, t) not in _RESOLVED))
+    if todo and scope:
+        # ROOT in a console query is the country selected in the UI, not `scope`: point it at the country itself
+        scoped = [re.sub(r"(?i)\broot\.", "THIS.", t).replace('"', "'") for t in todo]
+        logs = " ".join(f'log = "AIRPR|{i}|{t}"' for i, t in enumerate(scoped))
+        try:
+            for line in query(f"{scope} = {{ {logs} }}"):
+                if line.startswith("AIRPR|"):
+                    i, _, text = line[6:].partition("|")
+                    if i.isdigit() and int(i) < len(todo):
+                        _RESOLVED[(scope, todo[int(i)])] = text.strip()
+        except (StateError, RuntimeError):
+            pass
+    out = []
+    for t in texts:
+        r = _RESOLVED.get((scope, t), t) if "[" in t else t
+        out.append(clean_loc(r) if "[" in r or "$" in r else r)
+    return out
+
+
+def _named(ids: List[str], hide_missing: bool, scope: str = "") -> List[Named]:
     """Pair ids with their display names. Like the save parser, an idea whose name doesn't resolve
-    (or whose id ends in _hidden) is treated as hidden; a level suffix (_2) falls back to the base key."""
+    (or whose id ends in _hidden) is treated as hidden; a level suffix (_2) falls back to the base key.
+    Names with scripted references ([GetAutobahnName]) are filled in as `scope` sees them (else left out)."""
     if not ids:
         return []
     n = len(ids)
@@ -405,13 +434,16 @@ def _named(ids: List[str], hide_missing: bool) -> List[Named]:
         if hide_missing and (not name or fid.endswith("_hidden")):
             continue
         out.append(Named(fid, name or fid, desc))
+    if any("[" in x.name or "$" in x.name for x in out):
+        names = _resolve([x.name for x in out], scope)
+        out = [Named(x.id, n or x.id, x.description) for x, n in zip(out, names)]
     return out
 
 
 def completed_focuses(tag: str) -> List[Named]:
     """The country's completed national focuses, in the order taken (one read of its block, nothing else)."""
     focus_block = _sub_block(bridge.country_block(tag.upper()), "focus", 2) or ""
-    return _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
+    return _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False, scope=tag.upper())
 
 
 def country(tag: str) -> CountryState:
@@ -489,9 +521,9 @@ def country(tag: str) -> CountryState:
         s.leader_info = leaders.current(tag, politics)
     except StateError:
         pass
-    s.ideas = _named((_sub_block(politics, "ideas", 3) or "").split(), hide_missing=True)
+    s.ideas = _named((_sub_block(politics, "ideas", 3) or "").split(), hide_missing=True, scope=tag)
     focus_block = _sub_block(block, "focus", 2) or ""
-    s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False)
+    s.focuses = _named(re.findall(r'completed="([^"]+)"', focus_block), hide_missing=False, scope=tag)
     cur = re.search(r'\bcurrent="([^"]+)"', focus_block)
     s.current_focus = cur.group(1) if cur else ""
     prog = re.search(r'\bprogress=(-?[\d.]+)', focus_block)
@@ -579,7 +611,7 @@ def _ruling_name(s: CountryState) -> str:
 def _men(thousands: float) -> str:
     """12.5 -> '12,500', 1332.6 -> '1.33 million'."""
     n = thousands * 1000
-    return f"{n / 1e6:.2f} million" if n >= 1e6 else f"{n:,.0f}"
+    return f"{n / 1e6:.2f}".rstrip("0").rstrip(".") + " million" if n >= 1e6 else f"{n:,.0f}"
 
 
 def strength_text(s: CountryState) -> str:
@@ -587,11 +619,16 @@ def strength_text(s: CountryState) -> str:
     v = s.strength
     if not v:
         return "Strength: unknown."
-    g = lambda k: v.get(k, 0)
-    return (f"Industry: {g('civ'):.0f} civilian factories, {g('mil'):.0f} military factories, {g('dock'):.0f} "
-            f"dockyards. Armed forces: {g('divisions'):.0f} divisions ({_men(g('army_k'))} soldiers deployed), "
-            f"navy {_men(g('navy_k'))} sailors, air force {g('planes'):.0f} planes ({_men(g('air_k'))} airmen). "
-            f"Manpower available to recruit: {_men(g('manpower_k'))}; population {_men(g('population_k'))}.")
+    from . import intel
+
+    def w(k: str) -> str:           # 'about ' for an estimate (intel.view), '' when exact
+        return intel.word(s.intel[intel.FIELD_KIND[k]]) if s.intel and k in intel.FIELD_KIND else ""
+    n = lambda k: f"{w(k)}{v.get(k, 0):.0f}"
+    men = lambda k: f"{w(k)}{_men(v.get(k, 0))}"
+    return (f"Industry: {n('civ')} civilian factories, {n('mil')} military factories, {n('dock')} "
+            f"dockyards. Armed forces: {n('divisions')} divisions ({men('army_k')} soldiers deployed), "
+            f"navy {men('navy_k')} sailors, air force {n('planes')} planes ({men('air_k')} airmen). "
+            f"Manpower available to recruit: {men('manpower_k')}; population {men('population_k')}.")
 
 
 def _state_list(states: List[Occupied], limit: int = 12) -> str:
@@ -763,6 +800,15 @@ def strength_comparison(a: CountryState, b: CountryState) -> str:
             return "no comparison" if x == 0 else "unmatched"
         return f"{x / y:.1f}x"
     fac = lambda s: s.strength.get("civ", 0) + s.strength.get("mil", 0) + s.strength.get("dock", 0)
+    if b.intel:                               # b as a's intelligence sees it (intel.view): estimates
+        from . import intel
+        ind, army = intel.word(b.intel["civilian"]), intel.word(b.intel["army"])
+        return (f"Strength (theirs as your intelligence estimates it): {a.name} has {fac(a):.0f} factories "
+                f"({a.strength.get('mil', 0):.0f} military) to {b.name}'s {ind}{fac(b):.0f} "
+                f"({ind}{b.strength.get('mil', 0):.0f} military), {a.strength.get('divisions', 0):.0f} divisions to "
+                f"{army}{b.strength.get('divisions', 0):.0f}, {_men(a.strength.get('army_k', 0))} soldiers to "
+                f"{army}{_men(b.strength.get('army_k', 0))} (military factories {ratio('mil')}, soldiers "
+                f"{ratio('army_k')}).")
     return (f"Strength: {a.name} has {fac(a):.0f} factories ({a.strength.get('mil', 0):.0f} military) to "
             f"{b.name}'s {fac(b):.0f} ({b.strength.get('mil', 0):.0f} military), {a.strength.get('divisions', 0):.0f} "
             f"divisions to {b.strength.get('divisions', 0):.0f}, {_men(a.strength.get('army_k', 0))} soldiers to "
@@ -775,7 +821,9 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
     descriptions of national spirits and completed focuses. max_states/details=False shorten it;
     focus_details=N describes only the N latest focuses (the rest by name), spirit_details=False names the
     spirits only."""
-    pct = lambda v: "?" if v is None else f"{round(v * 100)}%"
+    from . import intel
+    guess = intel.word(s.intel["civilian"]) if s.intel else ""
+    pct = lambda v: "?" if v is None else f"{guess}{round(v * 100)}%"
     lines = [
         f"{s.name} ({s.tag}){', a major power' if s.is_major else ''}. Adjective: {s.adjective}. Capital: {s.capital}.",
         f"Led by {s.leader} of the {_ruling_name(s)} ({s.ideology}).",
@@ -869,5 +917,10 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
 
     items("National spirits and laws (effects in brackets)" if spirit_details and details else
           "National spirits and laws", s.ideas, None if spirit_details else 0, numbers=True)
-    items("Completed national focuses", s.focuses, focus_details)
+    if intel.knows_focuses(s):
+        items("Completed national focuses", s.focuses, focus_details)
+    else:
+        lines.append("Its national focuses: unknown to your intelligence.")
+    if s.intel:
+        lines.append(intel.note(s))
     return "\n".join(lines)

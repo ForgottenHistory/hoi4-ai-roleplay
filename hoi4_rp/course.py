@@ -292,10 +292,11 @@ def fork(tag: str, completed: List[str], current: str = "") -> Optional[Tuple[Li
     return shared, [x for x in sides if x]
 
 
-def _names(ids) -> Dict[str, str]:
-    """Display names of focuses, those without one left out."""
+def _names(ids, tag: str = "") -> Dict[str, str]:
+    """Display names of focuses, those without one left out (scripted references filled in as `tag` sees them)."""
     ids = sorted(set(ids))
-    return {n.id: n.name for n in gamestate._named(ids, hide_missing=False) if n.name != n.id} if ids else {}
+    return ({n.id: n.name for n in gamestate._named(ids, hide_missing=False, scope=tag) if n.name != n.id}
+            if ids else {})
 
 
 def focus_state(tag: str) -> Tuple[List[str], str]:
@@ -323,7 +324,7 @@ def short(tag: str, own: bool = True) -> str:
         split = fork(tag, completed, current) if own else None
         nxt = path(tag, completed, current, count=3)[0] if own and not split else []
         named = _names(([current] if current else []) + nxt
-                       + ([f for x in split[1] for f in x[:2]] if split else []))
+                       + ([f for x in split[1] for f in x[:2]] if split else []), tag)
     except (gamestate.StateError, bridge.BridgeError):
         return ""
     bits = [f"working on the national focus {named[current]}"] if current in named else []
@@ -379,7 +380,7 @@ def track(camp) -> List[Dict]:
             print(f"  [course] {text}")
         if split:
             sides = split[1]
-            named = _names(f for x in sides for f in x[:FORK_SHOWN])
+            named = _names((f for x in sides for f in x[:FORK_SHOWN]), tag)
             keys = [x[0] for x in sides]
             if not old or chosen or [x["key"] for x in old["sides"]] != keys:
                 st["open"][tag] = {"date": today, "sides": [
@@ -423,7 +424,7 @@ def now_line(s: gamestate.CountryState, desc: bool = True) -> str:
     if not s.current_focus:
         return ""
     f = focuses().get(s.current_focus)
-    named = gamestate._named([s.current_focus], hide_missing=False)[0]
+    named = gamestate._named([s.current_focus], hide_missing=False, scope=s.tag)[0]
     done = f"{s.focus_progress} of {f.days} days done" if f and s.focus_progress is not None else "under way"
     about = f": {_short(gamestate.clean_loc(named.description), DESC_CHARS)}" if desc and named.description else ""
     return f"{named.name} ({done}){about}"
@@ -441,7 +442,7 @@ def text(s: gamestate.CountryState, own: bool = True) -> str:
         nxt, planned = path(s.tag, completed, s.current_focus)
         if not planned:
             nxt = open_next(completed, s.current_focus) if s.current_focus else nxt
-        named = _names(set(nxt) | ({f for x in split[1] for f in x} | set(split[0]) if split else set()))
+        named = _names(set(nxt) | ({f for x in split[1] for f in x} | set(split[0]) if split else set()), s.tag)
     except (gamestate.StateError, bridge.BridgeError):
         return ""
     names = lambda fs: [named[f] for f in fs if f in named]

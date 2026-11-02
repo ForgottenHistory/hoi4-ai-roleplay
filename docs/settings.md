@@ -8,7 +8,7 @@ Your personal copy, created from `config.example.ini` on first run; each key is 
 - `[letters]`: countries writing on their own, gaps between letters and proposals, `style`, `diplomacy`
 - `[story]`: story events and news events, and their gaps
 - `[ai_diplomacy]`: `mode`, `driver`, exchanges per month, cooldown
-- `[world]`: `setting`, `lore_file`, `tension_rules`
+- `[world]`: `setting`, `lore_file`, `tension_rules`, `intel` (see [what countries know about you](ai.md#what-countries-know-about-you-intel))
 
 The API key is never in the file: it's read from the environment variable named by `api_key_env` (`NANOGPT_API_KEY`).
 

@@ -57,6 +57,7 @@ DEFAULTS = {
         "lore_file": "",
         "game_dir": "",
         "tension_rules": "yes",
+        "intel": "no",
     },
 }
 
@@ -99,6 +100,7 @@ class WorldSettings:
     lore_file: str        # optional text file with extra setting notes
     game_dir: str         # HOI4 install folder (found automatically when empty)
     tension_rules: bool   # letter deals keep to the game's world tension rules (guarantees, factions)
+    intel: bool           # countries know the player only as their intelligence allows (intel.py)
 
 
 @dataclass(frozen=True)
@@ -159,6 +161,7 @@ def settings() -> Settings:
             lore_file=(w.get("lore_file") or "").strip(),
             game_dir=(w.get("game_dir") or "").strip(),
             tension_rules=w.getboolean("tension_rules"),
+            intel=w.getboolean("intel"),
         ),
         ai=AIDiplomacySettings(
             mode=(ai.get("mode") or "off").strip().lower(),

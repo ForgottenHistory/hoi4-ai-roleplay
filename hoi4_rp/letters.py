@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
+from . import (actions, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
                guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -322,7 +322,8 @@ def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate
     # own lines, which others do see).
     events = [e for e in camp.data["events"]
               if (them.tag in e["tags"] or me.tag in e["tags"] or e.get("major"))
-              and (e.get("type") != "offer_answer" or them.tag in e["tags"])]
+              and (e.get("type") != "offer_answer" or them.tag in e["tags"])
+              and (e.get("type") != "focus" or me.tag not in e["tags"] or intel.knows_focuses(me))]
     if not events:
         return "Nothing notable recorded yet."
     return "\n".join(f"- {when}: {text}" for when, text in chronicle.compact(events, camp.snapshot))
@@ -353,7 +354,8 @@ OTHER_FOCUSES = 3     # the same for the country it corresponds with, whose spir
 
 
 def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign) -> str:
-    """Everything `them` knows when dealing with `me`."""
+    """Everything `them` knows when dealing with `me` (with [world] intel, `me` as its intelligence sees it)."""
+    me = intel.view(me, them.tag)
     pol = policy.describe(policy.current(camp, them.tag), them.name, me.name)
     rep = reputation.describe(camp, me.tag, me.name, them.tag)
     return (

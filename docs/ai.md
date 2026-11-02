@@ -41,6 +41,18 @@ can be undone exactly; loading an earlier save forgets later pushes.
 
 `python -m hoi4_rp course [TAG]` and `intent [TAG]` print them.
 
+## What countries know about you (intel)
+
+With `intel = yes` in `[world]` (off by default), a country knows your country only as well as HOI4's intel system
+allows: its civilian, army, navy and air intel on you, read live. Your factories, forces and manpower become
+estimates, the less intel the rougher (up to 60% off at none, exact from 90%), steady over a game quarter. A whole
+branch is over- or underestimated together (planes and airmen alike), and each country's service errs its own way. Stability
+and war support are estimated too, and political power is known only at 90%+. Your national focuses are unknown below
+20% civilian intel, and the one under way below 50%. Population, spirits, parties and wars stay public.
+
+This covers its letters and replies to you, its policy toward you, and its ultimatum decisions (it weighs your
+estimated strength when deciding on war). AI countries' knowledge of each other is unchanged.
+
 ## Agendas
 
 What each country wants from the world: one to four aims, each with a target and a kind (`oppose`, `befriend`,

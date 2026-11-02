@@ -25,7 +25,7 @@ On their own (in a reply only for serious cause): end a pact, access, docking or
 |---|---|
 | Agreements | pact, access, docking, guarantee, market access |
 | Land | a state, a demilitarized border state, a state's resource rights |
-| Wealth | civilian or military factories, rifles/artillery/trucks from the stockpile, dismantling military factories |
+| Wealth | civilian or military factories, rifles/artillery/trucks from the stockpile, political power (up to 200), dismantling military factories |
 | Subjects | submit (become a subject), annexation by agreement, handing over a subject, freeing one |
 | Politics | a change of government to a named ideology |
 | Factions | join theirs, they join yours, leave a faction |
@@ -33,7 +33,9 @@ On their own (in a reply only for serious cause): end a pact, access, docking or
 | Third countries | oppose, befriend or back a country; sanction (embargo) it now |
 
 The rules the game would apply still apply: agreements need peace and mustn't exist yet; land must border the other
-country, never a capital, never occupied by a third country. Neighbours propose what their policy lists. A letter
+country, never a capital, never occupied by a third country. Factories, equipment and political power go up to what
+the giver has, and can be paid in instalments. In a letter it starts on its own, a country proposes what its policy
+lists, goods included; in a reply, anything possible now. A letter
 whose text makes a deal but forgot its commands is asked for them in a short follow-up.
 
 Proposals stay occasional: one every `proposal_gap_days` from anyone, and an item you declined is off the table for

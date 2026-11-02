@@ -568,7 +568,8 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                                      allowed=["opinion"] + actions.GIVES + actions.UNILATERAL + actions.state_gives(rel)
                                      + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel)
                                      + actions.rights_gives(rel) + actions.dmz_gives(rel)
-                                     + actions.EQUIPMENT_GIVES + actions.war_gives(rel) + actions.third_gives(rel))
+                                     + actions.EQUIPMENT_GIVES + ["give:pp"] + actions.war_gives(rel)
+                                     + actions.third_gives(rel))
     if not rel.at_war:                                  # land for a third country, at the player's request
         more_shown, more_events = actions.apply_cedes(to, player, them.name, me.name, commands,
                                                       (camp.snapshot or {}).get("countries", {}))
@@ -644,6 +645,7 @@ def _attach_proposal(camp: campaign.Campaign, tag: str, items: List[str], key: s
 # offer into the text and forgets the commands; one short follow-up asks for them.
 _DEAL_WORDS = re.compile(r"\b(offer|propos|in return|in exchange|pact|guarantee|access|passage|market|trade|"
                          r"factor|pledge|alliance|faction|docking|rifles|artillery|trucks|equipment|cede|"
+                         r"political power|"
                          r"oppos|befriend|sanction|stand behind)", re.I)
 _REPAIR_KINDS = re.compile(r"\[\[\s*(offer|ask|for)\b", re.I)
 
@@ -834,12 +836,11 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
         if not pol and policy.stale(camp, tag):
             return peace_offer, []
         offers = (actions.GIVES + actions.state_gives(rel) + actions.subject_gives(rel)
-                  + ["give:civ", "give:mil", "give:dismantle"] + actions.govt_gives(rel) + actions.rights_gives(rel)
-                  + actions.dmz_gives(rel) + actions.EQUIPMENT_GIVES + actions.war_gives(rel)
-                  + actions.third_gives(rel))
+                  + actions.GOODS_GIVES + ["give:dismantle"] + actions.govt_gives(rel) + actions.rights_gives(rel)
+                  + actions.dmz_gives(rel) + actions.war_gives(rel) + actions.third_gives(rel))
         asks = (actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel)
-                + ["ask:civ", "ask:mil", "ask:dismantle"] + actions.govt_asks(rel) + actions.rights_asks(rel)
-                + actions.dmz_asks(rel) + actions.EQUIPMENT_ASKS + actions.war_asks(rel) + actions.third_asks(rel))
+                + actions.GOODS_ASKS + actions.govt_asks(rel) + actions.rights_asks(rel)
+                + actions.dmz_asks(rel) + actions.war_asks(rel) + actions.third_asks(rel))
         standing = treaties.standing(camp, tag)
         ok = lambda k: k != "give:peace" and k not in standing and actions.possible(rel, k)
         return peace_offer + [k for k in offers + actions.rights_after(rel) if ok(k)], [k for k in asks if ok(k)]
@@ -859,9 +860,9 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
     if not pol and policy.stale(camp, tag):
         return [], []                                      # its old aims no longer apply; wait for the new ones
     offers = pol["offers"] if pol else (actions.GIVES + actions.state_gives(rel) + actions.rights_gives(rel)
-                                        + actions.dmz_gives(rel) + actions.war_gives(rel))
+                                        + actions.dmz_gives(rel) + actions.war_gives(rel) + actions.GOODS_GIVES)
     asks = pol["asks"] if pol else (actions.ASKS + actions.state_asks(rel) + actions.rights_asks(rel)
-                                    + actions.dmz_asks(rel) + actions.war_asks(rel))
+                                    + actions.dmz_asks(rel) + actions.war_asks(rel) + actions.GOODS_ASKS)
     refused |= treaties.standing(camp, tag)                # a pledge already given isn't asked for again
     ok = lambda k: k not in refused and k != "give:peace" and actions.possible(rel, k)
     return peace_offer + [k for k in offers + actions.rights_after(rel) if ok(k)], [k for k in asks if ok(k)]

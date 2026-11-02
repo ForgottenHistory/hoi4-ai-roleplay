@@ -66,9 +66,11 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
     def words(keys: List[str]) -> str:
         return ", ".join(actions.described_list(keys)) or "(none possible right now)"
     gives = (actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)
-             + actions.possible_keys(rel, actions.rights_gives(rel) + actions.dmz_gives(rel) + _war_gives(rel)))
+             + actions.possible_keys(rel, actions.rights_gives(rel) + actions.dmz_gives(rel) + _war_gives(rel)
+                                     + actions.GOODS_GIVES))
     asks = (actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)
-            + actions.possible_keys(rel, actions.rights_asks(rel) + actions.dmz_asks(rel) + _war_asks(rel)))
+            + actions.possible_keys(rel, actions.rights_asks(rel) + actions.dmz_asks(rel) + _war_asks(rel)
+                                    + actions.GOODS_ASKS))
     breaks = actions.possible_keys(rel, actions.UNILATERAL)
     return (
         f"Decide {them_name}'s current foreign policy toward {me_name}, as {them_name}'s government would "
@@ -88,6 +90,10 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
         + (f"\n\nStates are listed with their number (state N). {actions.TERRITORY_NOTE} {actions.RIGHTS_NOTE}"
            if rel.them_border or rel.me_border else "")
         + (f"\n\n{actions.DISARM_NOTE}" if any(actions.is_dmz(k) for k in gives + asks) else "")
+        + (f"\n\nGoods (factories, equipment, political power) are named without an amount; the amount is chosen "
+           f"when proposing them. {actions.FACTORY_NOTE} {actions.economy(them_name, me_name, rel)} "
+           f"{actions.ECONOMY['equipment']} {actions.ECONOMY['pp']}"
+           if any(k in actions.GOODS_GIVES + actions.GOODS_ASKS for k in gives + asks) else "")
         + (f"\n\n{actions.bound_note(them_name, me_name, rel.bound)}" if rel.bound else "")
         + (f"\n\n{actions.WAR_NOTE}" if any(actions.is_war(k) or actions.is_pledge(k) for k in gives + asks) else "")
         + (f"\n\n{actions.ALIGN_NOTE}" if any(actions.third_kind(k) for k in gives + asks) else "")
@@ -178,9 +184,11 @@ def parse(text: str, rel: "actions.Relation", war_baseline: Optional[int] = None
         **out_war, "v": VERSION,
         "stance": stance, "urgency": urgency, "policy": policy,
         "offers": _keys(line("offers"), actions.possible_keys(rel, actions.GIVES) + actions.state_gives(rel)
-                         + actions.rights_gives(rel) + actions.dmz_gives(rel) + _war_gives(rel)),
+                         + actions.rights_gives(rel) + actions.dmz_gives(rel) + _war_gives(rel)
+                         + actions.possible_keys(rel, actions.GOODS_GIVES)),
         "asks": _keys(line("asks"), actions.possible_keys(rel, actions.ASKS) + actions.state_asks(rel)
-                       + actions.rights_asks(rel) + actions.dmz_asks(rel) + _war_asks(rel)),
+                       + actions.rights_asks(rel) + actions.dmz_asks(rel) + _war_asks(rel)
+                       + actions.possible_keys(rel, actions.GOODS_ASKS)),
         "breaks": _keys(line("breaks"), actions.possible_keys(rel, actions.UNILATERAL)),
     }
 

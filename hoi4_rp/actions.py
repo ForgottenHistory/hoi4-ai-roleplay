@@ -32,6 +32,7 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
                               (ALIGN_NOTE), kept by treaties.py, steering them's AI (steering.py); ask/plain forms too
     [[offer sanction TAG]] [[ask sanction TAG]] [[sanction TAG]]   a trade embargo on a third country, now
     [[offer rifles N]] [[ask artillery N]] [[trucks N]]   stockpiled equipment as currency (EQUIPMENT)
+    [[offer pp N]] [[ask pp N]] [[pp N]]   political power as currency (PP_NOTE), up to MAX_PP
     Terms over time ([[for 12 months]], instalments [[offer civ 2 x3]]) and [[end treaty]]: treaties.py
 
 Each deal checks the game first: it must be possible right now (agreements need peace and must not exist
@@ -186,6 +187,8 @@ class Relation:
     third: Dict[str, Dict] = None         # countries a pledge or commitment may name: tag -> {name, flags}
     them_equipment: Dict[str, int] = None  # stockpiles: "rifles"/"artillery"/"trucks" -> amount
     me_equipment: Dict[str, int] = None
+    them_pp: int = 0                      # political power each side has
+    me_pp: int = 0
     pledged: frozenset = frozenset()      # pledges, commitments standing between the two (treaties.standing)
     them_ports: bool = True               # has a coast: docking rights in its ports mean something
     me_ports: bool = True
@@ -286,6 +289,7 @@ def relation(them: str, me: str) -> Relation:
                     me_enemies=joinable_enemies(me, them), them_enemies=joinable_enemies(them, me),
                     third=third_countries(them, me),
                     them_equipment=equipment_counts(them), me_equipment=equipment_counts(me),
+                    them_pp=pp_amount(them), me_pp=pp_amount(me),
                     them_ports=_coastal(them), me_ports=_coastal(me), them_navy=_navy(them), me_navy=_navy(me),
                     tension=level, them_tension=rules.get(them), me_tension=rules.get(me))
 
@@ -898,6 +902,32 @@ def is_equipment_key(key: str) -> bool:
     return len(parts) >= 2 and parts[0] in ("give", "ask") and parts[1] in EQUIPMENT
 
 
+# ---------------------------------------------------------------- political power as currency
+# "give:pp:50": them hands me 50 political power; "ask:pp:50": them asks me for 50 (at most what the giver has).
+#     GIVER = { add_political_power = -N } RECEIVER = { add_political_power = N }
+
+MAX_PP = 200
+PP_NOTE = ("Political power is a government's capacity to act (laws, advisors, decisions, focuses): what it hands over "
+           "it cannot spend at home for weeks or months. Governments trade it as they would money, for something "
+           "worth as much, in amounts that match what is at stake. N is a whole number up to {max}, at most what the "
+           "giver has.")
+
+
+def pp_amount(tag: str) -> int:
+    for line in gamestate.query(f'{tag} = {{ log = "AIRPP|[?THIS.political_power]" }}'):
+        if line.startswith("AIRPP|"):
+            try:
+                return max(0, int(float(line[6:])))
+            except ValueError:
+                pass
+    return 0
+
+
+def is_pp_key(key: str) -> bool:
+    parts = key.split(":")
+    return len(parts) >= 2 and parts[0] in ("give", "ask") and parts[1] == "pp"
+
+
 # "give:subject:SLO": them hands me its subject; "ask:subject:SLO": them asks me to hand it my subject.
 #     OLD = { end_puppet = SUB } NEW = { puppet = SUB }
 _SUBJECT_NAMES: Dict[str, str] = {}
@@ -956,10 +986,14 @@ def _govt_script(tag: str, ideology: str) -> str:
 FACTORY_KEYS = ("give:civ", "give:mil", "ask:civ", "ask:mil",    # amount chosen in the command
                 "give:dismantle", "ask:dismantle")
 EQUIPMENT_KEYS = tuple(f"{v}:{k}" for k in EQUIPMENT for v in ("give", "ask"))
-AMOUNT_KEYS = FACTORY_KEYS + EQUIPMENT_KEYS
-AMOUNT_KINDS = ("civ", "mil", "dismantle") + tuple(EQUIPMENT)
+PP_KEYS = ("give:pp", "ask:pp")
+AMOUNT_KEYS = FACTORY_KEYS + EQUIPMENT_KEYS + PP_KEYS
+AMOUNT_KINDS = ("civ", "mil", "dismantle") + tuple(EQUIPMENT) + ("pp",)
 EQUIPMENT_GIVES = [k for k in EQUIPMENT_KEYS if k.startswith("give:")]
 EQUIPMENT_ASKS = [k for k in EQUIPMENT_KEYS if k.startswith("ask:")]
+# Goods counted out in a number (factories, equipment, political power), as the policy and menus name them
+GOODS_GIVES = ["give:civ", "give:mil"] + EQUIPMENT_GIVES + ["give:pp"]
+GOODS_ASKS = ["ask:civ", "ask:mil", "ask:dismantle"] + EQUIPMENT_ASKS + ["ask:pp"]
 ECONOMY: Dict[str, str] = {}   # {"text": both sides' industry} for the help of the letter being written (economy())
 UNION: Dict[str, str] = {}     # {"note": ...} while the letter being written is from a country whose aim is union (union())
 
@@ -986,6 +1020,7 @@ def economy(them_name: str, me_name: str, rel: "Relation") -> str:
     stock = lambda e: ", ".join(f"{(e or {}).get(k, 0):,} {EQUIPMENT[k][1]}" for k in EQUIPMENT)
     ECONOMY["equipment"] = (f"In stock: you ({them_name}) have {stock(rel.them_equipment)}; {me_name} has "
                             f"{stock(rel.me_equipment)}.")
+    ECONOMY["pp"] = (f"Political power: you ({them_name}) have {rel.them_pp or 0}; {me_name} has {rel.me_pp or 0}.")
     return ECONOMY["text"]
 
 
@@ -1157,6 +1192,14 @@ def get_deal(key: str) -> Optional[Deal]:
                         f"{{them_name}} sent us {what}.", f"{{them_name}} sent {{me_name}} {what}.")
         return Deal(key, "equipment", False, True, f"ask {{me_name}} to send you {what}", what, "",
                     f"We sent {{them_name}} {what}.", f"{{me_name}} sent {{them_name}} {what}.", True)
+    if is_pp_key(key):
+        verb, _, n = (key + ":0").split(":")[:3]
+        what = f"{n if n != '0' else 'N'} political power"
+        if verb == "give":
+            return Deal(key, "pp", False, True, f"hand {{me_name}} {what} of your own", what, "",
+                        f"{{them_name}} handed us {what}.", f"{{them_name}} handed {{me_name}} {what}.")
+        return Deal(key, "pp", False, True, f"ask {{me_name}} to hand you {what}", what, "",
+                    f"We handed {{them_name}} {what}.", f"{{me_name}} handed {{them_name}} {what}.", True)
     if is_factory_key(key) or key in FACTORY_KEYS:
         verb, kind, n = (key + ":0").split(":")[:3]
         what = _amount(n if n != "0" else "N", FACTORIES[kind][1])
@@ -1232,6 +1275,11 @@ def possible(rel: Relation, key: str) -> bool:
         have = ((rel.them_equipment if parts[0] == "give" else rel.me_equipment) or {}).get(parts[1], 0)
         n = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
         return not rel.at_war and 0 < n <= have
+    if is_pp_key(key):                                         # political power; amount in the command
+        parts = key.split(":")
+        have = rel.them_pp if parts[0] == "give" else rel.me_pp
+        n = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
+        return not rel.at_war and 0 < n <= min(MAX_PP, have or 0)
     if is_war(key):
         verb, _, tag = key.split(":")
         joiner_subject = rel.them_subject if verb == "give" else rel.me_subject
@@ -1350,8 +1398,11 @@ def described(key: str) -> str:
         return f"{word(key)} (they would join your faction)"
     if key in ("give:join", "ask:faction"):
         return f"{word(key)} (you would join their faction)"
-    if is_factory_key(key) or key in FACTORY_KEYS:
-        return word(key)
+    goods = {"civ": "civilian factories", "mil": "military factories", "dismantle": "dismantling military factories",
+             "pp": "political power", **{k: v[1] + " from the stockpile" for k, v in EQUIPMENT.items()}}
+    kind = factory_base(key).split(":")[1] if factory_base(key) in AMOUNT_KEYS else ""
+    if kind:                                   # "civ (civilian factories)": the amount comes with the command
+        return f"{word(key)} ({goods[kind]})"
     if is_govt_key(key):
         return f"{word(key)} ({_PARTY_LABELS.get(key, '')})"
     if key == "give:submit":
@@ -1440,7 +1491,7 @@ def _item_lines(verb: str, keys: List[str], f: Dict[str, str], grants=()) -> Lis
 def _notes(keys: List[str]) -> List[str]:
     """The background notes the items among `keys` need, each once."""
     out = []
-    if any(k in FACTORY_KEYS or is_factory_key(k) for k in keys):
+    if any(factory_base(k) in FACTORY_KEYS for k in keys):     # not equipment or political power
         out.append(FACTORY_NOTE + f" N is a whole number up to {MAX_FACTORIES}, at most what the giver has.")
     if any(is_state(k) for k in keys):
         out.append(TERRITORY_NOTE)
@@ -1448,7 +1499,7 @@ def _notes(keys: List[str]) -> List[str]:
         out.append(RIGHTS_NOTE)
     if any(is_dmz(k) or factory_base(k) in ("give:dismantle", "ask:dismantle") for k in keys):
         out.append(DISARM_NOTE)
-    if any(is_state(k) or is_rights(k) or k in FACTORY_KEYS for k in keys) and ECONOMY.get("text"):
+    if any(is_state(k) or is_rights(k) or factory_base(k) in FACTORY_KEYS for k in keys) and ECONOMY.get("text"):
         out.append(ECONOMY["text"])
     if any(k in keys for k in ("give:submit", "ask:submit", "give:annex")):
         out.append(UNION.get("note") or SUBMIT_NOTE)
@@ -1473,7 +1524,7 @@ def reply_grants(rel: Relation) -> List[str]:
     return (possible_keys(rel, GIVES) + state_gives(rel) + possible_keys(rel, ["give:civ", "give:mil"])
             + possible_keys(rel, govt_gives(rel)) + possible_keys(rel, rights_gives(rel))
             + possible_keys(rel, dmz_gives(rel) + ["give:dismantle"])
-            + possible_keys(rel, EQUIPMENT_GIVES + war_gives(rel) + third_gives(rel)))
+            + possible_keys(rel, EQUIPMENT_GIVES + ["give:pp"] + war_gives(rel) + third_gives(rel)))
 
 
 def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
@@ -1518,6 +1569,8 @@ def _new_goods_notes(keys: List[str]) -> List[str]:
     if any(is_equipment_key(k) for k in keys):
         out.append(f"{EQUIPMENT_NOTE} N is a whole number of pieces, at most what the sender has in stock. "
                    f"{ECONOMY.get('equipment', '')}".strip())
+    if any(is_pp_key(k) for k in keys):
+        out.append(f"{PP_NOTE.format(max=MAX_PP)} {ECONOMY.get('pp', '')}".strip())
     return out
 
 
@@ -1564,6 +1617,7 @@ TOPIC_WORDS = {
     "rifles": r"\b(rifles?|small arms|infantry equipment)\b",
     "artillery": r"\b(artillery|field guns?|howitzers?)\b",
     "trucks": r"\b(trucks?|lorries|motor vehicles)\b",
+    "pp": r"\bpolitical (power|capital)\b",
     "access": r"\b(military access|passage|transit)\b",
     "docking": r"\b(docking|harbou?rs?)\b",
     "pact": r"\b(non-aggression|pacts?)\b",
@@ -1892,6 +1946,17 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
                 side = rel.them_equipment if verb == "give" else rel.me_equipment
                 side[kind] = max(0, side.get(kind, 0) - int(n))
+            continue
+        if is_pp_key(key):
+            verb, _, n = key.split(":")
+            giver, receiver = (them, me) if verb == "give" else (me, them)
+            if _effect(f"{giver} = {{ add_political_power = -{n} }} {receiver} = {{ add_political_power = {n} }}"):
+                shown.append((deal.shown.format(**fmt), verb == "ask"))
+                events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
+                if verb == "give":
+                    rel.them_pp = max(0, (rel.them_pp or 0) - int(n))
+                else:
+                    rel.me_pp = max(0, (rel.me_pp or 0) - int(n))
             continue
         if is_factory_key(key) and key.split(":")[1] == "dismantle":
             verb, _, n = key.split(":")

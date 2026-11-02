@@ -201,11 +201,21 @@ def _clean_for_game(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()
 
 
-def _ties(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+def market_by_letter(camp: Optional[campaign.Campaign], a: str, b: str) -> bool:
+    """Was market access between the two agreed in a letter deal? The game opens and closes it on its own, with half
+    the world at once (trade laws, governments), which is no favour and no grievance: only a deal counts."""
+    return bool(camp) and any(e.get("type") in ("give:market", "ask:market") and {a, b} <= set(e["tags"][:2])
+                              for e in camp.data["events"])
+
+
+def _ties(them: gamestate.CountryState, me: gamestate.CountryState, camp: Optional[campaign.Campaign] = None) -> str:
     """The agreements between the two as the game has them, however they came about: at the start (France's
-    guarantee of Belgium), by a focus or event, by the game's own diplomacy, or by letter."""
+    guarantee of Belgium), by a focus or event, by the game's own diplomacy, or by letter. Market access only where
+    a letter deal opened it (market_by_letter)."""
     t, m = them.name, me.name
-    words = {"pact": "a non-aggression pact", "market": "market access both ways",
+    words = {"pact": "a non-aggression pact",
+             **({"market": "market access both ways (agreed by letter)"} if market_by_letter(camp, them.tag, me.tag)
+                else {}),
              "they_guarantee": f"{t} guarantees {m}'s independence", "my_guarantee": f"{m} guarantees {t}'s independence",
              "they_access": f"{t} gives {m} military access", "my_access": f"{m} gives {t} military access",
              "they_docking": f"{t} gives {m} docking rights", "my_docking": f"{m} gives {t} docking rights",
@@ -216,7 +226,8 @@ def _ties(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         return ""
 
 
-def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+def _relation(them: gamestate.CountryState, me: gamestate.CountryState,
+              camp: Optional[campaign.Campaign] = None) -> str:
     facts = []
     if me.tag in them.enemies:
         facts.append(f"{them.name} and {me.name} are AT WAR with each other.")
@@ -224,7 +235,7 @@ def _relation(them: gamestate.CountryState, me: gamestate.CountryState) -> str:
         facts.append(f"Both are members of the {them.faction}.")
     if me.tag in them.neighbors:
         facts.append("They share a border.")
-    if (ties := _ties(them, me)):        # from the game: those of the start and of focuses too, not only letter deals
+    if (ties := _ties(them, me, camp)):        # from the game: those of the start and of focuses too, not only letter deals
         facts.append(f"In force between them now: {ties}. Don't offer or ask for what already stands.")
     def subject(sub: gamestate.CountryState, lord: gamestate.CountryState) -> str:
         level = sub.autonomy.get(lord.tag) or lord.autonomy.get(sub.tag) or ""
@@ -319,11 +330,14 @@ def _allies_stances(camp: campaign.Campaign, them: gamestate.CountryState, me: g
 
 def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
     # How the player answered someone else's proposal is between those two (the deal itself, if any, has its
-    # own lines, which others do see).
+    # own lines, which others do see). Market access the game opened or closed on its own is left out: it comes
+    # and goes with half the world at once and means nothing (a letter deal that opened it is a give:market event).
     events = [e for e in camp.data["events"]
               if (them.tag in e["tags"] or me.tag in e["tags"] or e.get("major"))
+              and not e.get("type", "").startswith("agreement:market")
               and (e.get("type") != "offer_answer" or them.tag in e["tags"])
-              and (e.get("type") != "focus" or me.tag not in e["tags"] or intel.knows_focuses(me))]
+              and (e.get("type") != "focus" or me.tag not in e["tags"] or intel.knows_focuses(me))
+              and camp.visible(e, them.tag)]
     if not events:
         return "Nothing notable recorded yet."
     return "\n".join(f"- {when}: {text}" for when, text in chronicle.compact(events, camp.snapshot))
@@ -369,7 +383,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         f"THE COUNTRY YOU CORRESPOND WITH:\n"
         f"{gamestate.describe(me, focus_details=OTHER_FOCUSES, spirit_details=False)}\n"
         + (f"{way}\n" if (way := course.text(me, own=False)) else "") + "\n"
-        f"BETWEEN YOU: {_relation(them, me)}\n\n"
+        f"BETWEEN YOU: {_relation(them, me, camp)}\n\n"
         + (f"{own}\n\n" if (own := plight.text(them, style.current().plight)) else "")
         + (f"{me.name.upper()}'S SITUATION: {theirs}.\n\n" if (theirs := plight.short(me)) else "")
         + (f"{sec}\n\n" if (sec := _security(them, me)) else "")
@@ -425,17 +439,28 @@ def _opening(text: str) -> str:
     return ""
 
 
+def _closing(text: str) -> str:
+    """The last sentence of a letter's body: before the sign-off and signature."""
+    body = [p.strip() for p in text.split("\n\n") if len(p.split()) > 8]
+    if not body:
+        return ""
+    sentences = re.findall(r"[^.!?]+[.!?]+", body[-1].replace("\n", " "))
+    return (sentences[-1] if sentences else body[-1]).strip()[:200]
+
+
 def _others_openings(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
-    """How the player's latest letters from other governments opened. Each writer sees only its own correspondence,
-    so without this they all lead with the same great event of the day."""
+    """How the player's latest letters from other governments opened and closed. Each writer sees only its own
+    correspondence, so without this they all lead with the same great event of the day, and end alike."""
     got = sorted((x for other, ls in camp.threads(me.tag).items() if other != them.tag
                   for x in ls if x["from"] == other), key=lambda x: x["date"])[-OPENINGS:]
-    lines = [f'- {x["when"]}: "{o}"' for x in got if (o := _opening(x["text"]))]
+    lines = [f'- {x["when"]}: "{o}" ... "{c}"' if (c := _closing(x["text"])) and c not in o else f'- {x["when"]}: "{o}"'
+             for x in got if (o := _opening(x["text"]))]
     if not lines:
         return ""
-    return (f"{me.name} has lately had letters from other governments that opened like this (you haven't read them; "
-            f"this is so your letter doesn't sound like theirs):\n" + "\n".join(lines) + "\n"
-            f"Don't open the same way, and don't dwell on an event they already made much of: everyone in "
+    return (f"{me.name} has lately had letters from other governments that opened and closed like this (you haven't "
+            f"read them and don't know what they said; this is only so your letter doesn't sound like theirs, so "
+            f"never refer to them or to what they say):\n" + "\n".join(lines) + "\n"
+            f"Don't open or close the same way, and don't dwell on an event they already made much of: everyone in "
             f"{me.name}'s capital knows the great news of the day. Lead with what is particular to you and "
             f"{me.name}; mention such an event only where it bears on what you want, briefly.")
 
@@ -450,7 +475,8 @@ def _transcript(camp: campaign.Campaign, them: gamestate.CountryState, me: games
 
 
 def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign,
-                   task: str = "", actions_help: str = "") -> str:
+                   task: str = "", actions_help: str = "", form: str = "") -> str:
+    """`form`: the letter's rolled length and shape (style.roll()), also named at the end of the prompt."""
     consequences = (
         f"{actions_help}\n\nOnly those commands change anything in the game: don't claim other changes "
         "(no other treaties take effect, no units move)."
@@ -463,7 +489,8 @@ def _system_prompt(them: gamestate.CountryState, me: gamestate.CountryState, cam
         f"{_history_note(camp, them, me)}\n\n"
         + (f"{fresh}\n\n" if (fresh := _others_openings(camp, them, me)) else "")
         + f"{task or _reply_task(them, me)}\n\n"
-        f"{style.current().rules.format(name=them.name, other=me.name)}\n\n{style.diplomacy()}\n\n{consequences}"
+        f"{style.current().rules.format(name=them.name, other=me.name, length=form or style.roll())}\n\n"
+        f"{style.diplomacy()}\n\n{consequences}"
     )
 
 
@@ -540,9 +567,11 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                  + ("\n\n" + treaties.help_text(wager=True) if not rel.at_war else "")
                  + ("\n\n" + ultimatums.help_text(them.name, me.name) if _may_threaten(camp, to, rel) else ""))
     try:
-        prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text)}]
-                  + _conversation(camp, them, me, f"(Reply in {style.current().length}.)"))
-        raw = llm.chat(prompt, kind="reply", about=to)
+        form = style.roll()
+        prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text, form=form)}]
+                  + _conversation(camp, them, me,
+                                  f"(Reply as {style.last_word(form, style.feelings(camp, to))}.)"))
+        raw = style.strip_feeling(llm.chat(prompt, kind="reply", about=to), to, camp)
     except llm.LLMError as e:
         print("  LLM error:", e)
         _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
@@ -894,12 +923,14 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
             + ("\n\n" + _peace_note(them, me, camp, offers, reply=False) if rel.at_war else "")
             + ("\n\n" + treaties.help_text() if (offers or asks) and not rel.at_war else "")
             + ("\n\n" + ultimatums.help_text(them.name, me.name) if _may_threaten(camp, sender, rel) else ""))
-    prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task)}]
+    form = style.roll()
+    prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task, form=form)}]
               + _conversation(camp, them, me)
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
-                                             f"Write your letter to them now, in {style.current().length}.)"}])
+                                             f"Write your letter to them now, as "
+                                             f"{style.last_word(form, style.feelings(camp, sender))}.)"}])
     try:
-        raw = llm.chat(prompt, kind="letter", about=sender)
+        raw = style.strip_feeling(llm.chat(prompt, kind="letter", about=sender), sender, camp)
     except llm.LLMError as e:
         print(f"  {sender} could not write (LLM error): {e}")
         return
@@ -1584,7 +1615,7 @@ class _Session:
         story._story(camp)["last_moment"] = moment.date      # this moment is told, whatever comes of it
         camp.save()
         print(f"  story event: writing one about: {moment.text[:200]}")
-        msgs = story.messages(camp, me, them, moment, _relation(them, me) if them else "")
+        msgs = story.messages(camp, me, them, moment, _relation(them, me, camp) if them else "")
         parties = {p.ideology: p.long_name or p.name for p in me.parties}
         self.story_job = (self.story_pool.submit(llm.chat, msgs, None, None, None, "story", moment.other), camp.id,
                           them.tag if them else "", them.name if them else "", parties)
@@ -1908,7 +1939,7 @@ def story_now() -> int:
     them = gamestate.country(moment.other) if active(camp.snapshot, moment.other) else None
     parties = {p.ideology: p.long_name or p.name for p in me.parties}
     print(f"writing a story event about ({moment.when}): {moment.text[:300]}")
-    raw = llm.chat(story.messages(camp, me, them, moment, _relation(them, me) if them else ""),
+    raw = llm.chat(story.messages(camp, me, them, moment, _relation(them, me, camp) if them else ""),
                    kind="story", about=moment.other)
     draft = story.parse(raw, list(parties))
     if not draft:

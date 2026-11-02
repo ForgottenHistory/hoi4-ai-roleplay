@@ -690,7 +690,8 @@ _WAR_JOIN = ("Joining a war is the gravest commitment short of submission: your 
              "the enemy will treat you as one. A government joins only where its own interests are at stake (an "
              "enemy it fears or covets, a friend it cannot let fall) or for a great price, and only if it can fight; "
              f"it asks it of a country able to help. The joiner enters the war {WAR_DELAY_DAYS} days after the deal, "
-             "to mobilize; if the war is over by then, nothing comes of it.")
+             "to mobilize, not at once; if the war is over by then, nothing comes of it. A letter that proposes "
+             f"joining a war tells the other side when ('enter the war within {WAR_DELAY_DAYS} days', not 'enter it now').")
 PLEDGE_NOTE = ("A war pledge is a promise for later: whenever one side goes to war with "
             "the named country (declaring war itself, being attacked, or called in by an ally or guarantee), the "
             "other joins at once, as Italy pledged itself to Germany in the Pact of Steel. Unlike a guarantee it "
@@ -2067,8 +2068,10 @@ def package_text(keys: List[str], who: str = "they") -> str:
                           "ask:back": f"{who} {s('ask')} us to stand behind {name} with {them_it}",
                           "give:sanction": f"{who} {s('offer')} to impose a trade embargo on {name}",
                           "ask:sanction": f"{who} {s('ask')} us to impose a trade embargo on {name}",
-"give:war": f"{who} {s('offer')} to join our war against {name}",
-                          "ask:war": f"{who} {s('ask')} us to join {their} war against {name}",
+                          "give:war": f"{who} {s('offer')} to join our war against {name}, entering it "
+                                      f"{WAR_DELAY_DAYS} days after the deal",
+                          "ask:war": f"{who} {s('ask')} us to join {their} war against {name}, entering it "
+                                     f"{WAR_DELAY_DAYS} days after the deal",
                           "give:pledge": f"{who} {s('pledge')} to join us whenever we go to war with {name}",
                           "ask:pledge": f"{who} {s('ask')} us to pledge to join {'them' if plural else 'it'} whenever "
                                         f"{'they go' if plural else 'it goes'} to war with {name}"}[k.rsplit(":", 1)[0]])

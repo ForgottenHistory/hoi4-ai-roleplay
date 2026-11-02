@@ -3,6 +3,13 @@
 Open another country in the diplomacy view, pick **Write Letter**, write and press Send. With `run` going, the
 country answers in a reply window. A save made while a reply was being written still gets it after loading.
 
+Letters are private. What a deal puts in place is seen by the world, but what was said (a threat, talks that came to
+nothing, between you and a country or between two others) is known only to the two, and to a country with 75%
+civilian intel on one of them (with `[world] intel`).
+
+Market access the game opens and closes on its own (trade laws, new governments, half the world at once) isn't
+told to countries at all: only market access agreed in a letter deal counts between you.
+
 Countries also write on their own: about events involving you, when their policy is urgent, or after a quiet spell
 (`[letters]` in config.ini sets the gaps). Each sees your whole correspondence with it and the events it took part in.
 
@@ -110,6 +117,9 @@ forever.
 - `serious`: formal, period diplomacy
 - `dramatic`: the leader as an over-the-top caricature of their country
 - `players`: casual, like people in a multiplayer roleplay game
+
+Each letter's length is rolled: a short note, a letter, now and then a long one. The writer first names the one
+feeling that drives it (shown in the console, taken out of the letter), and writes in it.
 
 `diplomacy` sets how readily countries deal: `realistic`, `balanced` (default) or `open`.
 

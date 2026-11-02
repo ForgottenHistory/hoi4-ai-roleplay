@@ -10,8 +10,9 @@ Deeds are found by rules (detect(), from the chronicle each time the world moves
 Promises are read from the player's own letters (most roleplay happens in letters): a background LLM call lists any
 promise or assurance in each letter the player sends, kept per recipient. The same call lists threats: each is
 "open" until the player carries it out (attacks the country, or takes its land by war, focus or deal) or it turns
-"empty" (its deadline passes, else after THREAT_DAYS). credibility() tells every country how often the player's
-threats came true, so a threat from a power that follows through carries weight, and empty ones lose it.
+"empty" (its deadline passes, else after THREAT_DAYS). credibility() tells a country how often the player's
+threats came true, so a threat from a power that follows through carries weight, and empty ones lose it: the
+threats made to it, and others' only where its intelligence reaches into those letters (intel.overhears).
 
 Each deed is then judged in the background by the LLM acting as an impartial game master (not any country): the
 facts, the ties, the letters and promises between the two, and the player's record so far ->
@@ -307,8 +308,11 @@ def _settle_threats(camp: campaign.Campaign, player: str, new: Dict, events: Lis
 
 
 def credibility(camp: campaign.Campaign, player_name: str, viewer: str) -> str:
-    """How often the player's threats came true, for a prompt."""
-    threats = _rep(camp)["threats"]
+    """How often the player's threats came true, for a prompt: those `viewer` knows of, made to it or caught by its
+    intelligence (a threat is made in a private letter: intel.overhears)."""
+    from . import intel
+    player = camp.data["player"]
+    threats = [t for t in _rep(camp)["threats"] if not viewer or intel.overhears(viewer, player, t["to"])]
     if not threats:
         return ""
     known = lambda t: (camp.snapshot or {}).get("countries", {}).get(t, {}).get("name", t)
@@ -317,7 +321,7 @@ def credibility(camp: campaign.Campaign, player_name: str, viewer: str) -> str:
     yielded = [t for t in threats if t["status"] == "yielded"]
     empty = [t for t in threats if t["status"] == "empty"]
     open_ = [t for t in threats if t["status"] == "open"]
-    lines = [f"{player_name} has made {len(threats)} threats: {len(kept)} carried out, {len(yielded)} got their way "
+    lines = [f"{player_name} has made {len(threats)} threats that you know of: {len(kept)} carried out, {len(yielded)} got their way "
              f"(the country gave in), {len(empty)} came to nothing, {len(open_)} still open."]
     lines += [f"- carried out: to {name(t['to'])}, {t['when']}: \"{t['text']}\" -> {t['how']}" for t in kept[-4:]]
     lines += [f"- the country gave in: {name(t['to'])}, {t['when']}: \"{t['text']}\" -> {t['how']}"

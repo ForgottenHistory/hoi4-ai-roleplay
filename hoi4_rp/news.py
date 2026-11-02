@@ -85,7 +85,8 @@ def due(camp: campaign.Campaign) -> Optional[Dict]:
     fresh = campaign.shift(today, -FRESH_DAYS)
     found = [e for e in camp.data["events"] if (e.get("type") in ("news", "crisis")
                                                 or e.get("type") == "fork" and e.get("major")) and e["date"] > n["told"]
-             and e["date"] >= fresh and camp.data["player"] not in e["tags"]]
+             and e["date"] >= fresh and camp.data["player"] not in e["tags"]
+             and camp.visible(e, camp.data["player"])]       # talks that came to nothing: only with the intel
     return found[-1] if found else None
 
 

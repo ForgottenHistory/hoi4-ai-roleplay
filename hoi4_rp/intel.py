@@ -49,6 +49,39 @@ def enabled() -> bool:
     return settings().world.intel
 
 
+# Letters between two governments are private: a third country knows what was said in them (a threat, talks that
+# came to nothing) only with this much civilian intel on one of the two. Without [world] intel, never. What a deal
+# put in place is another matter: the world sees that (its own events).
+LETTERS = 0.75
+_SEEN: Dict[tuple, tuple] = {}     # (observer, target) -> (when read, civilian intel), for a few minutes
+_SEEN_SECONDS = 300
+
+
+def _civilian(observer: str, target: str) -> float:
+    import time
+    now = time.monotonic()
+    hit = _SEEN.get((observer, target))
+    if hit and now - hit[0] < _SEEN_SECONDS:
+        return hit[1]
+    try:
+        lv = levels(observer, target)
+    except gamestate.StateError:
+        lv = None
+    value = lv["civilian"] if lv else 0.0
+    _SEEN[(observer, target)] = (now, value)
+    return value
+
+
+def overhears(observer: str, a: str, b: str) -> bool:
+    """Does `observer` know what passed in private letters between `a` and `b`? Always if it is one of them;
+    otherwise only with [world] intel and LETTERS civilian intel on either."""
+    if observer in (a, b):
+        return True
+    if not enabled():
+        return False
+    return any(_civilian(observer, t) >= LETTERS for t in (a, b) if t)
+
+
 def levels(observer: str, target: str) -> Optional[Dict[str, float]]:
     """`observer`'s intel over `target`, each kind 0..1, or None when the game doesn't give them."""
     probe = "|".join(f"[?{observer}.{VARS[k]}@{target}]" for k in KINDS)

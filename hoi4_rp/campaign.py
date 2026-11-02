@@ -216,6 +216,17 @@ class Campaign:
     def add_events(self, events: List[Dict]) -> None:
         self.data["events"].extend(events)
 
+    @staticmethod
+    def visible(e: Dict, observer: str) -> bool:
+        """Does `observer` know of this event? A private one (what passed in letters between two others, with
+        nothing put in place) only through its intelligence (intel.overhears)."""
+        private = e.get("private") or (e.get("type") == "news" and " proposed to " in e.get("text", "")
+                                       and "took effect" not in e.get("text", ""))   # saved before the flag
+        if not private or observer in e["tags"]:
+            return True
+        from . import intel
+        return intel.overhears(observer, *(e["tags"] + ["", ""])[:2])
+
     def memory_of(self, tag: str) -> List[Dict]:
         """Events a country remembers: those it took part in, and world events involving major powers."""
         return [e for e in self.data["events"] if tag in e["tags"] or e.get("major")]

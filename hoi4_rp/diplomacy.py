@@ -234,10 +234,13 @@ _TIES = [  # (trigger, words), {A} {B} tags, {a} {b} names
 ]
 
 
-def ties(a: str, b: str, an: str, bn: str) -> str:
-    """What is in force between two countries, read live."""
+def ties(a: str, b: str, an: str, bn: str, camp: Optional[campaign.Campaign] = None) -> str:
+    """What is in force between two countries, read live. Market access only where a letter deal opened it: the
+    game opens it with half the world on its own (letters.market_by_letter)."""
     from . import bridge
-    found = [words.format(a=an, b=bn) for trig, words in _TIES if bridge.trigger(trig.format(A=a, B=b))]
+    from .letters import market_by_letter
+    found = [words.format(a=an, b=bn) for trig, words in _TIES
+             if (words != "market access" or market_by_letter(camp, a, b)) and bridge.trigger(trig.format(A=a, B=b))]
     return "; ".join(found) or "nothing in force"
 
 
@@ -363,7 +366,7 @@ def _situation(camp: campaign.Campaign, me: gamestate.CountryState, other: games
              f"English, whatever your country's language.",
              "THE TWO COUNTRIES:\n" + card(me, w.get(me.tag, {}), other.tag, camp) + "\n"
              + card(other, w.get(other.tag, {}), me.tag, camp),
-             f"BETWEEN YOU: {ties(me.tag, other.tag, me.name, other.name)}."]
+             f"BETWEEN YOU: {ties(me.tag, other.tag, me.name, other.name, camp)}."]
     from . import plight
     own, theirs = plight.text(me), plight.short(other)
     if own:
@@ -746,8 +749,11 @@ def _news(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, deal: str, 
               else f"{bn} answered with a counter-offer")
     text = f"{an} proposed to {bn}: {deal}. {result}." + (f" Behind it: {said['why']}" if said else "")
     c = (camp.snapshot or {}).get("countries", {})
+    # Talks that put nothing in place stay in the letters: only the two, and those whose intelligence reaches
+    # into them, know of them (intel.overhears, campaign.visible)
     camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "news", "tags": [a, b], "text": text,
-                      "major": any(c.get(t, {}).get("major") for t in (a, b))}])
+                      "major": any(c.get(t, {}).get("major") for t in (a, b)),
+                      **({} if took else {"private": True})}])
 
 
 def log(lines: List[str]) -> None:

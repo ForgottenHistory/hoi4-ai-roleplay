@@ -13,7 +13,9 @@ policy toward you:
 - what it would offer you, what it wants from you, what it means to end or impose
 - a few sentences on what it wants and fears
 
-Refreshed every 90 game days or after something happens between you, in the background. Policies shape every letter
+Refreshed every 90 game days (180 when its urgency is 0 or 1 and it isn't at war with you) or after something
+happens between you, in the background. A policy remembers everything between the two of you, but the major
+powers' doings only from the last year. Policies shape every letter
 the country writes and when it writes: urgent ones (3) write soon and may make a proposal the point of the letter.
 
 ## Steering HOI4's AI

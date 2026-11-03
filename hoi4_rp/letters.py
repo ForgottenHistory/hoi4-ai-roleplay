@@ -330,12 +330,15 @@ def _allies_stances(camp: campaign.Campaign, them: gamestate.CountryState, me: g
             f"can make peace for your side; they look to you): " + "; ".join(parts) + ".")
 
 
-def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState) -> str:
+def _memory(camp: campaign.Campaign, them: gamestate.CountryState, me: gamestate.CountryState,
+            world_days: int = 0) -> str:
+    # world_days: events involving neither of the two (the major powers') only from that many days back
+    since = _days(camp.data.get("last_date") or "") - world_days if world_days else 0
     # How the player answered someone else's proposal is between those two (the deal itself, if any, has its
     # own lines, which others do see). Market access the game opened or closed on its own is left out: it comes
     # and goes with half the world at once and means nothing (a letter deal that opened it is a give:market event).
     events = [e for e in camp.data["events"]
-              if (them.tag in e["tags"] or me.tag in e["tags"] or e.get("major"))
+              if (them.tag in e["tags"] or me.tag in e["tags"] or e.get("major") and _days(e["date"]) >= since)
               and not e.get("type", "").startswith("agreement:market")
               and (e.get("type") != "offer_answer" or them.tag in e["tags"])
               and (e.get("type") != "focus" or me.tag not in e["tags"] or intel.knows_focuses(me))
@@ -369,8 +372,10 @@ OWN_FOCUSES = 8       # completed focuses told in full in a country's own descri
 OTHER_FOCUSES = 3     # the same for the country it corresponds with, whose spirits are named only
 
 
-def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign) -> str:
-    """Everything `them` knows when dealing with `me` (with [world] intel, `me` as its intelligence sees it)."""
+def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: campaign.Campaign,
+             world_days: int = 0) -> str:
+    """Everything `them` knows when dealing with `me` (with [world] intel, `me` as its intelligence sees it).
+    world_days: remember the major powers' doings only that far back (policies: they don't need the whole war)."""
     me = intel.view(me, them.tag)
     pol = policy.describe(policy.current(camp, them.tag), them.name, me.name)
     rep = reputation.describe(camp, me.tag, me.name, them.tag)
@@ -400,7 +405,8 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + f"{guarantees.describe(camp, them.tag, them.name, me.name)}\n\n"
         + (f"{ults}\n\n" if (ults := ultimatums.describe(camp, them.tag, them.name, me.name)) else "")
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
-        f"{me.name}, or the major powers):\n{_memory(camp, them, me)}"
+        f"{me.name}, or the major powers{' in the last year' if world_days else ''}):\n"
+        f"{_memory(camp, them, me, world_days)}"
     )
 
 
@@ -1821,7 +1827,7 @@ class _Session:
                 baseline, reasons = war.pressure(them, me, camp)
                 war_part = policy.war_instructions(them.name, me.name, baseline, reasons, war.separate_peace_note(them))
             messages = [{"role": "system", "content":
-                         f"{_context(them, me, camp)}\n\nYOUR CORRESPONDENCE WITH {me.name.upper()}:\n"
+                         f"{_context(them, me, camp, policy.POLICY_WORLD_DAYS)}\n\nYOUR CORRESPONDENCE WITH {me.name.upper()}:\n"
                          f"{_transcript(camp, them, me)}\n\n{policy.instructions(them.name, me.name, rel, war_part)}"},
                         {"role": "user", "content": f"State {them.name}'s policy toward {me.name} now."}]
             self.policy_jobs.append((tag, self.pool.submit(llm.chat, messages, None, 0.7, None, "policy", tag),

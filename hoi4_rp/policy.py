@@ -17,8 +17,9 @@ At war with the player, three more (war.py):
 The war stance starts from a baseline the numbers set (war.pressure) and may move at most one step from it.
 
 It feeds every letter that country writes, decides who writes first when it's quiet (urgency), and holds
-what it may propose (Accept/Decline) or do on its own. Refreshed every REFRESH_DAYS of game time, or sooner
-when something happens between the two; refreshes run in the background (letters.py).
+what it may propose (Accept/Decline) or do on its own. Refreshed every REFRESH_DAYS of game time
+(CALM_REFRESH_DAYS when little is pressing), or sooner when something happens between the two; refreshes run
+in the background (letters.py), with only the last POLICY_WORLD_DAYS of world events in their memory.
 A policy remembers the relationship it was written under (basis(): overlords, war, capitulation). Once that
 changes (say the country was beaten and became the player's puppet) the policy is stale: it is left out of
 prompts and refreshed before anything else.
@@ -35,7 +36,9 @@ from .chronicle import WORLD_TYPES
 
 STANCES = ["friendly", "cordial", "indifferent", "wary", "hostile"]
 REFRESH_DAYS = 90
-VERSION = 4                   # older policies are rewritten once (v4: no war pledges, docking only with a coast)
+CALM_REFRESH_DAYS = 180       # a policy with little urgency (0 or 1) and no war with the player keeps longer
+POLICY_WORLD_DAYS = 365       # world events (not between the two) a policy prompt remembers, counted back from today
+VERSION = 4                  # older policies are rewritten once (v4: no war pledges, docking only with a coast)
 FAR_REFRESH_DAYS = 360        # a distant country with nothing to say (indifferent, urgency 0) thinks again rarely
 POLICY_WORDS = 40
 TERRITORY_REFRESH_DAYS = 30   # states changing hands between the two refresh a policy at most this often
@@ -266,7 +269,9 @@ def refresh_priority(camp, tag: str, player: str, today: str, close: bool = True
     if since - {"territory"}:
         return 2
     far = not close and raw.get("stance") == "indifferent" and not raw.get("urgency")
-    if age >= (FAR_REFRESH_DAYS if far else REFRESH_DAYS) or (since and age >= TERRITORY_REFRESH_DAYS):
+    calm = raw.get("urgency", 0) <= 1 and not raw.get("war")
+    every = FAR_REFRESH_DAYS if far else CALM_REFRESH_DAYS if calm else REFRESH_DAYS
+    if age >= every or (since and age >= TERRITORY_REFRESH_DAYS):
         return 1
     return 0
 

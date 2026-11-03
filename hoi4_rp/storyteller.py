@@ -25,6 +25,8 @@ check() then drops a pick that is not allowed, with no retry (the month passes q
 
 With [ai_diplomacy] guarantees = ours a second call follows each month: the month's guarantee (GuaranteeMonth), kept
 apart from the incident above (its incidents carry "slot": "guarantee" and don't count toward INCIDENTS_PER_MONTH).
+With factions = ours a last call may make one faction move (FactionMonth: join, found or break; "slot": "faction"),
+and the incident above offers no alliances then.
 
 blocs(): countries whose aims (and commitments by letter) share a target: "against Germany: Britain, France, Poland".
 Nobody schedules them; they appear because the agendas line up.
@@ -350,7 +352,8 @@ def _guarantee_reach(camp: campaign.Campaign, a: str, b: str, snap: Dict, friend
 
 
 def _guarantee_slot(x: Dict) -> bool:
-    return x.get("slot") == "guarantee"
+    """An incident of the month's own guarantee or faction pass, apart from the month's incident."""
+    return bool(x.get("slot"))
 
 
 def options(camp: campaign.Campaign, a: str, b: str, snap: Dict) -> List[Dict]:
@@ -361,9 +364,10 @@ def options(camp: campaign.Campaign, a: str, b: str, snap: Dict) -> List[Dict]:
         commit      the aim opposes, befriends or backs a third country that b has an aim of the same side toward
                     too, and that commitment is possible
         ultimatum   a land aim whose target is b, a may threaten b, and the world is tense enough"""
-    from . import actions, diplomacy
+    from . import actions, diplomacy, gates
     c = snap.get("countries", {})
     aims = agendas.aims_of(camp, a)
+    own_factions = gates.ours("factions")              # then the month's faction pass handles them (FactionMonth)
     if not aims or a not in c or b not in c:
         return []
     rel = actions.relation(a, b)
@@ -371,7 +375,7 @@ def options(camp: campaign.Campaign, a: str, b: str, snap: Dict) -> List[Dict]:
     shared = {(x["target"], _side(x["kind"])) for x in agendas.aims_of(camp, b) if x["target"]}
     can_guarantee = "give:guarantee" in offers or "ask:guarantee" in asks
     can_access = "give:access" in offers or "ask:access" in asks
-    can_ally = any(k in offers + asks for k in ("give:faction", "ask:faction", "give:join", "ask:join"))
+    can_ally = any(k in offers + asks for k in actions.FACTION_KEYS)
     out = []
     for aim in aims:
         t, k = aim["target"], aim["kind"]
@@ -383,7 +387,7 @@ def options(camp: campaign.Campaign, a: str, b: str, snap: Dict) -> List[Dict]:
             out.append({"kind": "guarantee", "aim": aim})
         if can_access and friend:
             out.append({"kind": "access", "aim": aim})
-        if can_ally and common_foe:
+        if can_ally and common_foe and not own_factions:
             out.append({"kind": "alliance", "aim": aim})
         if (k in ("oppose", "befriend", "back") and t not in (a, b) and (t, _side(k)) in shared
                 and (f"give:{k}:{t}" in offers or f"ask:{k}:{t}" in asks)):
@@ -462,14 +466,25 @@ class Month:
         self.fut = None
         self.main: Dict = {}
         self.gm: Optional[GuaranteeMonth] = None
+        self.fm: Optional[FactionMonth] = None
 
     def _guarantees(self) -> bool:
-        """After the month's incident: with guarantees = ours, go on to the month's guarantee (True)."""
-        from .config import settings
-        if settings().ai.guarantees != "ours":
-            return False
+        """After the month's incident: with guarantees = ours, go on to the month's guarantee (True); else to the
+        factions."""
+        from . import gates
+        if not gates.ours("guarantees"):
+            return self._factions()
         self.gm = GuaranteeMonth(self.camp, self.snap, self.w)
         self.phase = "g_rules"
+        return True
+
+    def _factions(self) -> bool:
+        """Last: with factions = ours, go on to the month's faction move (True)."""
+        from . import gates
+        if not gates.ours("factions"):
+            return False
+        self.fm = FactionMonth(self.camp, self.snap, self.w)
+        self.phase = "f_rules"
         return True
 
     def _write_agenda(self, tag: str) -> None:
@@ -569,18 +584,38 @@ class Month:
                     if not msgs:
                         self.main["guarantee"] = {"error": "", "raw": "", "pick": None,
                                                   "note": "nothing to guarantee or renew; no call made"}
-                        return self.main
+                        if not self._factions():
+                            return self.main
+                        continue
                     self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 800, "ai:storyteller", "guarantees")
                     self.phase = "g_wait"
             elif self.phase == "g_wait":
                 if not self.fut.done():
                     return None
                 try:
-                    raw = self.fut.result()
+                    self.main["guarantee"] = self.gm.read(self.fut.result())
                 except llm.LLMError as e:
                     self.main["guarantee"] = {"error": str(e), "raw": "", "pick": None}
+                if not self._factions():
                     return self.main
-                self.main["guarantee"] = self.gm.read(raw)
+            elif self.phase == "f_rules":
+                if self.fm.todo:
+                    self.fm.rule_step()
+                else:
+                    msgs = self.fm.messages()
+                    if not msgs:
+                        self.main["faction"] = {"error": "", "raw": "", "pick": None,
+                                                "note": "no faction move possible; no call made"}
+                        return self.main
+                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 800, "ai:storyteller", "factions")
+                    self.phase = "f_wait"
+            elif self.phase == "f_wait":
+                if not self.fut.done():
+                    return None
+                try:
+                    self.main["faction"] = self.fm.read(self.fut.result())
+                except llm.LLMError as e:
+                    self.main["faction"] = {"error": str(e), "raw": "", "pick": None}
                 return self.main
             if time.monotonic() - started >= budget:
                 return None
@@ -827,12 +862,230 @@ def guarantees_main(args: List[str]) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- the month's faction move ([ai_diplomacy] factions = ours)
+#
+# The game's AI then neither invites, asks to join, expels nor leaves (gates.py), so the storyteller moves the world's
+# factions: after the month's incident (and guarantee) a third short call sees the factions, the countries outside
+# them and what factions.candidates() finds possible (joining, founding together, a break), and picks one move or
+# none. Joining and founding become an exchange like any incident (the other side may refuse or name a price); a
+# break is done at once (the member leaves, or the leader expels it).
+
+MOVE_WORDS = {"join": "joins", "found": "founds a faction with", "break": "breaks with"}
+
+
+class FactionMonth:
+    """One month's faction move: rule_step() checks one joining or founding against the game's rules (the deal
+    menu: world tension, subjects, wars; about a second each), then messages() and read()."""
+
+    def __init__(self, camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict]) -> None:
+        from . import factions
+        self.camp, self.snap, self.w = camp, snap, w
+        self.now = snap.get("date", "")
+        recent = {campaign.pair(x["from"], x["to"]) for x in _state(camp)["incidents"]
+                  if 0 <= _days(x["date"], self.now) < PAIR_GAP_DAYS}
+        self.todo = [x for x in factions.candidates(camp, w) if campaign.pair(x["a"], x["b"]) not in recent]
+        self.cands: List[Dict] = []
+
+    def name(self, t: str) -> str:
+        return self.snap.get("countries", {}).get(t, {}).get("name", t)
+
+    def rule_step(self) -> None:
+        from . import diplomacy
+        x = self.todo.pop(0)
+        if x["move"] == "break":
+            self.cands.append(x)
+            return
+        keys = (("give:found", "ask:found") if x["move"] == "found"
+                else ("give:faction", "give:join", "ask:faction", "ask:join"))
+        offers, asks, _ = diplomacy.menu(self.camp, x["a"], x["b"], self.name(x["a"]), self.name(x["b"]),
+                                         only=lambda k: k in keys)
+        if offers or asks:
+            self.cands.append(x)
+
+    def line(self, x: Dict) -> str:
+        n = self.name
+        where = {"near": "", "present": "; from another continent: unusual", "far": "; across the world: rare"}
+        if x["move"] == "join":
+            head = f"JOIN: {n(x['a'])} ({x['a']}) and the {x['faction']}, led by {n(x['b'])} ({x['b']})"
+        elif x["move"] == "found":
+            head = f"FOUND: {n(x['a'])} ({x['a']}) founds a new faction with {n(x['b'])} ({x['b']})"
+        else:
+            head = (f"BREAK: {n(x['a'])} ({x['a']}) and the {x['faction']}, led by {n(x['b'])} ({x['b']}): the "
+                    f"member leaves (FROM {x['a']}) or the leader expels it (FROM {x['b']})")
+        return f"- {head}: {'; '.join(x['stake'])}{where.get(x['reach'], '')}"
+
+    def messages(self) -> Optional[List[Dict]]:
+        from . import factions
+        if not self.cands:
+            return None
+        player = self.camp.data["player"]
+        me = gamestate.country(player)
+        n = self.name
+        try:
+            level = f"{round(world.tension([player])[0] * 100)}%"
+        except Exception:
+            level = "unknown"
+        c = self.snap.get("countries", {})
+        facs = factions.world_factions(self.camp)
+        ideo = factions.ideologies(list({f["leader"] for f in facs.values() if f["leader"]}))
+        enemies = lambda t: sorted(factions._enemies(self.snap, t))
+        rows = [f"- the {fname}: led by {n(f['leader'])} ({ideo.get(f['leader'], '?')})"
+                f"{'; at war with ' + ', '.join(n(e) for e in enemies(f['leader'])) if enemies(f['leader']) else ''}; "
+                f"members: {', '.join(n(m) for m in f['members'][1:]) or 'none yet'}" for fname, f in facs.items()]
+        loose = [n(t) for t, x in sorted(c.items()) if x.get("major") and not x.get("faction")]
+        parts = [
+            world.text({p.ideology for p in me.parties}),
+            "You are the storyteller of this Hearts of Iron IV world, in the way a game master steers a tabletop game. "
+            "This call is about one thing: factions, the standing alliances whose members fight each other's wars. "
+            "The game's own AI forms none in this world: national focuses and decisions still found and fill some "
+            "(the great historical ones mostly), and every other change comes from you. Factions decide the shape of "
+            "the war to come: who stands with whom, which wars spread and which stay small. Bring a country into a "
+            "faction where a common enemy, a war or a threat binds them; found a new one where neighbours face the "
+            "same danger and no faction serves them; break a member away where it no longer belongs. Most months "
+            "in peacetime need no move: alliances are made for life and death. Once wars are fought, countries at "
+            "war with the same enemy draw together, and the moves come oftener.",
+            f"THE DATE: {campaign.date_words(self.now)}. WORLD TENSION: {level}.",
+            f"THE PLAYER: {me.name} ({player}); a human, never part of a move here (their own letters do that), "
+            f"though what happens near them matters to their game.",
+            "FACTIONS NOW:\n" + ("\n".join(rows) or "none"),
+        ]
+        if loose:
+            parts.append("MAJOR POWERS IN NO FACTION: " + ", ".join(loose))
+        parts.append("POSSIBLE MOVES (the game's rules checked; pick only from these). For JOIN and FOUND either side "
+                     "may make the move (FROM is the one who asks or offers first); for BREAK see each line:\n"
+                     + "\n".join(self.line(x) for x in self.cands))
+        mine = [x for x in _state(self.camp)["incidents"] if x.get("slot") == "faction"][-RECENT:]
+        if mine:
+            parts.append("YOUR LATEST FACTION MOVES (vary them):\n" + "\n".join(
+                f"- {campaign.date_words(x['date'])}: {n(x['from'])} {MOVE_WORDS.get(x['kind'], x['kind'])} "
+                f"{n(x['to'])}" for x in mine))
+        parts.append("Answer with exactly these lines and nothing else:\n"
+                     "MOVE: FROM TO (two tags from one possible move, the one who acts first), or none\n"
+                     "NAME: for FOUND only, the new faction's name as the world would come to know it (a few words, "
+                     "in the style of its era and region, without 'The'); otherwise none\n"
+                     "WHY: one sentence, as a historian would put it, from the countries' own interests; never about "
+                     "the player (unless they are the enemy), pacing or your reasons as storyteller")
+        return [{"role": "system", "content": "\n\n".join(parts)}, {"role": "user", "content": "Choose now."}]
+
+    def read(self, raw: str) -> Dict:
+        """{"raw", "error", "pick": {"from", "to", "why", "name"} or None, "ok", "why_not", "cand"}."""
+        said = _line(raw, "move")
+        t = re.findall(r"\b[A-Z][A-Z0-9]{2}\b", said)
+        out = {"raw": raw, "error": "", "pick": None, "ok": False, "why_not": "", "cand": None}
+        if len(t) < 2 or "none" in said.lower():
+            return out
+        name = _line(raw, "name")
+        out["pick"] = {"from": t[0], "to": t[1], "why": _line(raw, "why"),
+                       "name": "" if name.lower().startswith("none") else name}
+        cand = next((x for x in self.cands if {x["a"], x["b"]} == {t[0], t[1]}), None)
+        if not cand:
+            out["why_not"] = "not one of the possible moves"
+        else:
+            out["ok"], out["cand"] = True, cand
+        return out
+
+
+def finish_faction(camp: campaign.Campaign, f: Optional[Dict]) -> str:
+    """Log the month's faction move; queue a joining or founding as an exchange, carry out a break. Returns a line
+    for the console ('' if nothing happened)."""
+    from . import actions, diplomacy, factions
+    if not f:
+        return ""
+    c = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: c.get(t, {}).get("name", t)
+    key = camp.data.get("last_date") or ""
+    head = f"=== {campaign.date_words(key)}: STORYTELLER (factions): "
+    if f.get("error"):
+        diplomacy.log([head + f"the call failed: {f['error']}"])
+        return ""
+    if f.get("note"):
+        diplomacy.log([head + f["note"]])
+        return ""
+    pick = f["pick"]
+    if not pick:
+        diplomacy.log([head + "none"])
+        return ""
+    if not f["ok"]:
+        diplomacy.log([head + f"dropped {pick['from']} -> {pick['to']}: {f['why_not']}", f"  {pick['why']}"])
+        return ""
+    x, a, b = f["cand"], pick["from"], pick["to"]
+    move = x["move"]
+    if move == "break":
+        by_leader = a == x["b"]
+        if not actions._effect(factions.break_effect(x["a"], x["b"], by_leader)):
+            diplomacy.log([head + f"break {name(a)} -> {name(b)} failed in the game"])
+            return ""
+        text = (f"{name(x['b'])} expelled {name(x['a'])} from the {x['faction']}." if by_leader
+                else f"{name(x['a'])} left the {x['faction']}, led by {name(x['b'])}.")
+        if pick["why"]:
+            text += f" {pick['why']}"
+        camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "faction:break",
+                          "tags": [x["a"], x["b"]], "text": text, "major": False}])
+        _state(camp)["incidents"].append({"date": key, "kind": "break", "from": a, "to": b, "aim": "",
+                                          "why": pick["why"], "slot": "faction"})
+        diplomacy.log([head + text])
+        camp.save()
+        return text
+    if move == "found":
+        factions.propose_name(a, b, pick["name"])
+    joiner = x["a"]
+    if move == "join":
+        aim = (x["aim"]["aim"] if a == joiner and x["aim"] else
+               f"join the {x['faction']}" if a == joiner else f"bring {name(joiner)} into the {x['faction']}")
+    else:
+        aim = (x["aim"]["aim"] if x["aim"] and a == x["a"] else
+               f"found a faction with {name(b)}")
+    brief = {"kind": move, "aim": aim, "aim_kind": "back", "target": b, "why": pick["why"],
+             "name": factions._clean(pick["name"]) if move == "found" else ""}
+    _state(camp)["incidents"].append({"date": key, "kind": move, "from": a, "to": b, "aim": aim,
+                                      "why": pick["why"], "slot": "faction", "reach": x["reach"]})
+    diplomacy._state(camp)["queue"].append([a, b, move, [aim], brief])
+    line = (f"{move} {name(a)} -> {name(b)}" + (f" ({brief['name']})" if brief["name"] else "")
+            + (f" [{x['faction']}]" if x["faction"] else ""))
+    diplomacy.log([head + f"{line}   [{aim}; {x['reach']}]", f"  {pick['why']}"])
+    camp.save()
+    return line
+
+
+def factions_main(args: List[str]) -> int:
+    """python -m hoi4_rp storyteller --factions [--prompt]: one faction month, dry (nothing is queued or done)."""
+    from . import chronicle, diplomacy, llm
+    player = gamestate.player_tag()
+    camp = campaign.Campaign(campaign.read_id(player), player)
+    camp.snapshot = chronicle.snapshot(player)
+    w = diplomacy.world()
+    missing = [t for t in agendas.covered(camp, w, diplomacy.score(camp, w)) if not agendas.aims_of(camp, t)]
+    if missing:
+        print(f"writing the agendas of {len(missing)} countries without one: {', '.join(missing)}")
+        agendas.generate(camp, w, missing)          # kept in memory for this run only
+    started = time.monotonic()
+    fm = FactionMonth(camp, camp.snapshot, w)
+    while fm.todo:
+        fm.rule_step()
+    print(f"POSSIBLE MOVES ({time.monotonic() - started:.0f} s to work out)\n"
+          + ("\n".join(f"{fm.line(x)} (score {x['score']:.1f})" for x in fm.cands) or "none"))
+    msgs = fm.messages()
+    if not msgs:
+        print("\nno faction move possible; no call made")
+        return 0
+    if "--prompt" in args:
+        print(f"\n----- prompt\n{msgs[0]['content']}\n-----")
+    res = fm.read(llm.chat(msgs, None, 0.8, 800, "ai:storyteller", "factions"))
+    p = res["pick"]
+    print("\nPICK: " + (f"{p['from']} -> {p['to']}" + (f" ({p['name']})" if p["name"] else "")
+                        + (" (allowed)" if res["ok"] else f" (DROPPED: {res['why_not']})") + f"\n  {p['why']}"
+                        if p else "none"))
+    return 0
+
+
 # ---------------------------------------------------------------- python -m hoi4_rp storyteller
 
 def main(args: List[str]) -> int:
     from . import chronicle, diplomacy, llm
     if "--guarantees" in args:
         return guarantees_main(args)
+    if "--factions" in args:
+        return factions_main(args)
     show = "--prompt" in args
     months = 1
     if "--months" in args and args.index("--months") + 1 < len(args):

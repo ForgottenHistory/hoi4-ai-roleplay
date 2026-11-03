@@ -110,7 +110,7 @@ def diplomacy() -> str:
 
 # The one feeling a letter is written in: named by the writer before it writes, from the situation
 FEELING = ("FEELING. Before you write, decide the one feeling that drives this letter, from what has happened "
-           "between you and where your country stands now: fury, fear, triumph, gratitude, contempt, grief, glee, "
+           "between you (only what the information above shows) and where your country stands now: fury, fear, triumph, gratitude, contempt, grief, glee, "
            "wounded pride, impatience, affection, suspicion, relief, shame, greed, or another. Let it show in the "
            "words and in the rhythm, not only in what you say you feel: {how} A leader in a rage doesn't write "
            "like one at ease, and a grateful one doesn't hedge. Many letters are calm: that is a feeling too, but "
@@ -189,8 +189,9 @@ def feelings(camp, who: str) -> List[str]:
     return list((camp.data.get("feelings") or {}).get(who, []))
 
 
-def roll() -> str:
+def roll(first: bool = False) -> str:
     """The form of one letter (its length and shape), rolled: used both in the rules and at the end of the prompt,
-    where it carries most weight."""
-    lengths = STYLES[_name()].lengths
+    where it carries most weight. A first letter between two countries is never the short note (the first of the
+    lengths): a curt note reads as the sequel to something that never happened."""
+    lengths = STYLES[_name()].lengths[1:] if first else STYLES[_name()].lengths
     return random.choices([f for f, _ in lengths], weights=[w for _, w in lengths], k=1)[0]

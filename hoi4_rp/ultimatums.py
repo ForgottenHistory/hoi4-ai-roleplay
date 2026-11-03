@@ -214,7 +214,7 @@ def _done(rel: "actions.Relation", them: str, me: str, key: str) -> bool:
         return t(f"{me} = {{ is_subject_of = {them} }}")
     if key == "ask:leave":
         return not rel.me_in_faction
-    if key in ("ask:join", "ask:faction"):
+    if key in ("ask:join", "ask:faction", "ask:found"):
         return t(f"{me} = {{ is_in_faction_with = {them} }}")
     if actions.is_war(key):
         return t(f"{me} = {{ has_war_with = {parts[2]} }}")

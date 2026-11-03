@@ -294,12 +294,15 @@ def relation(them: str, me: str) -> Relation:
                     tension=level, them_tension=rules.get(them), me_tension=rules.get(me))
 
 
+FACTION_KEYS = ("give:faction", "give:join", "ask:faction", "ask:join", "give:found", "ask:found")   # into one
+
+
 # World tension (config [world] tension_rules): the deal keys the game ties to it, and whose threshold must be
 # reached: a guarantee the guarantor's, a faction both sides' (the one joining and the one admitting). Below it the
 # item isn't possible, as in the game's own diplomacy window.
 TENSION_GATED = {"give:guarantee": (("them", "guarantee_tension"),), "ask:guarantee": (("me", "guarantee_tension"),),
                  **{k: (("them", "join_faction_tension"), ("me", "join_faction_tension"))
-                    for k in ("give:faction", "give:join", "ask:faction", "ask:join")}}
+                    for k in FACTION_KEYS}}
 
 
 def tension_allows(rel: "Relation", key: str) -> bool:
@@ -406,6 +409,17 @@ DEALS: List[Deal] = [
     Deal("ask:join", "faction", False, True, "ask {me_name} to join your faction", "our membership of their "
          "faction", "{them} = {{ add_to_faction = {me} }}",
          "We joined {them_name}'s faction.", "{me_name} joined {them_name}'s faction.", True),
+    # Founding a faction together (neither in one yet): the founder leads it, the other joins. {fname} is the loc
+    # key of its name (factions.name_key, set through the bridge); create_faction uses the game's default template
+    # with the faction DLC, a plain faction without it (checked in game).
+    Deal("give:found", "faction", False, True, "found a new faction with {me_name}: you lead it, they join as its "
+         "first member (you would fight each other's wars)", "a new faction they lead, with us as a member",
+         "{them} = {{ create_faction = {fname} add_to_faction = {me} }}",
+         "{them_name} founded the {faction} with us.", "{them_name} founded the {faction} with {me_name}."),
+    Deal("ask:found", "faction", False, True, "ask {me_name} to found a new faction that they lead, with you as "
+         "its first member", "to found a faction with them as a member",
+         "{me} = {{ create_faction = {fname} add_to_faction = {them} }}",
+         "We founded the {faction} with {them_name}.", "{me_name} founded the {faction} with {them_name}.", True),
     # Leaving a faction at the other's wish (not one they share: that is end:faction). A leader can't leave its own.
     #     X = { leave_faction = yes }      (checked in game)
     Deal("give:leave", "leave", False, True, "leave your faction, so that you no longer stand with its members against "
@@ -1308,6 +1322,9 @@ def possible(rel: Relation, key: str) -> bool:
     if key in ("give:join", "ask:faction"):                    # them joins mine
         return (not rel.at_war and not rel.bound and rel.me_leader and not rel.them_in_faction
                 and not rel.me_subject and not rel.them_subject)
+    if key in ("give:found", "ask:found"):                     # neither in a faction: one founds it together
+        return (not rel.at_war and not rel.bound and not rel.them_in_faction and not rel.me_in_faction
+                and not rel.me_subject and not rel.them_subject)
     if key == "end:faction":
         return rel.bound == "faction"
     if key == "give:leave":                                    # them leaves its own faction (not ours)
@@ -1401,6 +1418,10 @@ def described(key: str) -> str:
         return f"{word(key)} (they would join your faction)"
     if key in ("give:join", "ask:faction"):
         return f"{word(key)} (you would join their faction)"
+    if key == "give:found":
+        return f"{word(key)} (you found a new faction and lead it; they join it)"
+    if key == "ask:found":
+        return f"{word(key)} (they found a new faction and lead it; you join it)"
     goods = {"civ": "civilian factories", "mil": "military factories", "dismantle": "dismantling military factories",
              "pp": "political power", **{k: v[1] + " from the stockpile" for k, v in EQUIPMENT.items()}}
     kind = factory_base(key).split(":")[1] if factory_base(key) in AMOUNT_KEYS else ""
@@ -1567,7 +1588,7 @@ def _new_goods_notes(keys: List[str]) -> List[str]:
         out.append(WAR_NOTE)
     if any(third_kind(k) for k in keys):
         out.append(ALIGN_NOTE)
-    if any(k in ("give:faction", "give:join", "ask:faction", "ask:join", "give:leave", "ask:leave") for k in keys):
+    if any(k in FACTION_KEYS + ("give:leave", "ask:leave") for k in keys):
         out.append(FACTION_NOTE)
     if any(is_equipment_key(k) for k in keys):
         out.append(f"{EQUIPMENT_NOTE} N is the whole number of pieces, written out (5000, not 5 for five thousand): an infantry division holds about 1,000 rifles, a few dozen artillery pieces and a few hundred trucks. At most what the sender has in stock. "
@@ -1636,7 +1657,7 @@ def topic(key: str) -> str:
     what = parts[1] if len(parts) > 1 else ""
     if what in ("civ", "mil", "dismantle"):
         return "factories"
-    if what in ("join", "faction"):
+    if what in ("join", "faction", "found"):
         return "faction"
     return what if what in TOPIC_WORDS else ""
 
@@ -2003,6 +2024,10 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 shown.append((deal.shown.format(**fmt) + " " + outcome, False))
                 events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
             continue
+        if key in ("give:found", "ask:found"):        # the new faction's name, given to the game first
+            from . import factions
+            leader, member = (them, me) if key == "give:found" else (me, them)
+            fmt["fname"], fmt["faction"] = factions.name_key(leader, member)
         if _effect(deal.effect.format(**fmt)):
             if is_state(key):
                 sid = key.rsplit(":", 1)[1]
@@ -2078,8 +2103,10 @@ def package_text(keys: List[str], who: str = "they") -> str:
                           "ask:pledge": f"{who} {s('ask')} us to pledge to join {'them' if plural else 'it'} whenever "
                                         f"{'they go' if plural else 'it goes'} to war with {name}"}[k.rsplit(":", 1)[0]])
             continue
-        if k in ("give:faction", "give:join", "ask:faction", "ask:join", "give:leave", "ask:leave"):
-            parts.append({"give:faction": f"{who} {s('offer')} to take us into {their} faction",
+        if k in FACTION_KEYS + ("give:leave", "ask:leave"):
+            parts.append({"give:found": f"{who} {s('offer')} to found a new faction with us, {their} lead",
+                          "ask:found": f"{who} {s('ask')} us to found a new faction with {'them' if plural else 'it'}",
+                          "give:faction": f"{who} {s('offer')} to take us into {their} faction",
                           "give:join": f"{who} {s('offer')} to join our faction",
                           "ask:faction": f"{who} {s('ask')} to join our faction",
                           "ask:join": f"{who} {s('ask')} us to join {their} faction",

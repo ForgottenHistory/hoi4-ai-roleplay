@@ -59,6 +59,8 @@ _ENDS = {
     "ask:join": ("faction", "{M} = {{ leave_faction = yes }}"),
     "give:join": ("faction", "{T} = {{ leave_faction = yes }}"),          # they are in mine
     "ask:faction": ("faction", "{T} = {{ leave_faction = yes }}"),
+    "give:found": ("faction", "{M} = {{ leave_faction = yes }}"),         # they lead the one founded
+    "ask:found": ("faction", "{T} = {{ leave_faction = yes }}"),
 }
 
 _TERM = re.compile(r"\[\[\s*for\s+(\d+)\s*(months?|years?)\s*\]\]", re.I)
@@ -239,7 +241,7 @@ def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optiona
     if not (payments or clauses or (until and any(_endable(k) for k in applied))):
         return None
     me_name = (camp.snapshot or {}).get("countries", {}).get(me, {}).get("name", me)
-    fmt = {"them_name": them_name, "me_name": me_name}
+    fmt = {"them_name": them_name, "me_name": me_name, "faction": "a new faction"}
     # In names, not "we/they": the text goes into both sides' prompts.
     text = " ".join(actions.get_deal(k).remembered.format(**fmt) for k in applied).rstrip(".")
     t = {"id": max([x["id"] for x in _store(camp)] or [0]) + 1, "with": tag, "me": me, "date": key,

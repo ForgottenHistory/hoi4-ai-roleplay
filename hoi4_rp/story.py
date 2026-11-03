@@ -47,7 +47,7 @@ OPINION_STEPS = [-10, -5, 5, 10]
 _DEAL_WEIGHTS = [
     (3, ("give:state", "ask:state", "cede:", "give:annex", "give:submit", "ask:submit", "give:subject",
          "ask:subject", "subject:", "give:govt", "ask:govt", "give:peace", "give:war", "ask:war", "give:faction",
-         "ask:faction", "give:join", "ask:join", "end:faction", "give:leave", "ask:leave", "ultimatum:issued", "ultimatum:war", "ultimatum:ready",
+         "ask:faction", "give:join", "ask:join", "give:found", "ask:found", "end:faction", "give:leave", "ask:leave", "ultimatum:issued", "ultimatum:war", "ultimatum:ready",
          "ultimatum:met", "ultimatum:dropped", "treaty:broken", "treaty:renounced",
          "treaty:clause")),
     (2, ("give:civ", "ask:civ", "give:mil", "ask:mil", "give:dismantle", "ask:dismantle", "give:dmz", "ask:dmz",

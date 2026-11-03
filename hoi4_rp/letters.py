@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 from . import (actions, aipeace, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
-               guarantees, steering, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
+               factions, gates, guarantees, steering, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -359,7 +359,10 @@ def _initiative_task(them: gamestate.CountryState, me: gamestate.CountryState, r
     why = (f"Something just happened that concerns you both: {reason} Write about it."
            if reason else
            f"There is no specific occasion: write about whatever matters most to {them.name} regarding "
-           f"{me.name} right now, given the situation and what you remember.")
+           f"{me.name} right now, given the situation and what you remember. Invent no events, rumours, dealings "
+           f"or slights between you that the information above doesn't show: if nothing has passed between you "
+           f"yet, this letter opens the relationship, and its feeling comes from your own situation and your "
+           f"policy toward {me.name}.")
     st = style.current()
     voice = st.voice.format(name=them.name, leader=them.leader, other=me.name)
     return (f"{them.name} now writes a new letter to {me.name} on its own initiative, {voice}, true to "
@@ -932,7 +935,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
             + ("\n\n" + _peace_note(them, me, camp, offers, reply=False) if rel.at_war else "")
             + ("\n\n" + treaties.help_text() if (offers or asks) and not rel.at_war else "")
             + ("\n\n" + ultimatums.help_text(them.name, me.name) if _may_threaten(camp, sender, rel) else ""))
-    form = style.roll()
+    form = style.roll(first=not camp.letters_with(sender))
     prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, task, form=form)}]
               + _conversation(camp, them, me)
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
@@ -1313,7 +1316,8 @@ class _Session:
         if rewound or self.steered != camp.id:      # the game's AI follows the policies (steering.py)
             self.steered = camp.id
             steering.sync_all(camp)
-            guarantees.switch()                     # a save holds the flag as it was when saved
+            gates.switch()                          # a save holds the flags as they were when saved
+            factions.restore()                      # the names of factions we founded live only in `run`
         if not self.idle() and time.monotonic() >= self.retry_at:
             self.ultimatum_decision(camp, player)
             self.policies(camp, player, snap)
@@ -1427,6 +1431,9 @@ class _Session:
         item = storyteller.finish_guarantee(camp, res.get("guarantee"))
         if item:
             print(f"  [ai] storyteller: guarantee {item[0]} -> {item[1]} ({item[3][0]})")
+        line = storyteller.finish_faction(camp, res.get("faction"))
+        if line:
+            print(f"  [ai] storyteller: {line}")
         if not self.plot_job and plots.due(camp):
             plots._store(camp)["tick"] = month.snap.get("date", "")
             self.plot_job = (self.ai_pool.submit(llm.chat, plots.messages(camp, month.snap), None, 0.7, 1500,
@@ -1903,9 +1910,14 @@ class _Session:
             self.pending[tag] = (self.pending.get(tag, "") + " " + reasons[tag]).strip()
         if self.pending:
             return
-        # Letters countries start without an event (policy or quiet spell) keep letter_gap_days apart.
+        # Letters countries start without an event (policy or quiet spell) keep letter_gap_days apart, and wait
+        # while proposals are held back (proposal_gap_days): such a letter could offer nothing, and with nothing
+        # to say it made up grievances ("you answer with silence" in a first letter).
         started = [x["date"] for ls in camp.threads().values() for x in ls if x.get("initiated")]
         if started and today - _days(max(started)) < cfg.letter_gap_days:
+            return
+        proposed = [x["date"] for ls in camp.threads().values() for x in ls if x.get("proposal")]
+        if proposed and today - _days(max(proposed)) < cfg.proposal_gap_days:
             return
         # A country writes soon, once per policy, when its policy is urgent (3) or it has something to
         # propose or do and some urgency (2): that letter is where it happens.

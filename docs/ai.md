@@ -120,4 +120,26 @@ over to the deals between countries instead.
   renews the guarantees by agreement that are running out while their reason stands; the rest end.
   `python -m hoi4_rp storyteller --guarantees [--prompt]` shows the threats, the possible guarantees and a pick, dry.
 
+- `factions = ours`: AI countries can't invite into a faction, ask to join one, expel a member or leave, so the
+  world's factions change through the storyteller (same needs, same gate). Focuses, decisions and events still found,
+  fill and dissolve factions, the great historical ones among them; you invite, join and leave as before.
+
+  Each month, after its incident and guarantee, the storyteller may make one faction move. Python lists what is
+  possible:
+  - **join**: a country outside any faction and a faction's leader, bound by an aim against the faction's foe, a war
+    against its enemy, an aim to back the leader or a threat in common. Another ideology joins only for a war or a
+    threat in common. From another continent only with an aim at stake, from across the world only at war together
+    or to stand by the leader. With the faction DLC, the faction's joining rules apply (same continent, ideology...).
+  - **found**: two neighbours (or near ones) outside any faction with a foe, a war or a threat in common, founded by
+    the major power or the stronger. Never by a country whose own national focuses may still found a faction (the
+    Axis, the Co-Prosperity Sphere...), so the historical factions aren't pre-empted. The storyteller names it.
+  - **break**: a member and its leader that no longer belong together (an aim against each other, backing the
+    faction's enemy, another ideology), never while they fight a war side by side. The member leaves or the leader
+    expels it; at most one in the world every 6 months.
+
+  Joining and founding are exchanges like any other: the other side may refuse or name a price. A break happens at
+  once. `python -m hoi4_rp storyteller --factions [--prompt]` shows the possible moves and a pick, dry. The names of
+  the factions we found live only while `run` sets them (kept in `data/faction_names.json`); a game loaded without it
+  shows their key.
+
 `python -m hoi4_rp ai-undo` ends pacts, market access, guarantees and commitments it put in place (stop `run` first).

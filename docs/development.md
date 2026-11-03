@@ -10,6 +10,7 @@
     python -m hoi4_rp subjects [TAG]   # subject levels from the game and mod files, or one subject's level and progress
     python -m hoi4_rp agendas [TAG...] # write and print agendas
     python -m hoi4_rp storyteller [--months N]   # blocs and a simulated monthly incident pick
+    python -m hoi4_rp storyteller --guarantees | --factions [--prompt]   # the month's guarantee or faction move, dry
     python -m hoi4_rp plots            # the player's plotlines
     python -m hoi4_rp course [TAG]     # focus under way and the likely next ones
     python -m hoi4_rp intent [TAG]     # what the country's game AI is set on
@@ -37,7 +38,9 @@ LLM output is plain text: `KEY: value` lines or `[[commands]]`, parsed leniently
     hoi4_rp/letters.py     the run loop; reads sent letters, writes replies, runs the background jobs
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; proposals
     hoi4_rp/treaties.py    deals over time: terms, instalments, war clauses, commitments, wagers
-    hoi4_rp/guarantees.py  letter guarantees: factory upkeep, 24-month term; the gate on the game AI's own
+    hoi4_rp/guarantees.py  letter guarantees: factory upkeep, 24-month term; who needs and might give one
+    hoi4_rp/gates.py       switching off the game AI's own guarantees and faction moves (scripted-trigger gates)
+    hoi4_rp/factions.py    who might join, found or leave a faction; the names of factions we found
     hoi4_rp/peace.py       peace by letter through the game's peace conference
     hoi4_rp/war.py         a country's war stance toward the player
     hoi4_rp/ultimatums.py  threats of war that can come true

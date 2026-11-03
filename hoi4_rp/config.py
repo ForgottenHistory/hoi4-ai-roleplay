@@ -52,6 +52,7 @@ DEFAULTS = {
         "exchanges_per_month": "3",
         "cooldown_days": "90",
         "guarantees": "game",
+        "factions": "game",
     },
     "world": {
         "setting": "auto",
@@ -110,7 +111,8 @@ class AIDiplomacySettings:
     driver: str               # who picks the pairs: random (a monthly draw) | storyteller (storyteller.py)
     exchanges_per_month: int  # AI-to-AI exchanges started per game month
     cooldown_days: int        # game days before the same two countries talk again
-    guarantees: str           # game (HOI4's AI guarantees on its own) | ours (only by our deals) (guarantees.py)
+    guarantees: str           # game (HOI4's AI guarantees on its own) | ours (only by our deals) (gates.py)
+    factions: str             # game | ours: factions between AI countries only by our deals (factions.py)
 
 
 @dataclass(frozen=True)
@@ -171,5 +173,6 @@ def settings() -> Settings:
             exchanges_per_month=ai.getint("exchanges_per_month"),
             cooldown_days=ai.getint("cooldown_days"),
             guarantees=(ai.get("guarantees") or "game").strip().lower(),
+            factions=(ai.get("factions") or "game").strip().lower(),
         ),
     )

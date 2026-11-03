@@ -36,7 +36,7 @@ On their own (in a reply only for serious cause): end a pact, access, docking or
 | Wealth | civilian or military factories, rifles/artillery/trucks from the stockpile, political power (up to 200), dismantling military factories |
 | Subjects | submit (become a subject), annexation by agreement, handing over a subject, freeing one |
 | Politics | a change of government to a named ideology |
-| Factions | join theirs, they join yours, leave a faction |
+| Factions | join theirs, they join yours, found a new one together, leave a faction |
 | Wars | join a war against a country (entered 30 days after the deal), peace |
 | Third countries | oppose, befriend or back a country; sanction (embargo) it now |
 

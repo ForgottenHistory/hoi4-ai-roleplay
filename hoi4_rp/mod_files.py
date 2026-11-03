@@ -161,7 +161,8 @@ def write_mod(mod_root: str = MOD_ROOT) -> None:
     }
     from . import letter_mod
     files.update(letter_mod.files(mod_dir))
-    from . import guarantees, peace, tension
+    from . import gates, guarantees, peace, tension
+    files.update(gates.files(mod_dir))
     files.update(peace.files(mod_dir))
     files.update(guarantees.files(mod_dir))
     files.update(tension.files(mod_dir))

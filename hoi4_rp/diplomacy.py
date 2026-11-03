@@ -283,8 +283,8 @@ WEIGH_NOTE = ("Weigh each item for your own country alone: what it gains and wha
 # The agreements on the AI menu; goods, land, resource rights, subjects, disarmament and governments come from
 # actions (menu()).
 MENU_GIVES = ("give:pact", "give:access", "give:docking", "give:guarantee", "give:market", "give:faction",
-              "give:join", "give:submit", "give:annex")
-MENU_ASKS = ("ask:access", "ask:docking", "ask:guarantee", "ask:faction", "ask:join", "ask:submit")
+              "give:join", "give:found", "give:submit", "give:annex")
+MENU_ASKS = ("ask:access", "ask:docking", "ask:guarantee", "ask:faction", "ask:join", "ask:found", "ask:submit")
 STANCES = ("friendly", "cordial", "indifferent", "wary", "hostile")
 
 
@@ -411,6 +411,9 @@ def _moment(brief: Dict, an: str, bn: str) -> str:
              "commit": f"asking {bn} to join {an} in this aim, as a standing diplomatic line toward a third country",
              "access": f"military access between you and {bn}, given or asked as suits {an}",
              "alliance": f"a faction with {bn}, founded or joined as suits {an}, against the aim's target",
+             "join": f"{bn} and you in one faction: the one outside it joining the other's",
+             "found": f"founding a new faction together with {bn}"
+                      + (f", to be called the {brief['name']}" if brief.get("name") else ""),
              "ultimatum": f"an ultimatum to {bn}: a deadline to cede the land {an} claims, or war"}[brief["kind"]]
     return (f"{an}'s government has decided to act on its aim \"{brief['aim']}\" now"
             + (f" ({brief['why']})" if brief.get("why") else "") + f". It has {doing} in mind.")
@@ -425,7 +428,11 @@ def _only(brief: Dict):
     if kind == "access":
         return lambda key: key in ("give:access", "ask:access")
     if kind == "alliance":
-        return lambda key: key in ("give:faction", "ask:faction", "give:join", "ask:join")
+        return lambda key: key in actions.FACTION_KEYS
+    if kind == "join":
+        return lambda key: key in ("give:faction", "give:join", "ask:faction", "ask:join")
+    if kind == "found":
+        return lambda key: key in ("give:found", "ask:found")
     if kind == "commit":
         return lambda key: key in (f"give:{k}:{t}", f"ask:{k}:{t}")
     return lambda key: (key.startswith("ask:state:") and (s := actions._BORDER_INFO.get(key)) is not None

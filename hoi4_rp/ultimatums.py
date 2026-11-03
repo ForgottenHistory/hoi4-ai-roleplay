@@ -459,6 +459,8 @@ def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -
         if step == "war" and actions._effect(f"{tag} = {{ declare_war_on = {{ target = {player} "
                                              f"{wargoal.split(' generator')[0]} }} }}") \
                 and bridge.trigger(f"{tag} = {{ has_war_with = {player} }}"):
+            from . import tension
+            tension.war(tag, player)                   # declare_war_on skips the game's own tension for a war
             _close(camp, u, "war", f"{them_name} declared war when the deadline passed")
             _stand_down(camp, u, wargoal=False)
             text = f"{them_name}'s ultimatum to {me_name} ran out, and {them_name} declared war{reason}."

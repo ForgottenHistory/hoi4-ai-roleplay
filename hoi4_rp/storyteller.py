@@ -23,6 +23,9 @@ check() then drops a pick that is not allowed, with no retry (the month passes q
                     ULTIMATUM_TENSION; none open; one every ULTIMATUM_GAP_DAYS
     at most INCIDENTS_PER_MONTH a month
 
+With [ai_diplomacy] guarantees = ours a second call follows each month: the month's guarantee (GuaranteeMonth), kept
+apart from the incident above (its incidents carry "slot": "guarantee" and don't count toward INCIDENTS_PER_MONTH).
+
 blocs(): countries whose aims (and commitments by letter) share a target: "against Germany: Britain, France, Poland".
 Nobody schedules them; they appear because the agendas line up.
 
@@ -331,6 +334,25 @@ def _tense(tag: str) -> bool:
         return False
 
 
+_WORLD: Dict = {"date": None, "w": {}}
+
+
+def _guarantee_reach(camp: campaign.Campaign, a: str, b: str, snap: Dict, friend: bool) -> bool:
+    """Is a guarantee between a and b, either way, within reach (guarantees.reach_ok; an aim is at stake here)?
+    From across the world only when the aim is to back or befriend the other country itself (`friend`), not to
+    oppose a common foe. The world is read once a game day."""
+    from . import diplomacy, guarantees
+    if _WORLD["date"] != snap.get("date"):
+        _WORLD.update(date=snap.get("date"), w=diplomacy.world())
+    w = _WORLD["w"]
+    return any(t and (friend or t != "far")
+               for t in (guarantees.reach_ok(camp, a, b, w, True), guarantees.reach_ok(camp, b, a, w, True)))
+
+
+def _guarantee_slot(x: Dict) -> bool:
+    return x.get("slot") == "guarantee"
+
+
 def options(camp: campaign.Campaign, a: str, b: str, snap: Dict) -> List[Dict]:
     """Every incident FROM `a` TO `b` that serves one of a's aims and that the game allows now: [{"kind", "aim"}].
         guarantee   the aim befriends or backs b, or opposes a third country that b opposes too
@@ -357,7 +379,7 @@ def options(camp: campaign.Campaign, a: str, b: str, snap: Dict) -> List[Dict]:
             continue
         friend = t == b and k in ("befriend", "back")
         common_foe = t != b and k == "oppose" and (t, "against") in shared
-        if can_guarantee and (friend or common_foe):
+        if can_guarantee and (friend or common_foe) and _guarantee_reach(camp, a, b, snap, friend):
             out.append({"kind": "guarantee", "aim": aim})
         if can_access and friend:
             out.append({"kind": "access", "aim": aim})
@@ -398,7 +420,7 @@ def check(camp: campaign.Campaign, pick: Dict, w: Dict[str, Dict], snap: Dict, n
         return False, "they are at war", None
     pc = pacing(camp, now, sim)
     # due() already spaces the jobs a month apart; a slow job's incident is dated when it finished, so allow for that
-    if sum(1 for x in pc["mine"] if _days(x["date"], now) < 20) >= INCIDENTS_PER_MONTH:
+    if sum(1 for x in pc["mine"] if _days(x["date"], now) < 20 and not _guarantee_slot(x)) >= INCIDENTS_PER_MONTH:
         return False, "an incident was already picked this month", None
     if any(campaign.pair(x["from"], x["to"]) == campaign.pair(a, b) and _days(x["date"], now) < PAIR_GAP_DAYS
            for x in pc["mine"]):
@@ -438,6 +460,17 @@ class Month:
         self.opts: Dict = {}
         self.shortlist: List[Tuple] = []
         self.fut = None
+        self.main: Dict = {}
+        self.gm: Optional[GuaranteeMonth] = None
+
+    def _guarantees(self) -> bool:
+        """After the month's incident: with guarantees = ours, go on to the month's guarantee (True)."""
+        from .config import settings
+        if settings().ai.guarantees != "ours":
+            return False
+        self.gm = GuaranteeMonth(self.camp, self.snap, self.w)
+        self.phase = "g_rules"
+        return True
 
     def _write_agenda(self, tag: str) -> None:
         from . import llm
@@ -494,15 +527,23 @@ class Month:
                     self.shortlist, self.opts = shortlist_options(self.camp, self.snap, self.scored, self.cache)
                     self.opts.update(reach_options(self.camp, self.snap, self.w))
                     today = max(self.now, self.camp.data.get("last_date") or "")
-                    if any(_days(x["date"], today) < 20 for x in _state(self.camp)["incidents"]):
-                        return {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "", "pairs": 0,
-                                "note": "quiet (an incident was already picked this month; no call made)"}
-                    msgs = messages(self.camp, self.snap, self.w, self.shortlist, self.opts, self.now, [])
-                    if not msgs:
-                        return {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "", "pairs": 0}
-                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 1200, "ai:storyteller", "")
-                    self.phase = "wait"
-            else:
+                    picked = any(_days(x["date"], today) < 20 and not _guarantee_slot(x)
+                                 for x in _state(self.camp)["incidents"])
+                    msgs = None if picked else messages(self.camp, self.snap, self.w, self.shortlist, self.opts,
+                                                        self.now, [])
+                    if picked:
+                        self.main = {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "",
+                                     "pairs": 0, "note": "quiet (an incident was already picked this month; no call made)"}
+                    elif not msgs:
+                        self.main = {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "",
+                                     "pairs": 0}
+                    else:
+                        self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 1200, "ai:storyteller", "")
+                        self.phase = "wait"
+                        continue
+                    if not self._guarantees():
+                        return self.main
+            elif self.phase == "wait":
                 if not self.fut.done():
                     return None
                 res = {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "",
@@ -517,7 +558,30 @@ class Month:
                 res["ok"], res["why"], res["aim"] = check(self.camp, res["pick"], self.w, self.snap,
                                                           max(self.now, self.camp.data.get("last_date") or ""), [],
                                                           self.opts)
-                return res
+                self.main = res
+                if not self._guarantees():
+                    return res
+            elif self.phase == "g_rules":
+                if self.gm.todo:
+                    self.gm.rule_step()
+                else:
+                    msgs = self.gm.messages()
+                    if not msgs:
+                        self.main["guarantee"] = {"error": "", "raw": "", "pick": None,
+                                                  "note": "nothing to guarantee or renew; no call made"}
+                        return self.main
+                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 800, "ai:storyteller", "guarantees")
+                    self.phase = "g_wait"
+            elif self.phase == "g_wait":
+                if not self.fut.done():
+                    return None
+                try:
+                    raw = self.fut.result()
+                except llm.LLMError as e:
+                    self.main["guarantee"] = {"error": str(e), "raw": "", "pick": None}
+                    return self.main
+                self.main["guarantee"] = self.gm.read(raw)
+                return self.main
             if time.monotonic() - started >= budget:
                 return None
 
@@ -553,6 +617,9 @@ def finish(camp: campaign.Campaign, res: Dict) -> Optional[List]:
     aim = res["aim"]
     _state(camp)["incidents"].append({"date": key, "kind": pick["kind"], "from": pick["from"], "to": pick["to"],
                                       "aim": aim["aim"], "why": pick["why"]})
+    if pick["kind"] == "guarantee" and _WORLD["w"]:          # a distant one counts against the world's allowance
+        from . import guarantees
+        _state(camp)["incidents"][-1]["reach"] = guarantees.reach(pick["from"], pick["to"], _WORLD["w"])
     if pick["kind"] == "reach_out":                   # no exchange: the country's letter to the player comes sooner
         pol = camp.policy_of(pick["from"])
         if pol:
@@ -568,10 +635,204 @@ def finish(camp: campaign.Campaign, res: Dict) -> Optional[List]:
     return item
 
 
+# ---------------------------------------------------------------- the month's guarantee ([ai_diplomacy] guarantees = ours)
+#
+# The game's AI gives no guarantees then (guarantees.py's gate), so the storyteller gives the world its own: after
+# the month's incident, a second short call sees the countries under threat and who might guarantee them
+# (guarantees.threats(), candidates(): stakes, distance, the game's rules), picks one guarantee (offered by the
+# guarantor or asked by the threatened) or none, and decides which guarantees by agreement running out are renewed.
+# The pick becomes an exchange like any incident, so the other side may refuse or name a price.
+
+class GuaranteeMonth:
+    """One month's guarantee: built with the world read, rule_step() checks one candidate against the game's rules
+    (about a second each; called while `todo` is left), then messages() and read()."""
+
+    def __init__(self, camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict]) -> None:
+        from . import guarantees
+        self.camp, self.snap, self.w = camp, snap, w
+        self.now = snap.get("date", "")
+        self.threats = guarantees.threats(camp, w)
+        recent = {campaign.pair(x["from"], x["to"]) for x in _state(camp)["incidents"]
+                  if 0 <= _days(x["date"], self.now) < PAIR_GAP_DAYS}
+        self.todo = [x for x in guarantees.candidates(camp, w, self.threats)
+                     if campaign.pair(x["by"], x["of"]) not in recent]
+        self.cands: List[Dict] = []
+        self.renew = guarantees.renewals(camp)
+
+    def name(self, t: str) -> str:
+        return self.snap.get("countries", {}).get(t, {}).get("name", t)
+
+    def rule_step(self) -> None:
+        from . import diplomacy
+        x = self.todo.pop(0)
+        offers, _, _ = diplomacy.menu(self.camp, x["by"], x["of"], self.name(x["by"]), self.name(x["of"]),
+                                      only=lambda k: k == "give:guarantee")
+        if offers:
+            self.cands.append(x)
+
+    def messages(self) -> Optional[List[Dict]]:
+        from . import guarantees
+        if not self.cands and not self.renew:
+            return None
+        player = self.camp.data["player"]
+        me = gamestate.country(player)
+        name = self.name
+        try:
+            level = f"{round(world.tension([player])[0] * 100)}%"
+        except Exception:
+            level = "unknown"
+        wards = {x["of"] for x in self.threats}
+        held = [f"- {name(g)} guarantees {name(o)}" for g in sorted(self.w) for o in sorted(self.w[g]["guarantees"])
+                if o in wards]
+        home = self.w.get(player, {}).get("continent", "")
+        parts = [
+            world.text({p.ideology for p in me.parties}),
+            "You are the storyteller of this Hearts of Iron IV world, in the way a game master steers a tabletop game. "
+            "This call is about one thing: guarantees of independence between AI countries. The game's own AI gives "
+            "none in this world, so every new guarantee comes from you: a promise to go to war for a country if it is "
+            "attacked, which ties up the guarantor's civilian factories while it lasts "
+            f"({guarantees.TERM_MONTHS} months, then renewed or ended). Guarantees shape the war to come: they deter, "
+            "they draw powers into wars, and they make blocs. Give one where a real threat meets a power with a stake "
+            "in stopping it, so that the coming crises have sides; none when nothing calls for one.",
+            f"THE DATE: {campaign.date_words(self.now)}. WORLD TENSION: {level}.",
+            f"THE PLAYER: {me.name} ({player}), on {home or 'an unknown continent'}; a human, never part of a "
+            f"guarantee here (it may be the threat). What happens near them matters to their game, but most "
+            f"guarantees should be elsewhere.",
+            "COUNTRIES UNDER THREAT (computed):\n" + ("\n".join(
+                f"- {name(x['of'])} ({x['of']}): " + "; ".join(guarantees.THREAT_WORDS[h].format(t=name(x["by"]))
+                                                              for h in x["how"]) for x in self.threats[:12])
+                or "none"),
+        ]
+        if held:
+            parts.append("GUARANTEES ALREADY IN FORCE FOR THEM:\n" + "\n".join(held))
+        if self.cands:
+            where = {"near": "close by", "present": "a distant power with land on that continent: unusual",
+                     "far": "from across the world: rare, only for a great stake"}
+            parts.append("POSSIBLE GUARANTEES (the game's rules checked; pick only from these). Either side may make "
+                         "the move: the guarantor offers (FROM guarantor, TO threatened) or the threatened asks "
+                         "(FROM threatened, TO guarantor):\n" + "\n".join(
+                             f"- {name(x['by'])} ({x['by']}) for {name(x['of'])} ({x['of']}) against "
+                             f"{name(x['against'])}: {', '.join(x['stake'])}; {where[x['reach']]}" for x in self.cands))
+        mine = [x for x in _state(self.camp)["incidents"] if x["kind"] == "guarantee"][-RECENT:]
+        if mine:
+            parts.append("YOUR LATEST GUARANTEES (vary them):\n" + "\n".join(
+                f"- {campaign.date_words(x['date'])}: {name(x['from'])} -> {name(x['to'])} ({x['aim']})" for x in mine))
+        if self.renew:
+            parts.append("GUARANTEES BY AGREEMENT RUNNING OUT (renew those whose reason still stands; the rest end):\n"
+                         + "\n".join(f"- {name(g['by'])} ({g['by']}) guarantees {name(g['of'])} ({g['of']}) until "
+                                     f"{campaign.date_words(g['until'])}" for g in self.renew))
+        parts.append("Answer with exactly these lines and nothing else:\n"
+                     "GUARANTEE: FROM TO (two tags from the possible guarantees, the one who makes the move first), "
+                     "or none\n"
+                     "WHY: one sentence, as a historian would put it, from the two countries' own interests; never "
+                     "about the player (unless they are the threat), pacing or your reasons as storyteller\n"
+                     "RENEW: the guarantees to renew as BY OF pairs separated by semicolons, or none")
+        return [{"role": "system", "content": "\n\n".join(parts)}, {"role": "user", "content": "Choose now."}]
+
+    def read(self, raw: str) -> Dict:
+        """{"raw", "error", "pick": {"from", "to", "why"} or None, "ok", "why_not", "cand", "renew": [(by, of)]}."""
+        tags = lambda s: re.findall(r"\b[A-Z][A-Z0-9]{2}\b", s)
+        said = _line(raw, "guarantee")
+        out = {"raw": raw, "error": "", "pick": None, "ok": False, "why_not": "", "cand": None, "renew": []}
+        t = tags(said)
+        if len(t) >= 2 and "none" not in said.lower():
+            out["pick"] = {"from": t[0], "to": t[1], "why": _line(raw, "why")}
+            cand = next((x for x in self.cands if {x["by"], x["of"]} == {t[0], t[1]}), None)
+            if not cand:
+                out["why_not"] = "not one of the possible guarantees"
+            else:
+                out["ok"], out["cand"] = True, cand
+        wanted = {(g["by"], g["of"]) for g in self.renew}
+        for part in _line(raw, "renew").split(";"):
+            p = tags(part)
+            if len(p) >= 2 and (p[0], p[1]) in wanted:
+                out["renew"].append((p[0], p[1]))
+        return out
+
+
+def finish_guarantee(camp: campaign.Campaign, g: Optional[Dict]) -> Optional[List]:
+    """Log the month's guarantee; queue an allowed pick as an exchange (returned) and renew what was renewed."""
+    from . import diplomacy, guarantees
+    if not g:
+        return None
+    c = (camp.snapshot or {}).get("countries", {})
+    name = lambda t: c.get(t, {}).get("name", t)
+    key = camp.data.get("last_date") or ""
+    head = f"=== {campaign.date_words(key)}: STORYTELLER (guarantees): "
+    if g.get("error"):
+        diplomacy.log([head + f"the call failed: {g['error']}"])
+        return None
+    if g.get("note"):
+        diplomacy.log([head + g["note"]])
+        return None
+    for by, of in g["renew"]:
+        until = guarantees.renew(camp, by, of)
+        if until:
+            text = f"{name(by)} renewed its guarantee of {name(of)}'s independence until {campaign.date_words(until)}."
+            camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "guarantee:renewed",
+                              "tags": [by, of], "text": text, "major": False}])
+            diplomacy.log([head + text])
+    pick = g["pick"]
+    if not pick:
+        diplomacy.log([head + "none" + (" renewed" if g["renew"] else "")])
+        return None
+    line = f"guarantee {name(pick['from'])} -> {name(pick['to'])}"
+    if not g["ok"]:
+        diplomacy.log([head + f"dropped {line}: {g['why_not']}", f"  {pick['why']}"])
+        return None
+    x = g["cand"]
+    offers = pick["from"] == x["by"]
+    aim = (x["aim"]["aim"] if offers and x["aim"] else
+           f"stand by {name(x['of'])} against {name(x['against'])}" if offers else
+           f"find a protector against {name(x['against'])}")
+    _state(camp)["incidents"].append({"date": key, "kind": "guarantee", "from": pick["from"], "to": pick["to"],
+                                      "aim": aim, "why": pick["why"], "slot": "guarantee", "reach": x["reach"]})
+    brief = {"kind": "guarantee", "aim": aim, "aim_kind": "back", "target": x["of"] if offers else x["by"],
+             "why": pick["why"]}
+    item = [pick["from"], pick["to"], "guarantee", [aim], brief]
+    diplomacy._state(camp)["queue"].append(item)
+    diplomacy.log([head + f"{line}   [{aim}; {x['reach']}]", f"  {pick['why']}"])
+    camp.save()
+    return item
+
+
+def guarantees_main(args: List[str]) -> int:
+    """python -m hoi4_rp storyteller --guarantees [--prompt]: one guarantee month, dry (nothing is queued)."""
+    from . import chronicle, diplomacy, llm
+    player = gamestate.player_tag()
+    camp = campaign.Campaign(campaign.read_id(player), player)
+    camp.snapshot = chronicle.snapshot(player)
+    started = time.monotonic()
+    gm = GuaranteeMonth(camp, camp.snapshot, diplomacy.world())
+    print("THREATS\n" + ("\n".join(f"- {gm.name(x['of'])} by {gm.name(x['by'])}: {', '.join(x['how'])} "
+                                   f"(weight {x['weight']})" for x in gm.threats[:20]) or "none"))
+    while gm.todo:
+        gm.rule_step()
+    print(f"\nPOSSIBLE GUARANTEES ({time.monotonic() - started:.0f} s to work out)\n" + ("\n".join(
+        f"- {gm.name(x['by'])} for {gm.name(x['of'])} against {gm.name(x['against'])}: {', '.join(x['stake'])}; "
+        f"{x['reach']}, score {x['score']:.1f}" for x in gm.cands) or "none"))
+    if gm.renew:
+        print("\nRUNNING OUT\n" + "\n".join(f"- {g['by']} -> {g['of']} until {g['until']}" for g in gm.renew))
+    msgs = gm.messages()
+    if not msgs:
+        print("\nnothing to guarantee or renew; no call made")
+        return 0
+    if "--prompt" in args:
+        print(f"\n----- prompt\n{msgs[0]['content']}\n-----")
+    res = gm.read(llm.chat(msgs, None, 0.8, 800, "ai:storyteller", "guarantees"))
+    p = res["pick"]
+    print("\nPICK: " + (f"{p['from']} -> {p['to']} " + ("(allowed)" if res["ok"] else f"(DROPPED: {res['why_not']})")
+                        + f"\n  {p['why']}" if p else "none")
+          + (f"\nRENEW: {res['renew']}" if res["renew"] else ""))
+    return 0
+
+
 # ---------------------------------------------------------------- python -m hoi4_rp storyteller
 
 def main(args: List[str]) -> int:
     from . import chronicle, diplomacy, llm
+    if "--guarantees" in args:
+        return guarantees_main(args)
     show = "--prompt" in args
     months = 1
     if "--months" in args and args.index("--months") + 1 < len(args):

@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 from . import (actions, aipeace, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
-               guarantees, steering, story, storyteller, style, subjects, treaties, ultimatums, war, world)
+               guarantees, steering, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -614,6 +614,7 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
         outcomes, events = outcomes + more_shown + sub_shown, events + more_events + sub_events
     for e in events:
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False}])
+    tension.deal(camp, events)
     treaties.record(camp, to, [e["type"] for e in events], terms, key, them.name, later=later)
     outcomes += [(line, False) for line in guarantees.record(camp, to, [e["type"] for e in events], terms)]
     outcomes += [(f"Agreed: {them.name} pays us {actions.get_deal(k).label} in {terms['payments'][k][2]} months.",
@@ -956,6 +957,7 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     camp.letters_with(sender)[-1]["initiated"] = True
     outcomes, events = actions.apply(sender, player, them.name, me.name, commands, allowed=steps)
     camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
+    tension.deal(camp, events)
     if renounced:
         outcomes += treaties.renounce(camp, sender, player)
         for line in steering.sync(camp, sender):
@@ -1007,6 +1009,7 @@ def resolve_offer(camp: campaign.Campaign, player: str, answer: int) -> str:
         now = [k for k in items if k not in later]
         outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in now], allowed=now)
         camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
+        tension.deal(camp, events)                           # before the ultimatum it meets is closed
         treaties.record(camp, tag, [e["type"] for e in events], offer.get("terms"), key, them_name, later=later)
         guarantees.record(camp, tag, [e["type"] for e in events], offer.get("terms"))
         for line in steering.sync(camp, tag):              # a commitment it made steers its AI
@@ -1040,6 +1043,7 @@ def _toss(camp: campaign.Campaign, player: str, offer: Dict, items: List[str], t
     paid = gives if won else asks
     outcomes, events = actions.apply(tag, player, them_name, me_name, [(k, 0) for k in paid], allowed=paid)
     camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": False} for e in events])
+    tension.deal(camp, events)
     treaties.record(camp, tag, [e["type"] for e in events], offer.get("terms"), key, them_name)
     guarantees.record(camp, tag, [e["type"] for e in events], offer.get("terms"))
     for line in steering.sync(camp, tag):
@@ -1420,6 +1424,9 @@ class _Session:
         item = storyteller.finish(camp, res)
         if item:
             print(f"  [ai] storyteller: {item[2]} {item[0]} -> {item[1]} ({item[3][0]})")
+        item = storyteller.finish_guarantee(camp, res.get("guarantee"))
+        if item:
+            print(f"  [ai] storyteller: guarantee {item[0]} -> {item[1]} ({item[3][0]})")
         if not self.plot_job and plots.due(camp):
             plots._store(camp)["tick"] = month.snap.get("date", "")
             self.plot_job = (self.ai_pool.submit(llm.chat, plots.messages(camp, month.snap), None, 0.7, 1500,
@@ -1874,8 +1881,13 @@ class _Session:
         # before come first; new countries (just liberated or puppeted) last.
         reasons: Dict[str, str] = {}
         for e in events:
-            # market access alone is no reason to write: the game opens it with half the world at once
-            if player not in e["tags"] or e.get("type", "").startswith("agreement:market"):
+            # market access alone is no reason to write: the game opens it with half the world at once. Nor is an
+            # agreement ending (a term run out, or the game dropping it: a faction formed, a government fallen):
+            # it stays in what the country remembers and weighs in its policy, but it brings no letter of its own
+            kind = e.get("type", "")
+            if (player not in e["tags"] or kind.startswith("agreement:market")
+                    or (kind.startswith("agreement:") and kind.endswith(":end"))
+                    or kind in ("treaty:ended", "guarantee:expired")):
                 continue
             for other in e["tags"]:
                 if other != player and active(snap, other) and not self._cooling(camp, other, today):

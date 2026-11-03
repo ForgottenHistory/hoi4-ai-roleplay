@@ -50,11 +50,12 @@ FAR_WEIGHT = 0.3
 # ---------------------------------------------------------------- the world, once a month
 
 def world() -> Dict[str, Dict]:
-    """Every country: continent, neighbours, guarantees given, strength, subject or not (one game query)."""
+    """Every country: continent and capital state, neighbours, guarantees given, strength, subject or not (one game
+    query)."""
     lines = gamestate.query(
         'every_country = { limit = { exists = yes } '
         'log = "AIRPDM|[THIS.GetTag]|[THIS.Capital.GetContinent]|[?THIS.num_of_civilian_factories]|'
-        '[?THIS.num_of_military_factories]|[?THIS.num_divisions]" '
+        '[?THIS.num_of_military_factories]|[?THIS.num_divisions]|[THIS.Capital.GetID]" '
         'if = { limit = { is_subject = yes } log = "AIRPDS|[THIS.GetTag]" } '
         'every_neighbor_country = { log = "AIRPDN|[PREV.GetTag]|[THIS.GetTag]" } '
         'every_country = { limit = { PREV = { has_guaranteed = PREV } } log = "AIRPDG|[PREV.GetTag]|[THIS.GetTag]" } }')
@@ -64,6 +65,7 @@ def world() -> Dict[str, Dict]:
         f = [x.strip() for x in line.split("|")]
         if f[0] == "AIRPDM" and len(f) >= 6:
             out[f[1]] = {"continent": f[2], "civ": num(f[3]), "mil": num(f[4]), "divisions": num(f[5]),
+                         "capital": f[6] if len(f) > 6 and f[6].isdigit() else "",
                          "subject": False, "neighbours": set(), "guarantees": set()}
         elif f[0] == "AIRPDS" and f[1] in out:
             out[f[1]]["subject"] = True
@@ -613,6 +615,8 @@ def apply_deal(camp: campaign.Campaign, writer: str, other: str, items: List[str
     major = any(c.get(t, {}).get("major") for t in (writer, other))
     camp.add_events([{**e, "date": key, "when": campaign.date_words(key), "major": major, "ai": True}
                      for e in events])
+    from . import tension
+    tension.deal(camp, events)                     # land, submission, annexation: the world takes alarm
     done = [e["type"] for e in events]
     guarantees.record(camp, writer, done, None, other=other)
     commits = [k for k in done if actions.is_align(k)]

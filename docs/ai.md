@@ -103,9 +103,21 @@ Optional, off by default: by default HOI4's AI keeps its own diplomacy beside th
 over to the deals between countries instead.
 
 - `guarantees = ours` in `[ai_diplomacy]`: AI countries can't use the game's Guarantee action, so guarantees between
-  them come only from deals (set `mode = on`). Focuses and events still guarantee, and your own Guarantee button is
-  unchanged. HOI4 gates each diplomatic action with a scripted trigger; `write-mod` writes the guarantee one in force
-  (the game's, or your mod's with its own rules) again with one condition in front, in a file loaded last, and `run`
-  turns it on with a global flag, so changing the setting needs no new `write-mod`.
+  them come only from deals (needs `mode = on` and `driver = storyteller`). Focuses and events still guarantee, and
+  your own Guarantee button is unchanged. HOI4 gates each diplomatic action with a scripted trigger; `write-mod`
+  writes the guarantee one in force (the game's, or your mod's with its own rules) again with one condition in
+  front, in a file loaded last, and `run` turns it on with a global flag, so changing the setting needs no new
+  `write-mod`.
+
+  Each month, after its incident, the storyteller gives the world a guarantee (or none). Python lists the countries
+  under threat (a war goal held or being justified on them, an ultimatum, an aim to take their land) and who has a
+  stake in protecting them: an aim against the aggressor or to back the threatened, the same faction, the same
+  threat; a minor power only for a neighbour, a faction member or a country it aims to back. Distance counts: a
+  guarantee from the same continent is ordinary; one from a power that only holds land there (Britain in Asia) needs
+  an aim at stake and comes at most once every 6 months in the whole world; one from across the world only from a
+  major power with an aim at stake, at most once a year. The storyteller picks one, offered by the guarantor or
+  asked by the threatened, and it is an exchange like any other: the other side may refuse or name a price. It also
+  renews the guarantees by agreement that are running out while their reason stands; the rest end.
+  `python -m hoi4_rp storyteller --guarantees [--prompt]` shows the threats, the possible guarantees and a pick, dry.
 
 `python -m hoi4_rp ai-undo` ends pacts, market access, guarantees and commitments it put in place (stop `run` first).

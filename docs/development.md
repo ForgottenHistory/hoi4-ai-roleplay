@@ -41,6 +41,7 @@ LLM output is plain text: `KEY: value` lines or `[[commands]]`, parsed leniently
     hoi4_rp/peace.py       peace by letter through the game's peace conference
     hoi4_rp/war.py         a country's war stance toward the player
     hoi4_rp/ultimatums.py  threats of war that can come true
+    hoi4_rp/tension.py     world tension for wars, land and subjects our deals and ultimatums bring
     hoi4_rp/policy.py      policies toward the player
     hoi4_rp/steering.py    policies and commitments push HOI4's AI (add_ai_strategy)
     hoi4_rp/diplomacy.py   AI-to-AI exchanges

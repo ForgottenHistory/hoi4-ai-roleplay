@@ -11,7 +11,8 @@ Market access the game opens and closes on its own (trade laws, new governments,
 told to countries at all: only market access agreed in a letter deal counts between you.
 
 Countries also write on their own: about events involving you, when their policy is urgent, or after a quiet spell
-(`[letters]` in config.ini sets the gaps). Each sees your whole correspondence with it and the events it took part in.
+(`[letters]` in config.ini sets the gaps). An agreement ending (a term run out, or the game dropping a pact or
+guarantee on its own) brings no letter: the country remembers it and may raise it in its next one. Each sees your whole correspondence with it and the events it took part in.
 
 You never write commands. You write as you like; the country's reply carries `[[commands]]` that Python strips,
 checks in the live game and applies if allowed. What happened is listed under the letter (green good, red bad).
@@ -78,6 +79,15 @@ term ended as agreed and isn't held against anyone. The game's own Guarantee but
 Every prompt knows the world tension and what each country may do at it (guarantee, faction, lend-lease, war goals),
 read live per country, so ideology, spirits and mods count. With `tension_rules = yes` (default) letter deals keep to
 those thresholds.
+
+Deals and ultimatums raise world tension as the game's own wars and annexations do (the game skips it for script),
+for you and AI countries alike, shown by name in the game's tension tooltip:
+
+- a war after an ultimatum: the game's tension for a war with a war goal (10 in vanilla, a mod's own value if set)
+- land handed over under threat (an ultimatum standing, or a threat you made in a letter): +3, +1 per further state,
+  at most +6; land sold or given freely adds nothing
+- submission: +5 under threat, +2 freely; annexation of an independent country: +6 under threat, +3 freely (a
+  subject joining its overlord adds nothing)
 
 ## Wagers
 

@@ -161,9 +161,10 @@ def write_mod(mod_root: str = MOD_ROOT) -> None:
     }
     from . import letter_mod
     files.update(letter_mod.files(mod_dir))
-    from . import guarantees, peace
+    from . import guarantees, peace, tension
     files.update(peace.files(mod_dir))
     files.update(guarantees.files(mod_dir))
+    files.update(tension.files(mod_dir))
 
     # A mod with replace_path drops that folder from the game and from every mod loaded before it (total
     # conversions like Unforeseen Consequences replace events, on_actions, scripted_guis...). Naming such mods as

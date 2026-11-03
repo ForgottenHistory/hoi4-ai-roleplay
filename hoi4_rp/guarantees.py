@@ -288,10 +288,11 @@ def threats(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Dict]:
             if aim["kind"] in ("land", "oppose") and aim["target"]:
                 add(aim["target"], tag, aim["kind"])
     power = lambda t: w.get(t, {}).get("civ", 0) + w.get(t, {}).get("mil", 0)
+    fighting = {t for p in wars for t in p.split("|")}
     out = []
     for (of, by), how in found.items():
-        if of == by or not _ok(camp, of, w) or by not in w or campaign.pair(of, by) in wars:
-            continue
+        if of == by or not _ok(camp, of, w) or by not in w or of in fighting:
+            continue                                   # a guarantee protects a country at peace, not one at war
         if not c.get(by, {}).get("major") and power(by) < 0.75 * power(of):
             continue                                   # no threat it couldn't face alone
         how = list(dict.fromkeys(how))

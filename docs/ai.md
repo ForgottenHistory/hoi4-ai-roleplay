@@ -142,4 +142,26 @@ over to the deals between countries instead.
   the factions we found live only while `run` sets them (kept in `data/faction_names.json`); a game loaded without it
   shows their key.
 
+- `wars = ours`: AI countries don't start wars on their own. HOI4 has no scripted trigger for declaring war, so the
+  bridge does it (`bridge.wars`, needs a hoi4-bridge with it): every declaration an AI country sends is dropped unless
+  our side allowed that pair, and each stopped attempt is counted. AI countries may also justify war goals only on
+  countries we let them prepare against (the scripted-trigger gate, with an exception list per country). Untouched:
+  wars from national focuses, events and decisions, civil wars, guarantors and allies joining a war, your own wars,
+  and the wars our ultimatums end in.
+
+  Each month, in a call beside its incident, guarantee and faction move, the storyteller weighs the would-be wars: countries
+  holding a war goal (a focus's, an event's, their own, or an ultimatum's that ran out unmet), countries whose AI
+  tried to declare war, and countries with
+  an aim to take land and no war goal yet (only once world tension lets that country justify, and never against
+  its own subject or overlord). For each it sees the aims, the course of its focuses and the balance of
+  both sides as they would fight (allies, subjects, the defender's guarantors and their factions: divisions, soldiers,
+  military factories, and whether it is already at war), and decides as that government's shrewd player: **war**
+  (allowed for 90 days; its AI declares when the armies are ready), **ultimatum** (a deadline first, for a land
+  aim, never to you: yours come by letter), **prepare** (it may justify a war goal, and its AI is set on it: the `conquer` and `prepare_for_war`
+  strategies) or **wait** (the pair comes up
+  again after 60 days). A war at less than 0.7 of the other side's strength becomes a wait. A non-aggression pact
+  is respected everywhere: no war decision, ultimatum, war pledge or deal to join a war between two countries while
+  one stands (also with wars = game), and with wars = ours deals between AI countries hold no war joining at all.
+  `python -m hoi4_rp storyteller --wars [--prompt]` shows the would-be wars and the decisions, dry.
+
 `python -m hoi4_rp ai-undo` ends pacts, market access, guarantees and commitments it put in place (stop `run` first).

@@ -552,6 +552,10 @@ def _join_war(camp: campaign.Campaign, t: Dict, c: Dict, them: str, me: str, tod
     elif bridge.trigger(f"{joiner} = {{ has_war_with = {enemy} }}"):
         c["fired"] = today
         text = f"{name(joiner)} stands at war with {name(enemy)} beside {name(side)}, as agreed on {t['when']}."
+    elif actions.pact_between(joiner, enemy):
+        c["fired"], c["how"] = today, "a non-aggression pact stands"
+        text = (f"{name(joiner)} did not join {name(side)}'s war against {name(enemy)}, as agreed on {t['when']}: "
+                f"a non-aggression pact stands between {name(joiner)} and {name(enemy)}.")
     elif joiner == player:
         return "", True
     elif actions._effect(actions.war_script(joiner, side, enemy)) and \

@@ -35,7 +35,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
 from . import (actions, aipeace, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
-               factions, gates, guarantees, steering, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
+               factions, gates, guarantees, steering, wars, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
 
@@ -47,8 +47,6 @@ RUN_DAYS = 3              # game days the game must run, unpaused, before backgr
 EVENT_LETTERS = 2          # countries that may start a letter about events within EVENT_DAYS
 EVENT_DAYS = 10            # game days
 RETRY_SECONDS = 60        # after a failed background LLM call, wait this long before the next one
-AI_PARALLEL = 3           # AI-to-AI exchanges running at once (NanoGPT takes several calls at a time)
-POLICY_PARALLEL = 3       # policy refreshes running at once (never two for the same country)
 
 
 def read_outbox(block: str) -> Optional[str]:
@@ -1196,7 +1194,8 @@ class _Session:
         self.steered = 0                         # campaign whose game AI strategies were last brought in line
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
-        self.pool = ThreadPoolExecutor(max_workers=POLICY_PARALLEL)  # policy refreshes, side by side
+        self.parallel = settings().llm.parallel   # background calls of one kind at once ([llm] parallel)
+        self.pool = ThreadPoolExecutor(max_workers=self.parallel)  # policy refreshes, side by side
         self.policy_jobs: List[tuple] = []        # [(tag, future, date key, Relation, campaign id, basis, war baseline)]
         self.gm_pool = ThreadPoolExecutor(max_workers=1)   # the reputation game master's LLM calls
         self.gm_job: Optional[tuple] = None       # (kind, item, future, campaign id)
@@ -1207,7 +1206,8 @@ class _Session:
         self.story_draft: Optional[tuple] = None  # a written event waiting to be shown: (draft, campaign id, ...)
         self.war_pool = ThreadPoolExecutor(max_workers=1)    # ultimatum decisions
         self.ultimatum_job: Optional[tuple] = None   # (ultimatum, future, campaign id)
-        self.ai_pool = ThreadPoolExecutor(max_workers=AI_PARALLEL)   # AI-to-AI exchanges (diplomacy.py), side by side
+        # AI-to-AI exchanges (diplomacy.py) side by side, and room beside them for the storyteller's month (agendas, its calls)
+        self.ai_pool = ThreadPoolExecutor(max_workers=self.parallel + 4)
         self.ai_jobs: List[tuple] = []            # [(stage, queue item, future, campaign id, what the next stage needs)]
         self.plot_job: Optional[tuple] = None     # the plotlines being written: (future, campaign id)
         self.crisis: Optional[tuple] = None       # a crisis try running: (future, campaign id, pairs, countries)
@@ -1263,6 +1263,11 @@ class _Session:
         # The .gui can't do either: Enter makes a new line, and the page shows the whole letter.
         # Cheap, and repeating it covers a restarted game.
         bridge.send(f"bridge.editbox.multiline {EDITBOX_NAME}", f"bridge.editbox.mirror {EDITBOX_NAME} {PAGE_NAME}")
+        old = self.camp.snapshot if self.camp else None
+        if (not force and old and self.camp.data["player"] == player
+                and chronicle.stamp(player) == (self.camp.id, old["date"])):
+            self.moving = 0                            # paused: nothing to read until the date moves
+            return self.camp
         if self.camp:                                  # those it writes to, and the plot's
             chronicle.WATCH = set(self.camp.threads()) | set(plots.tags(self.camp))
         snap = chronicle.snapshot(player)
@@ -1318,6 +1323,7 @@ class _Session:
             steering.sync_all(camp)
             gates.switch()                          # a save holds the flags as they were when saved
             factions.restore()                      # the names of factions we founded live only in `run`
+            wars.sync(camp)                         # the bridge's war veto, and the wars allowed now
         if not self.idle() and time.monotonic() >= self.retry_at:
             self.ultimatum_decision(camp, player)
             self.policies(camp, player, snap)
@@ -1327,7 +1333,7 @@ class _Session:
             self.ai_diplomacy(camp)
         return camp
 
-    # ---- AI-to-AI diplomacy (diplomacy.py): two or three short calls per exchange, up to AI_PARALLEL side by side,
+    # ---- AI-to-AI diplomacy (diplomacy.py): two or three short calls per exchange, up to [llm] parallel side by side,
     #      in their own queue beside the letters to the player (NanoGPT takes parallel calls)
     def ai_diplomacy(self, camp: campaign.Campaign) -> None:
         cfg = settings().ai
@@ -1347,7 +1353,7 @@ class _Session:
         # ultimatums between AI countries past their deadline: their senders decide, beside the exchanges
         deciding = {job[1]["id"] for job in self.ai_jobs if job[0] == "ultimatum"}
         for u in ultimatums.next_ai_decisions(camp):
-            if len(self.ai_jobs) >= AI_PARALLEL:
+            if len(self.ai_jobs) >= self.parallel:
                 break
             if u["id"] in deciding:
                 continue
@@ -1381,7 +1387,7 @@ class _Session:
             camp.save()
         snap = camp.snapshot or {}
         w = None
-        while st["queue"] and len(self.ai_jobs) < AI_PARALLEL:
+        while st["queue"] and len(self.ai_jobs) < self.parallel:
             item = st["queue"].pop(0)
             a, b = item[0], item[1]
             if a not in snap.get("countries", {}) or b not in snap.get("countries", {}) \
@@ -1434,6 +1440,8 @@ class _Session:
         line = storyteller.finish_faction(camp, res.get("faction"))
         if line:
             print(f"  [ai] storyteller: {line}")
+        for line in storyteller.finish_war(camp, res.get("war")):
+            print(f"  [ai] storyteller (wars): {line}")
         if not self.plot_job and plots.due(camp):
             plots._store(camp)["tick"] = month.snap.get("date", "")
             self.plot_job = (self.ai_pool.submit(llm.chat, plots.messages(camp, month.snap), None, 0.7, 1500,
@@ -1816,7 +1824,7 @@ class _Session:
             else:
                 self._policy_done(camp, player, *job)
         self.policy_jobs = running
-        if len(self.policy_jobs) >= POLICY_PARALLEL or time.monotonic() < self.retry_at:
+        if len(self.policy_jobs) >= self.parallel or time.monotonic() < self.retry_at:
             return
         try:
             me = gamestate.country(player)
@@ -1829,7 +1837,7 @@ class _Session:
                   for tag in policy_countries(me, snap) if tag not in busy]
         ranked = sorted([r for r in ranked if r[0]], key=lambda r: -r[0])
         for _, tag in ranked:
-            if len(self.policy_jobs) >= POLICY_PARALLEL:
+            if len(self.policy_jobs) >= self.parallel:
                 return
             try:
                 them = gamestate.country(tag)

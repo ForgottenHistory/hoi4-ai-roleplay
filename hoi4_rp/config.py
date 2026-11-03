@@ -29,6 +29,7 @@ DEFAULTS = {
         "log_prompts": "no",
         "timeout": "120",
         "retries": "2",
+        "parallel": "8",
     },
     "letters": {
         "incoming": "yes",
@@ -53,6 +54,7 @@ DEFAULTS = {
         "cooldown_days": "90",
         "guarantees": "game",
         "factions": "game",
+        "wars": "game",
     },
     "world": {
         "setting": "auto",
@@ -74,6 +76,7 @@ class LLMSettings:
     timeout: float
     retries: int
     log_prompts: bool     # keep every full prompt and reply in data/logs/prompts (for debugging)
+    parallel: int         # background calls of one kind running at once (policies, AI exchanges, agendas)
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,7 @@ class AIDiplomacySettings:
     cooldown_days: int        # game days before the same two countries talk again
     guarantees: str           # game (HOI4's AI guarantees on its own) | ours (only by our deals) (gates.py)
     factions: str             # game | ours: factions between AI countries only by our deals (factions.py)
+    wars: str                 # game | ours: AI countries declare war and justify only when we decide (wars.py)
 
 
 @dataclass(frozen=True)
@@ -143,6 +147,7 @@ def settings() -> Settings:
             timeout=s.getfloat("timeout"),
             retries=s.getint("retries"),
             log_prompts=s.getboolean("log_prompts"),
+            parallel=max(1, s.getint("parallel")),
         ),
         letters=LetterSettings(
             incoming=lt.getboolean("incoming"),
@@ -174,5 +179,6 @@ def settings() -> Settings:
             cooldown_days=ai.getint("cooldown_days"),
             guarantees=(ai.get("guarantees") or "game").strip().lower(),
             factions=(ai.get("factions") or "game").strip().lower(),
+            wars=(ai.get("wars") or "game").strip().lower(),
         ),
     )

@@ -151,6 +151,21 @@ WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_l
 MARKET_MASS = 3             # more market access changes than this in one snapshot are told as one line
 
 
+def stamp(player: str) -> Tuple[int, str]:
+    """(campaign id, date key) from the running game: a cheap check whether a new snapshot is needed."""
+    cid, date = 0, ""
+    for line in query(f'{player} = {{ log = "I|[?{ID_VARIABLE}]" log = "D|[GetDateText]" }}'):
+        kind, _, rest = line.partition("|")
+        if kind == "I":
+            try:
+                cid = int(float(rest.strip()))
+            except ValueError:
+                pass
+        elif kind == "D":
+            date = date_key(rest.strip())
+    return cid, date
+
+
 def snapshot(player: str) -> Dict:
     """{campaign, date, date_text, countries: {tag: {...}}, wars: [A|B], states: {id: [name, owner]},
     front: {tag: ...} (the player and their enemies, see _read_front)}"""

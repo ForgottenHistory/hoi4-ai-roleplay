@@ -73,10 +73,10 @@ def open_from(camp: campaign.Campaign, tag: str, to: str = "") -> Optional[Dict]
 # ---------------------------------------------------------------- setting one
 
 def allowed(camp: campaign.Campaign, tag: str, rel: "actions.Relation", stance: str) -> bool:
-    """May `tag` set an ultimatum now? At peace with the player, not its overlord, subject or ally, its policy not
-    friendly or cordial, and no ultimatum of its own still standing."""
+    """May `tag` set an ultimatum now? At peace with the player, not its overlord, subject or ally, no non-aggression
+    pact between them, its policy not friendly or cordial, and no ultimatum of its own still standing."""
     return (not rel.at_war and not rel.bound and stance not in ("friendly", "cordial")
-            and not open_from(camp, tag))
+            and not open_from(camp, tag) and not actions.pact_between(tag, camp.data["player"]))
 
 
 def help_text(them_name: str, me_name: str) -> str:
@@ -429,6 +429,8 @@ def decide(camp: campaign.Campaign, u: Dict, step: str, months: int, why: str) -
         step = "ready"
     if step == "war" and not balance(camp, tag, player, them_name, me_name)[1]:
         step = "ready"                                 # its side is the weaker, or busy: it can't strike now
+    if step == "war" and actions.pact_between(tag, player):
+        step = "ready"                                 # a non-aggression pact signed since: no war while it stands
     if review and step == "ready":
         from . import treaties
         u["review"] = treaties._add_months(camp.data.get("last_date") or u["deadline"], REVIEW_MONTHS)

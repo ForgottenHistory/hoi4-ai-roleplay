@@ -90,6 +90,11 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
                 kind.startswith("ask:war:") or (kind == "treaty:clause" and x.get("joiner") == player)):
             joined_with[x["tags"][2]] = x["tags"][0]
     joined: Dict[str, List[str]] = {}             # ally -> enemies the player joined its war against
+    # Enemies the player was already fighting. A country that now enters the war beside one of them joined the
+    # player's war (by a deal, a guarantee, its faction): the game counts it as the player's offensive war (the
+    # player started the first one), but the player attacked no one new.
+    fighting = {t for w in old.get("wars", []) for t in w.split("|") if player in w.split("|") and t != player}
+    came_in = lambda t: any(bridge.trigger(f"{t} = {{ has_war_together_with = {y} }}") for y in sorted(fighting))
     for e in events:
         if player not in e["tags"]:
             continue
@@ -97,7 +102,11 @@ def detect(camp: campaign.Campaign, player: str, old: Dict, new: Dict, events: L
         if e["type"] in ("war", "peace") and with_lord(e["type"], other):
             continue
         if e["type"] == "war" and other:
-            if bridge.trigger(f"{player} = {{ has_offensive_war_with = {other} }}"):
+            if other in joined_with:
+                joined.setdefault(joined_with[other], []).append(other)
+            elif came_in(other):
+                continue
+            elif bridge.trigger(f"{player} = {{ has_offensive_war_with = {other} }}"):
                 attacked.append(other)
             elif other in joined_with:
                 joined.setdefault(joined_with[other], []).append(other)

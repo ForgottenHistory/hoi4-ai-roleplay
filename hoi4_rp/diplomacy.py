@@ -290,11 +290,12 @@ STANCES = ("friendly", "cordial", "indifferent", "wary", "hostile")
 
 def may_threaten(camp: campaign.Campaign, a: str, b: str, rel) -> bool:
     """May `a` set `b` an ultimatum? At peace, not bound to each other, `a`'s last stance toward `b` not friendly or
-    cordial, and no ultimatum of `a`'s standing (to anyone): one threat at a time."""
-    from . import ultimatums
+    cordial, no non-aggression pact between them, and no ultimatum of `a`'s standing (to anyone): one threat at a
+    time."""
+    from . import actions, ultimatums
     last = (camp.policy_of(a, b) or {}).get("stance", "")
     return (not rel.at_war and not rel.bound and last not in ("friendly", "cordial")
-            and not ultimatums.open_from(camp, a, "*"))
+            and not ultimatums.open_from(camp, a, "*") and not actions.pact_between(a, b))
 
 
 def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool = False, only=None,
@@ -322,6 +323,11 @@ def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool
                                  + actions.war_asks(rel) + actions.commit_asks(rel))
     if only:
         offers, asks = [k for k in offers if only(k)], [k for k in asks if only(k)]
+    from . import gates
+    if gates.ours("wars"):
+        # entering a war is starting one: the storyteller's war decisions (wars.py) are where that is decided,
+        # not a clause of another deal
+        offers, asks = [k for k in offers if not actions.is_war(k)], [k for k in asks if not actions.is_war(k)]
     f = actions._fmt(an, bn)
     actions.economy(an, bn, rel)                   # both sides' industry, stock and political power for the notes
     actions.union(bn, agendas.wants(camp, a, b))   # an aim of union makes annexation the end of a path
@@ -716,6 +722,8 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
         camp.add_letter(a, a, final, key, other=b)
         camp.letters_with(a, b)[-1].update({"dry": dry, "answer": final_answer, "stance": final_stance})
     for x, y, s in ((a, b, final_stance or stance), (b, a, b_stance)):
+        if camp.data["player"] in (x, y):      # the full policy toward the player is written by policy.py
+            continue
         camp.set_policy(x, {"stance": s, "date": key, "when": campaign.date_words(key), "light": True}, other=y)
     deal = actions.package_text(items, name(a)) if items else ""
     how = f"score {why[0]}" if isinstance(why[0], int) else f"storyteller: {why[0]}"

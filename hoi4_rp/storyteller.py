@@ -26,7 +26,8 @@ check() then drops a pick that is not allowed, with no retry (the month passes q
 With [ai_diplomacy] guarantees = ours a second call follows each month: the month's guarantee (GuaranteeMonth), kept
 apart from the incident above (its incidents carry "slot": "guarantee" and don't count toward INCIDENTS_PER_MONTH).
 With factions = ours a last call may make one faction move (FactionMonth: join, found or break; "slot": "faction"),
-and the incident above offers no alliances then.
+and the incident above offers no alliances then. With wars = ours the last call weighs the would-be wars
+(WarMonth: war, ultimatum, prepare or wait for each; wars.py carries them out).
 
 blocs(): countries whose aims (and commitments by letter) share a target: "against Germany: Britain, France, Poland".
 Nobody schedules them; they appear because the agendas line up.
@@ -464,9 +465,12 @@ class Month:
         self.opts: Dict = {}
         self.shortlist: List[Tuple] = []
         self.fut = None
+        self.wfut = None                # the war decisions' call: it runs beside the incident, guarantee and faction
+        self.war: Dict = {}
         self.main: Dict = {}
         self.gm: Optional[GuaranteeMonth] = None
         self.fm: Optional[FactionMonth] = None
+        self.wm: Optional[WarMonth] = None
 
     def _guarantees(self) -> bool:
         """After the month's incident: with guarantees = ours, go on to the month's guarantee (True); else to the
@@ -479,12 +483,19 @@ class Month:
         return True
 
     def _factions(self) -> bool:
-        """Last: with factions = ours, go on to the month's faction move (True)."""
+        """With factions = ours, go on to the month's faction move (True); else to the end."""
         from . import gates
         if not gates.ours("factions"):
-            return False
+            return self._end()
         self.fm = FactionMonth(self.camp, self.snap, self.w)
         self.phase = "f_rules"
+        return True
+
+    def _end(self) -> bool:
+        """Last: wait for the war decisions (True), whose call ran beside the others; False when there are none."""
+        if not self.wm:
+            return False
+        self.phase = "w_wait"
         return True
 
     def _write_agenda(self, tag: str) -> None:
@@ -516,7 +527,7 @@ class Month:
 
     def step(self, budget: float = 2.0) -> Optional[Dict]:
         """Work for about `budget` seconds. The result when the month's pick is made, else None."""
-        from . import diplomacy, llm
+        from . import diplomacy, gates, llm
         started = time.monotonic()
         player = self.camp.data["player"]
         while True:
@@ -525,6 +536,17 @@ class Month:
                 self.scored = diplomacy.score(self.camp, self.w)
                 self.todo = [t for t in agendas.covered(self.camp, self.w, self.scored) if agendas.due(self.camp, t)]
                 self.phase = "agendas"
+            elif self.phase == "w_rules":
+                if self.wm.todo:
+                    self.wm.rule_step()
+                else:
+                    msgs = self.wm.messages()
+                    if msgs:
+                        self.wfut = self.pool.submit(llm.chat, msgs, None, 0.7, 900, "ai:storyteller", "wars")
+                    else:
+                        self.war = {"error": "", "raw": "", "picks": [], "note": "no war to weigh; no call made"}
+                    self.phase = "options"              # on to the incident's call
+
             elif self.phase == "agendas":
                 if self.todo:
                     self._write_agenda(self.todo.pop(0))
@@ -538,6 +560,11 @@ class Month:
                 if self.todo:
                     x, y = self.todo.pop(0)
                     self.cache[(x, y)] = options(self.camp, x, y, self.snap)
+                elif gates.ours("wars") and not self.wm:
+                    # the war decisions are worked out now, from the latest snapshot (the agendas can take a while
+                    # of game time), and their call runs beside the incident's, guarantee's and faction's
+                    self.wm = WarMonth(self.camp, self.camp.snapshot or self.snap, self.w)
+                    self.phase = "w_rules"
                 else:
                     self.shortlist, self.opts = shortlist_options(self.camp, self.snap, self.scored, self.cache)
                     self.opts.update(reach_options(self.camp, self.snap, self.w))
@@ -567,7 +594,10 @@ class Month:
                     res["raw"] = self.fut.result()
                 except llm.LLMError as e:
                     res["error"] = str(e)
-                    return res
+                    self.main = res
+                    if not self._end():
+                        return res
+                    continue
                 res["pick"] = parse(res["raw"])
                 # pacing is measured to the day the pick lands: the game ran on while the month was worked out
                 res["ok"], res["why"], res["aim"] = check(self.camp, res["pick"], self.w, self.snap,
@@ -606,7 +636,9 @@ class Month:
                     if not msgs:
                         self.main["faction"] = {"error": "", "raw": "", "pick": None,
                                                 "note": "no faction move possible; no call made"}
-                        return self.main
+                        if not self._end():
+                            return self.main
+                        continue
                     self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 800, "ai:storyteller", "factions")
                     self.phase = "f_wait"
             elif self.phase == "f_wait":
@@ -616,6 +648,17 @@ class Month:
                     self.main["faction"] = self.fm.read(self.fut.result())
                 except llm.LLMError as e:
                     self.main["faction"] = {"error": str(e), "raw": "", "pick": None}
+                if not self._end():
+                    return self.main
+            elif self.phase == "w_wait":
+                if self.wfut and not self.wfut.done():
+                    return None
+                if self.wfut:
+                    try:
+                        self.war = self.wm.read(self.wfut.result())
+                    except llm.LLMError as e:
+                        self.war = {"error": str(e), "raw": "", "picks": []}
+                self.main["war"] = self.war
                 return self.main
             if time.monotonic() - started >= budget:
                 return None
@@ -1078,12 +1121,219 @@ def factions_main(args: List[str]) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- the month's wars ([ai_diplomacy] wars = ours)
+#
+# The game's AI then declares no war of its own (the bridge's veto) and justifies only where allowed (gates.py), so
+# the storyteller weighs the would-be wars each month (wars.candidates(): war goals held, declarations the bridge
+# stopped, land aims without a war goal) and decides for each as its government's shrewd player would, seeing the
+# war it would really get (ultimatums.balance()). wars.decide() carries it out.
+
+WAR_STEPS = ("war", "ultimatum", "prepare", "wait")
+
+
+_NAME_FILLER = {"republic", "kingdom", "empire", "state", "states", "union", "people's", "peoples", "socialist",
+                "federal", "democratic", "united", "free", "national", "provisional", "government", "dominion",
+                "commonwealth", "reich", "soviet", "chinese", "the", "of", "and"}
+
+
+def _named_at(text: str, tag: str, name: str) -> Optional[int]:
+    """Where a country is named in a line written by the model: its tag, its full name, or a telling word of the
+    name by its first letters (Czechoslovakia for Czechoslovak Republic, Ethiopia for Governorate of Ethiopia).
+    None if it isn't."""
+    hits = [m.start() for m in [re.search(rf"\b{re.escape(tag)}\b", text),
+                                re.search(re.escape(name), text, re.I)] if m]
+    for word in re.findall(r"[\w']+", name):
+        if len(word) >= 5 and word.lower() not in _NAME_FILLER:
+            m = re.search(rf"\b{re.escape(word[:6])}", text, re.I)
+            if m:
+                hits.append(m.start())
+    return min(hits) if hits else None
+
+
+class WarMonth:
+    """One month's war decisions: rule_step() weighs one would-be war (the balance of both sides, whether an
+    ultimatum is possible; a few seconds of game queries), then messages() and read()."""
+
+    def __init__(self, camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict]) -> None:
+        from . import wars
+        self.camp, self.snap, self.w = camp, snap, w
+        self.now = snap.get("date", "")
+        wars.poll(camp)
+        self.todo = wars.candidates(camp, w)
+        self.cands: List[Dict] = []
+
+    def name(self, t: str) -> str:
+        return self.snap.get("countries", {}).get(t, {}).get("name", t)
+
+    def rule_step(self) -> None:
+        from . import actions, diplomacy, ultimatums
+        x = self.todo.pop(0)
+        a, b = x["from"], x["to"]
+        x["balance"], _ = ultimatums.balance(self.camp, a, b, self.name(a), self.name(b))
+        x["enemies"] = _enemies_in(self.snap, a)      # its wars as it was weighed (finish_war: still the same?)
+        x["ultimatum_ok"] = bool(x["kind"] == "war" and x["aim"] and b != self.camp.data["player"] and _tense(a)
+                                 and diplomacy.may_threaten(self.camp, a, b, actions.relation(a, b)))
+        self.cands.append(x)
+
+    def block(self, x: Dict) -> str:
+        n = self.name
+        a, b = x["from"], x["to"]
+        player = self.camp.data["player"]
+        why = []
+        if x["wargoal"]:
+            why.append(f"{n(a)} holds a war goal on {n(b)}")
+        if x.get("ultimatum"):
+            why.append(f"its ultimatum to {n(b)} ran out unmet")
+        if x["attempts"]:
+            from . import wars
+            since = wars._store(self.camp)["attempts"].get(f"{a}:{b}", {}).get("first", "")
+            why.append("its generals press to declare war" + (f" (since {campaign.date_words(since)})" if since else ""))
+        if x["aim"]:
+            why.append(f"its aim: {x['aim']['aim']}")
+        if b == player:
+            why.append(f"{n(b)} is the player's country (a human)")
+        steps = (["war", "ultimatum", "wait"] if x["ultimatum_ok"] else ["war", "wait"]) if x["kind"] == "war" \
+            else ["prepare", "wait"]
+        way = f"\n  course: {c}" if (c := course.short(a)) else ""
+        return (f"=== {n(a)} ({a}) and {n(b)} ({b}): {'; '.join(why)}\n"
+                f"{n(a)}'s aims:\n{_aims_lines(self.camp, a)}{way}\n{x['balance']}\n"
+                f"Possible: {', '.join(steps)}")
+
+    def messages(self) -> Optional[List[Dict]]:
+        if not self.cands:
+            return None
+        player = self.camp.data["player"]
+        me = gamestate.country(player)
+        try:
+            level = f"{round(world.tension([player])[0] * 100)}%"
+        except Exception:
+            level = "unknown"
+        parts = [
+            world.text({p.ideology for p in me.parties}),
+            "You are the storyteller of this Hearts of Iron IV world, in the way a game master steers a tabletop game. "
+            "This call is about one thing: war. The game's own AI may not start wars in this world; every war a "
+            "government starts by its own choice is decided here (wars from national focuses and events, and "
+            "allies and guarantors joining a war, come on their own). For each government below, decide as a "
+            "shrewd player of that country would, wanting it to survive and prosper:\n"
+            "  war: it goes to war now; its generals strike when the armies are ready\n"
+            "  ultimatum: a deadline to give up the land it claims first, so the other side may yield without war\n"
+            "  prepare: it may justify a war goal, to be ready when the moment comes (a step short of war)\n"
+            "  wait: not now\n"
+            "War is the gravest step. Read the balance: a guarantor usually honours its guarantee, a faction is called "
+            "in. A government that starts a war it can't win loses everything; one that is strong, has a cause and "
+            "faces no deterrent strikes, often while the others hesitate. One already at war rarely opens a second "
+            "front. The world's tension matters: in a calm world an attack shocks everyone. The world should see "
+            "wars when they make sense for the country, not because a war goal exists.",
+            f"THE DATE: {campaign.date_words(self.now)}. WORLD TENSION: {level}.",
+            "THE WOULD-BE WARS:\n\n" + "\n\n".join(self.block(x) for x in self.cands),
+        ]
+        from . import wars
+        past = wars._store(self.camp)["decisions"][-6:]
+        if past:
+            parts.append("YOUR LATEST DECISIONS:\n" + "\n".join(
+                f"- {campaign.date_words(d['date'])}: {self.name(d['from'])} -> {self.name(d['to'])}: {d['step']}"
+                for d in past))
+        world_events = [e for e in self.camp.data["events"] if e.get("major") and e["date"] <= self.now][-6:]
+        if world_events:
+            parts.append("RECENT WORLD EVENTS:\n" + "\n".join(f"- {e['when']}: {e['text']}" for e in world_events))
+        parts.append("Answer with one line for each pair above and nothing else, in this form:\n"
+                     "FROM TO: step - one sentence, as a historian would put it, from the country's own interests "
+                     "and its situation (never about the player's game or your reasons as storyteller)\n"
+                     "where FROM and TO are the two tags in brackets (e.g. GER CZE: wait - ...) and step is one of "
+                     "the possible steps listed for that pair.")
+        return [{"role": "system", "content": "\n\n".join(parts)}, {"role": "user", "content": "Decide now."}]
+
+    def read(self, raw: str) -> Dict:
+        """{"raw", "error", "picks": [(candidate, step, why)]}: one for each pair answered with a known step."""
+        out = {"raw": raw, "error": "", "picks": []}
+        done = set()
+        for line in raw.splitlines():
+            m = re.match(rf"^(.*?)[:\-–]+\s*\**\s*({'|'.join(WAR_STEPS)})\b[\s*\-–:.,]*(.*)$", line, re.I)
+            if not m:
+                continue
+            left = m.group(1)
+            for i, x in enumerate(self.cands):     # the pair named on the left, by tag or name, in that order
+                a, b = _named_at(left, x["from"], self.name(x["from"])), _named_at(left, x["to"], self.name(x["to"]))
+                if i not in done and a is not None and b is not None and a < b:
+                    done.add(i)
+                    out["picks"].append((x, m.group(2).lower(), m.group(3).strip(" *")))
+                    break
+        return out
+
+
+def _enemies_in(snap: Optional[Dict], tag: str) -> List[str]:
+    """Who `tag` is at war with in a chronicle snapshot."""
+    return sorted({t for p in (snap or {}).get("wars", []) for t in p.split("|") if tag in p.split("|") and t != tag})
+
+
+def finish_war(camp: campaign.Campaign, res: Optional[Dict]) -> List[str]:
+    """Log the month's war decisions and carry them out (wars.decide). Returns a line for each. A decision whose
+    country went to war since it was weighed (the game runs on while the month is worked out) is dropped: the pair
+    is weighed again next month, as it stands then."""
+    from . import diplomacy, wars
+    if not res:
+        return []
+    key = camp.data.get("last_date") or ""
+    head = f"=== {campaign.date_words(key)}: STORYTELLER (wars): "
+    if res.get("error"):
+        diplomacy.log([head + f"the call failed: {res['error']}"])
+        return []
+    if res.get("note"):
+        diplomacy.log([head + res["note"]])
+        return []
+    if not res["picks"]:
+        diplomacy.log([head + f"no readable decision; the reply was: {res['raw']}"])
+        return []
+    lines = []
+    c = (camp.snapshot or {}).get("countries", {})
+    for x, step, why in res["picks"]:
+        new = set(_enemies_in(camp.snapshot, x["from"])) - set(x.get("enemies", []))
+        if new:
+            diplomacy.log([head + f"{c.get(x['from'], {}).get('name', x['from'])} -> "
+                                  f"{c.get(x['to'], {}).get('name', x['to'])}: {step} dropped (at war with "
+                                  f"{', '.join(c.get(t, {}).get('name', t) for t in sorted(new))} since it was weighed; "
+                                  f"weighed again next month)"])
+            continue
+        _, line = wars.decide(camp, x, step, why)
+        lines.append(line)
+        diplomacy.log([head + line, f"  {why}"])
+    camp.save()
+    return lines
+
+
+def wars_main(args: List[str]) -> int:
+    """python -m hoi4_rp storyteller --wars [--prompt]: one war month, dry (nothing is decided)."""
+    from . import chronicle, diplomacy, llm
+    player = gamestate.player_tag()
+    camp = campaign.Campaign(campaign.read_id(player), player)
+    camp.snapshot = chronicle.snapshot(player)
+    w = diplomacy.world()
+    started = time.monotonic()
+    wm = WarMonth(camp, camp.snapshot, w)
+    while wm.todo:
+        wm.rule_step()
+    print(f"WOULD-BE WARS ({time.monotonic() - started:.0f} s to work out)\n"
+          + ("\n\n".join(wm.block(x) for x in wm.cands) or "none"))
+    msgs = wm.messages()
+    if not msgs:
+        print("\nno war to weigh; no call made")
+        return 0
+    if "--prompt" in args:
+        print(f"\n----- prompt\n{msgs[0]['content']}\n-----")
+    res = wm.read(llm.chat(msgs, None, 0.7, 900, "ai:storyteller", "wars"))
+    print("\nDECISIONS:\n" + ("\n".join(f"- {x['from']} -> {x['to']}: {s} - {why}" for x, s, why in res["picks"])
+                              or f"none readable:\n{res['raw']}"))
+    return 0
+
+
 # ---------------------------------------------------------------- python -m hoi4_rp storyteller
 
 def main(args: List[str]) -> int:
     from . import chronicle, diplomacy, llm
     if "--guarantees" in args:
         return guarantees_main(args)
+    if "--wars" in args:
+        return wars_main(args)
     if "--factions" in args:
         return factions_main(args)
     show = "--prompt" in args

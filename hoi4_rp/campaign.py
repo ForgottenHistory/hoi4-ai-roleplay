@@ -179,6 +179,8 @@ class Campaign:
             steering.drop_after(self, key)
             guarantees.drop_after(self, key)
             diplomacy.drop_after(self, key)
+            from . import wars
+            wars.drop_after(self, key)
             offer = self.data.get("pending_offer")
             if offer and offer["date"] >= key:
                 self.data["pending_offer"] = None

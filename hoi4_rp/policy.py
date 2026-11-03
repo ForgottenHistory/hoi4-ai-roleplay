@@ -241,6 +241,8 @@ def current(camp, tag: str) -> Optional[Dict]:
     if p and _future(camp, p):
         camp.drop_policy(tag)
         return None
+    if p and (p.get("light") or "policy" not in p):     # only a stance, left by an exchange between AI countries
+        return None
     if p and stale(camp, tag):
         return None
     if p:   # policies saved before asks/breaks held bare words in "offers"
@@ -258,7 +260,7 @@ def refresh_priority(camp, tag: str, player: str, today: str, close: bool = True
     1 just old, 0 not needed. `close`: a neighbour, enemy, faction member, overlord or subject of the player; a
     country that isn't, with an indifferent policy and nothing urgent, is old only after FAR_REFRESH_DAYS."""
     raw = camp.policy_of(tag)
-    if not raw or "asks" not in raw or _future(camp, raw) or stale(camp, tag) or raw.get("v", 1) < VERSION:
+    if not raw or "asks" not in raw or raw.get("light") or "policy" not in raw or _future(camp, raw) or stale(camp, tag) or raw.get("v", 1) < VERSION:
         return 3
     age = _days(today) - _days(raw["date"])
     # something happened in the world between the two since the policy was set (not just letter outcomes,

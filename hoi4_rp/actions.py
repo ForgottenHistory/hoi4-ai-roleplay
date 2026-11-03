@@ -620,13 +620,20 @@ WAR_DELAY_DAYS = 30                     # a war joined by letter is entered this
                                         # time to mobilize, and for the war to end first
 
 
+def pact_between(a: str, b: str) -> bool:
+    """A non-aggression pact stands between the two: no war between them starts through us (a deal to join a war,
+    a pledge, an ultimatum, the storyteller's war decisions), as the game's own declarations respect it too."""
+    return bridge.trigger(f"{a} = {{ has_non_aggression_pact_with = {b} }}")
+
+
 def joinable_enemies(side: str, joiner: str) -> Dict[str, str]:
     """`side`'s enemies that `joiner` could join the war against: not already at war with them, not their ally,
-    overlord or subject."""
+    overlord or subject, no non-aggression pact between them."""
     out = {}
     for line in gamestate.query(
             f'{side} = {{ every_enemy_country = {{ limit = {{ NOT = {{ tag = {joiner} }} '
             f'NOT = {{ has_war_with = {joiner} }} NOT = {{ is_in_faction_with = {joiner} }} '
+            f'NOT = {{ has_non_aggression_pact_with = {joiner} }} '
             f'NOT = {{ is_subject_of = {joiner} }} NOT = {{ {joiner} = {{ is_subject_of = PREV }} }} }} '
             f'log = "AIRPW|[THIS.GetTag]|[THIS.GetName]" }} }}'):
         if line.startswith("AIRPW|"):
@@ -703,7 +710,8 @@ PLEDGES = False
 _WAR_JOIN = ("Joining a war is the gravest commitment short of submission: your soldiers die in another's cause, and "
              "the enemy will treat you as one. A government joins only where its own interests are at stake (an "
              "enemy it fears or covets, a friend it cannot let fall) or for a great price, and only if it can fight; "
-             f"it asks it of a country able to help. The joiner enters the war {WAR_DELAY_DAYS} days after the deal, "
+             f"it asks it of a country able to help. A joiner in a faction brings its whole faction into the war. "
+             f"The joiner enters the war {WAR_DELAY_DAYS} days after the deal, "
              "to mobilize, not at once; if the war is over by then, nothing comes of it. A letter that proposes "
              f"joining a war tells the other side when ('enter the war within {WAR_DELAY_DAYS} days', not 'enter it now').")
 PLEDGE_NOTE = ("A war pledge is a promise for later: whenever one side goes to war with "

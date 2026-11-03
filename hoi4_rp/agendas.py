@@ -34,7 +34,6 @@ NO_TARGET = ("build", "neutral")
 MAX_TARGETS = 14             # candidate targets listed to the model
 MAX_COUNTRIES = 20
 AIM_WORDS = 12
-PARALLEL = 4
 # Events that change what a country is, so that its agenda written before them is stale
 TRIGGERS = {"war", "peace", "capitulation", "government", "country_new", "country_gone", "faction_left",
             "faction_founded", "faction_joined", "independence", "subject", "crisis", "fork", "civil_war",
@@ -276,13 +275,14 @@ def drop_after(camp: campaign.Campaign, key: str) -> None:
 
 def generate(camp: campaign.Campaign, w: Dict[str, Dict], tags: List[str], show: bool = False,
              keep_them: bool = True) -> List[Dict]:
-    """Write the agendas of these countries, PARALLEL calls at a time. Returns, per country, {"me", "cands", "aims",
+    """Write the agendas of these countries, [llm] parallel calls at a time. Returns, per country, {"me", "cands", "aims",
     "dropped", "raw", "error"}; with keep_them the usable ones are stored in the campaign (not saved to disk)."""
     from concurrent.futures import ThreadPoolExecutor
     from . import llm
     snap = camp.snapshot or {}
     jobs, out = [], []
-    with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+    from .config import settings
+    with ThreadPoolExecutor(max_workers=settings().llm.parallel) as pool:
         for tag in tags:
             try:
                 me = gamestate.country(tag)

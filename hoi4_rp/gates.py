@@ -11,6 +11,9 @@ buttons stay.
     guarantees   the Guarantee action (guarantees.py; the storyteller gives the world its guarantees)
     factions     inviting into a faction, asking to join one, expelling a member, leaving (factions.py; the
                  storyteller forms and breaks the world's factions)
+    wars         justifying a war goal, except on a country in the justifier's airp_justify array (wars.py; the
+                 storyteller lets a country prepare a war). Declaring war itself has no such trigger: the bridge
+                 stops it (bridge.wars, set by wars.sync)
 """
 
 from __future__ import annotations
@@ -27,7 +30,11 @@ GATES: Dict[str, Tuple[str, List[str], str]] = {
                                           "DIPLOMACY_KICK_FROM_FACTION_ENABLE_TRIGGER",
                                           "DIPLOMACY_LEAVE_FACTION_ENABLE_TRIGGER"],
                  "Factions between AI countries are made by agreement"),
+    "wars": ("airp_ai_wars_off", ["DIPLOMACY_GENERATE_WARGOAL_ENABLE_TRIGGER"],
+             "Governments prepare their wars by decision"),
 }
+# A condition more, for a gate that lets some actions through: the target is in the actor's array
+EXCEPT = {"wars": "NOT = { is_in_array = { airp_justify = FROM } }"}
 
 
 def ours(setting: str) -> bool:
@@ -61,6 +68,7 @@ def switch() -> None:
         on = ours(setting)
         actions._effect(f"{'set' if on else 'clr'}_global_flag = {flag}")
         print(f"  [{setting}] the game's AI {'may not' if on else 'may'} act on its own")
+    # declaring war has no trigger to gate: the bridge's veto, with the pairs allowed now (wars.sync)
 
 
 def files(mod_dir: str) -> Dict[str, Tuple[str, str]]:
@@ -73,7 +81,7 @@ def files(mod_dir: str) -> Dict[str, Tuple[str, str]]:
             body, source = _definition(trigger)
             parts.append(f"# from {source or 'nowhere (none found)'}\n"
                          f"{trigger} = {{\n"
-                         f"\tif = {{\n\t\tlimit = {{ has_global_flag = {flag} is_ai = yes }}\n"
+                         f"\tif = {{\n\t\tlimit = {{ has_global_flag = {flag} is_ai = yes {EXCEPT.get(setting, '')}}}\n"
                          f"\t\tcustom_trigger_tooltip = {{ tooltip = {flag}_tt always = no }}\n\t}}\n"
                          f"{body}\n}}\n")
         out[os.path.join(mod_dir, "common", "scripted_triggers", f"zzz_airp_{setting}.txt")] = ("\n".join(parts), "utf-8")

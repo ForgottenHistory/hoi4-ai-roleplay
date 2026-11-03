@@ -97,4 +97,15 @@ how the war has gone and the terms (the game's own measure, as for your letter p
 `mode = on` an accepted peace starts the game's peace conference and is world news. Wars whose conference you would
 sit at (your faction, your overlord) are left to you.
 
+## Replacing the game's diplomacy
+
+Optional, off by default: by default HOI4's AI keeps its own diplomacy beside the letters. Each part can be handed
+over to the deals between countries instead.
+
+- `guarantees = ours` in `[ai_diplomacy]`: AI countries can't use the game's Guarantee action, so guarantees between
+  them come only from deals (set `mode = on`). Focuses and events still guarantee, and your own Guarantee button is
+  unchanged. HOI4 gates each diplomatic action with a scripted trigger; `write-mod` writes the guarantee one in force
+  (the game's, or your mod's with its own rules) again with one condition in front, in a file loaded last, and `run`
+  turns it on with a global flag, so changing the setting needs no new `write-mod`.
+
 `python -m hoi4_rp ai-undo` ends pacts, market access, guarantees and commitments it put in place (stop `run` first).

@@ -37,7 +37,7 @@ LLM output is plain text: `KEY: value` lines or `[[commands]]`, parsed leniently
     hoi4_rp/letters.py     the run loop; reads sent letters, writes replies, runs the background jobs
     hoi4_rp/actions.py     letter consequences: [[commands]] -> validated game effects; proposals
     hoi4_rp/treaties.py    deals over time: terms, instalments, war clauses, commitments, wagers
-    hoi4_rp/guarantees.py  letter guarantees: factory upkeep, 24-month term
+    hoi4_rp/guarantees.py  letter guarantees: factory upkeep, 24-month term; the gate on the game AI's own
     hoi4_rp/peace.py       peace by letter through the game's peace conference
     hoi4_rp/war.py         a country's war stance toward the player
     hoi4_rp/ultimatums.py  threats of war that can come true

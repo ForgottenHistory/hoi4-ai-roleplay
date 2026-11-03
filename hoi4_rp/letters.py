@@ -1309,6 +1309,7 @@ class _Session:
         if rewound or self.steered != camp.id:      # the game's AI follows the policies (steering.py)
             self.steered = camp.id
             steering.sync_all(camp)
+            guarantees.switch()                     # a save holds the flag as it was when saved
         if not self.idle() and time.monotonic() >= self.retry_at:
             self.ultimatum_decision(camp, player)
             self.policies(camp, player, snap)

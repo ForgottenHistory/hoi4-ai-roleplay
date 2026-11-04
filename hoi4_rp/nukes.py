@@ -93,7 +93,7 @@ def _weapon(old: List[float], new: List[float], n: int) -> str:
     """What `n` strikes were made with, from the stock before and after: each kind whose stock fell."""
     old, new = old or [0.0] * (1 + len(MISSILES)), new or [0.0] * (1 + len(MISSILES))
     kinds = [words for i, (_, words) in enumerate(MISSILES) if new[1 + i] < old[1 + i]]
-    if new[0] < old[0]:
+    if new[0] < old[0] or not kinds and not any(old[1:]) and not any(new[1:]):   # no missiles at all: bombs
         kinds.append("a nuclear bomb")
     if not kinds:
         kinds = ["a nuclear weapon"]
@@ -123,8 +123,8 @@ def events(old: Dict, new: Dict, name, add) -> None:
             last.pop(tag, None)
             began.pop(tag, None)
         elif n > before:
-            if tag not in began:                           # a new salvo: the stock before it
-                began[tag] = [old["date"], old.get("nuke_stock", {}).get(tag)]
+            if tag not in began:   # a new salvo: first seen now (not the last snapshot's date: it may be months
+                began[tag] = [now, old.get("nuke_stock", {}).get(tag)]     # back), and the stock before it
             last[tag] = now
     for tag, rows in strikes.items():
         if len(rows) <= told.get(tag, 0) or _hours(last.get(tag, now), now) < QUIET_HOURS:

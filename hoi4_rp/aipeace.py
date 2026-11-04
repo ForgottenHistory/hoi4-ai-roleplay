@@ -3,7 +3,7 @@
 HOI4's AI ends a war only by capitulation, so a war between two countries that can't reach each other (Germany and
 Hungary, no border, Hungary without a coast) or that has frozen on its front runs on for good. Once a game month
 (due()), wars between two AI countries that could make peace (peace.possible: faction leaders or countries alone,
-no civil war, the player in neither side) are looked at (candidates()):
+no civil war, the player not fighting in the war at all: player_at_table) are looked at (candidates()):
 
     stalled     no front between the two sides (gamestate.reach), or neither side's surrender progress moved
                 STALL_MOVE in the last STALL_DAYS
@@ -64,10 +64,21 @@ def _moved(camp: campaign.Campaign, tag: str, today: str) -> Optional[float]:
     return None if then is None or now is None else abs(now - then)
 
 
+def player_at_table(player: str, a: str, b: str) -> bool:
+    """Would the player sit at a conference between a and b? The game's conference ends the whole war: everyone
+    fighting either of them, not only their factions and subjects (the player fighting Britain beside the USA lost
+    its war score and its occupied states to an Australia-Britain peace). Such a peace is the player's to make."""
+    from . import bridge
+    return bridge.trigger(
+        f"{player} = {{ OR = {{ has_war_with = {a} has_war_with = {b} has_war_together_with = {a} "
+        f"has_war_together_with = {b} is_in_faction_with = {a} is_in_faction_with = {b} is_subject_of = {a} "
+        f"is_subject_of = {b} }} }}")
+
+
 def candidates(camp: campaign.Campaign) -> List[Tuple[str, str, str]]:
     """Wars between AI countries worth peace talks now: [(writer, other, why)], at most PER_MONTH, stalled first.
     Marks the month as looked at."""
-    from . import bridge, peace
+    from . import peace
     st = _state(camp)
     today = camp.data.get("last_date") or ""
     st["tick"] = today
@@ -81,11 +92,7 @@ def candidates(camp: campaign.Campaign) -> List[Tuple[str, str, str]]:
             continue
         if today and st["pairs"].get(key) and _days(today) - _days(st["pairs"][key]) < COOLDOWN_DAYS:
             continue
-        # The conference brings both leaders' factions and subjects: not one the player would sit at (a war of
-        # its own with one of them, outside their factions, goes on)
-        if not peace.possible(a, b) or bridge.trigger(
-                f"{player} = {{ OR = {{ is_in_faction_with = {a} is_in_faction_with = {b} is_subject_of = {a} "
-                f"is_subject_of = {b} }} }}"):
+        if not peace.possible(a, b) or player_at_table(player, a, b):
             continue
         try:
             sa, sb = gamestate.country(a), gamestate.country(b)
@@ -204,6 +211,10 @@ def record(camp: campaign.Campaign, a: str, b: str, why: str, offered: bool, off
         return
     lines += [f"{name(a).upper()} offers peace: {offer}",
               f"{name(b).upper()} ({'ACCEPT' if accepted else 'DECLINE'}): {reply}"]
+    if accepted and player_at_table(camp.data["player"], a, b):     # the player joined the war since
+        lines.append("  peace not made: the player now fights in this war, and its peace is theirs to make")
+        diplomacy.log(lines)
+        return
     if accepted:
         outcome = peace.make(a, b, player_leads=False) if settings().ai.mode == "on" else None
         if outcome:

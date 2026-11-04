@@ -40,6 +40,7 @@ DEFAULTS = {
         "letter_gap_days": "20",
         "style": "serious",
         "diplomacy": "balanced",
+        "member_peace": "no",
     },
     "story": {
         "events": "yes",
@@ -89,6 +90,7 @@ class LetterSettings:
     letter_gap_days: int  # game days between letters countries start without an event (policy or quiet)
     style: str            # how letters are written: serious | dramatic | players (style.py)
     diplomacy: str        # how readily countries deal: realistic | balanced | open (style.DIPLOMACY)
+    member_peace: bool = False  # the player may make peace for their whole faction as a mere member (peace.py)
 
 
 @dataclass(frozen=True)
@@ -158,6 +160,7 @@ def settings() -> Settings:
             letter_gap_days=lt.getint("letter_gap_days"),
             style=(lt.get("style") or "serious").strip().lower(),
             diplomacy=(lt.get("diplomacy") or "balanced").strip().lower(),
+            member_peace=lt.getboolean("member_peace"),
         ),
         story=StorySettings(
             events=st.getboolean("events"),

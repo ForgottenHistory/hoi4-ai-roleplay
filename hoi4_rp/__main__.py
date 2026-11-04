@@ -15,7 +15,8 @@
    python -m hoi4_rp storyteller [--months N] [--prompt]
                                  simulate the storyteller's monthly pick of an AI-to-AI incident, dry: nothing
                                  reaches the game (--months N: N picks in a row, each remembering the earlier ones)
-   python -m hoi4_rp ai-undo     end every agreement AI-to-AI diplomacy put in place in the running campaign
+   python -m hoi4_rp borders     where the player's divisions stand: how many on each country's border
+   python -m hoi4_rp ai-undo    end every agreement AI-to-AI diplomacy put in place in the running campaign
                                  (pacts, market access, guarantees, commitments) that still holds (stop `run` first)
 """
 
@@ -98,6 +99,9 @@ if __name__ == "__main__":
     if cmd == "agendas":
         from . import agendas
         sys.exit(agendas.main(sys.argv[2:]))
+    if cmd == "borders":
+        from . import borders
+        sys.exit(borders.main(sys.argv[2:]))
     if cmd == "intent":
         from . import intent
         sys.exit(intent.main(sys.argv[2:]))

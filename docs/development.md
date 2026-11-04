@@ -42,6 +42,7 @@ LLM output is plain text: `KEY: value` lines or `[[commands]]`, parsed leniently
     hoi4_rp/gates.py       switching off the game AI's own guarantees, faction moves and justifications
     hoi4_rp/factions.py    who might join, found or leave a faction; the names of factions we found
     hoi4_rp/wars.py        would-be wars and our decisions on them; the bridge's war veto
+    hoi4_rp/borders.py     the player's divisions massing on a country's border (province adjacency from the map)
     hoi4_rp/peace.py       peace by letter through the game's peace conference
     hoi4_rp/war.py         a country's war stance toward the player
     hoi4_rp/ultimatums.py  threats of war that can come true

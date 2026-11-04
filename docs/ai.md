@@ -59,6 +59,20 @@ equipment, artillery, trucks), so it knows when it needs arms and when it has so
 This covers its letters and replies to you, its policy toward you, and its ultimatum decisions (it weighs your
 estimated strength when deciding on war). AI countries' knowledge of each other is unchanged.
 
+## Troops on the border
+
+A country sees your divisions massing on its border, tile against tile: a division stands on its border when the
+province it is in touches a province that country controls (sea crossings count, impassable borders don't). More
+than `border_divisions` (`[world]`, default 5; 0 turns it off) on one country's border for a week is a buildup. The
+country remembers it and may write to you about it, its letters and policy see the troops for as long as they stay,
+and the storyteller counts it as a threat when it gives out guarantees. Doubling the force is noticed again, and
+pulling back to half the limit or less is remembered too (no letter). No intel is needed: it's their own border.
+Not counted: divisions on a front (touching a country you're at war with), and borders with your faction, your
+subjects, your overlord and countries you're already at war with. Only your divisions are watched.
+
+The map is read from the game's files (and mods') once per run. `python -m hoi4_rp borders` prints how many of
+your divisions stand on each country's border now.
+
 ## Agendas
 
 What each country wants from the world: one to four aims, each with a target and a kind (`oppose`, `befriend`,

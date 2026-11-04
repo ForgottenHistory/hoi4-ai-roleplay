@@ -10,7 +10,8 @@ Your personal copy, created from `config.example.ini` on first run; each key is 
 - `[story]`: story events and news events, and their gaps
 - `[ai_diplomacy]`: `mode`, `driver`, exchanges per month, cooldown, `guarantees`, `factions`, `wars` (see
   [replacing the game's diplomacy](ai.md#replacing-the-games-diplomacy))
-- `[world]`: `setting`, `lore_file`, `tension_rules`, `intel` (see [what countries know about you](ai.md#what-countries-know-about-you-intel))
+- `[world]`: `setting`, `lore_file`, `tension_rules`, `intel` (see [what countries know about you](ai.md#what-countries-know-about-you-intel)),
+  `border_divisions` (see [troops on the border](ai.md#troops-on-the-border))
 
 The API key is never in the file: it's read from the environment variable named by `api_key_env` (`NANOGPT_API_KEY`).
 

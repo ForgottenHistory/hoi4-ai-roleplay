@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, aipeace, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
+from . import (actions, aipeace, borders, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
                factions, gates, guarantees, steering, wars, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -395,6 +395,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + (f"{own}\n\n" if (own := plight.text(them, style.current().plight)) else "")
         + (f"{me.name.upper()}'S SITUATION: {theirs}.\n\n" if (theirs := plight.short(me)) else "")
         + (f"{sec}\n\n" if (sec := _security(them, me)) else "")
+        + (f"{troops}\n\n" if (troops := borders.describe(camp, them.tag, them.name, me.name)) else "")
         + (f"{_war(camp, them, me)}\n\n" if me.tag in them.enemies else "")
         + (f"{began}\n\n" if (began := origins.text(camp, them, me)) else "")
         + (f"{pol}\n\n" if pol else "")
@@ -1298,6 +1299,7 @@ class _Session:
             camp.snapshot = snap
             if old is not None:
                 settled = course.track(camp)            # a country that took a side at a fork of its course
+                settled += borders.tick(camp, player, snap)   # the player's troops massing on a border
                 camp.add_events(settled)
                 events = events + settled
             camp.record_surrender(snap)
@@ -1904,7 +1906,7 @@ class _Session:
             kind = e.get("type", "")
             if (player not in e["tags"] or kind.startswith("agreement:market")
                     or (kind.startswith("agreement:") and kind.endswith(":end"))
-                    or kind in ("treaty:ended", "guarantee:expired")):
+                    or kind in ("treaty:ended", "guarantee:expired", "troops:withdrawn")):
                 continue
             for other in e["tags"]:
                 if other != player and active(snap, other) and not self._cooling(camp, other, today):

@@ -63,6 +63,7 @@ DEFAULTS = {
         "game_dir": "",
         "tension_rules": "yes",
         "intel": "no",
+        "border_divisions": "5",
     },
 }
 
@@ -108,6 +109,7 @@ class WorldSettings:
     game_dir: str         # HOI4 install folder (found automatically when empty)
     tension_rules: bool   # letter deals keep to the game's world tension rules (guarantees, factions)
     intel: bool           # countries know the player only as their intelligence allows (intel.py)
+    border_divisions: int = 5  # more of the player's divisions than this on a country's border is a buildup (borders.py; 0 = off)
 
 
 @dataclass(frozen=True)
@@ -174,6 +176,7 @@ def settings() -> Settings:
             game_dir=(w.get("game_dir") or "").strip(),
             tension_rules=w.getboolean("tension_rules"),
             intel=w.getboolean("intel"),
+            border_divisions=w.getint("border_divisions"),
         ),
         ai=AIDiplomacySettings(
             mode=(ai.get("mode") or "off").strip().lower(),

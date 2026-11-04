@@ -216,8 +216,9 @@ REACH_WEIGHT = {"near": 1.0, "present": 0.4, "far": 0.15}
 RENEW_DAYS = 60             # a guarantee by agreement this close to its end comes up for renewal
 CANDIDATES = 8
 PER_WARD = 2
-THREAT_WEIGHT = {"ultimatum": 4, "wargoal": 3, "justifying": 3, "land": 2, "oppose": 1}
+THREAT_WEIGHT = {"ultimatum": 4, "wargoal": 3, "justifying": 3, "troops": 2, "land": 2, "oppose": 1}
 THREAT_WORDS = {"ultimatum": "{t} has set it an ultimatum", "wargoal": "{t} holds a war goal on it",
+                "troops": "{t} has massed troops on its border",
                 "justifying": "{t} is justifying a war goal on it", "land": "{t} aims to take its land",
                 "oppose": "{t} works against it"}
 
@@ -283,6 +284,9 @@ def threats(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Dict]:
     for u in ultimatums._store(camp):
         if u["status"] in ("open", "ready"):
             add(u["to"], u["from"], "ultimatum")
+    from . import borders
+    for tag in borders.massed(camp):                   # the player's troops on its border (borders.py)
+        add(tag, camp.data["player"], "troops")
     for tag in list(agendas._store(camp)):
         for aim in agendas.aims_of(camp, tag):
             if aim["kind"] in ("land", "oppose") and aim["target"]:

@@ -12,7 +12,7 @@ Each month the storyteller's war pass (storyteller.WarMonth) weighs the would-be
     a country with an aim to take land from another and no war goal yet (it may be allowed to prepare)
 and for each decides as that country's shrewd player would, seeing the war it would really get (ultimatums.balance:
 both sides with allies, subjects, the defender's guarantors and their factions):
-    war         the pair is allowed for ALLOW_DAYS: its AI declares when its armies are ready
+    war         we declare it now, by script (declare): the game's AI, merely allowed, may never strike
     ultimatum   a deadline first (an AI-to-AI ultimatum, as the storyteller's own; only with an aim on the target's
                 land, never to the player: the player's come by letter)
     prepare     it may justify a war goal (added to its airp_justify array, its AI told to prepare for that war)
@@ -20,7 +20,8 @@ both sides with allies, subjects, the defender's guarantors and their factions):
 A war at less than MIN_RATIO of the other side's strength is turned into a wait.
 
 Stored in the campaign: data["wars"] = {"attempts": {"A:B": {"count", "first", "last"}}, "decisions": [{"date",
-"from", "to", "step", "why"}], "allowed": [{"from", "to", "date", "until"}]}.
+"from", "to", "step", "why"}], "allowed": [{"from", "to", "date", "until"}]}. Nothing is allowed any more (a war
+decision is declared at once); "allowed" holds what campaigns from before granted, still let through until it ends.
 """
 
 from __future__ import annotations
@@ -179,6 +180,26 @@ def ratio(balance_text: str) -> float:
 
 # ---------------------------------------------------------------- carrying out a decision
 
+def declare(camp: campaign.Campaign, a: str, b: str) -> bool:
+    """`a` declares war on `b` by script, now (the game's AI, merely allowed, may never strike: Germany sat out 90
+    days allowed on Czechoslovakia). The war goal: the states of b's that a claims or holds as cores, else
+    everything. True once the two are at war. An ultimatum of a's to b that ran out unmet ends in this war."""
+    from . import tension, ultimatums
+    states = [f[1] for f in (line.split("|") for line in gamestate.query(
+        f'{b} = {{ every_owned_state = {{ limit = {{ OR = {{ is_claimed_by = {a} is_core_of = {a} }} }} '
+        f'log = "AIRPWS|[THIS.GetID]" }} }}')) if f[0] == "AIRPWS" and len(f) > 1]
+    goal = f"type = take_state_focus generator = {{ {' '.join(states)} }}" if states else "type = annex_everything"
+    if not (actions._effect(f"{a} = {{ declare_war_on = {{ target = {b} {goal} }} }}")
+            and bridge.trigger(f"{a} = {{ has_war_with = {b} }}")):
+        return False
+    tension.war(a, b)                              # declare_war_on skips the game's own tension for a war
+    for u in ultimatums._store(camp):
+        if u["from"] == a and u["to"] == b and u["status"] == "ready":
+            ultimatums._close(camp, u, "war", "it declared war, the deadline long past")
+            ultimatums._stand_down(camp, u, wargoal=False)
+    return True
+
+
 def decide(camp: campaign.Campaign, x: Dict, step: str, why: str) -> Tuple[str, str]:
     """Carry out one decision (Python's rules first). Returns (the step taken, a line for the log)."""
     from . import actions, diplomacy
@@ -196,10 +217,10 @@ def decide(camp: campaign.Campaign, x: Dict, step: str, why: str) -> Tuple[str, 
         step = "wait"
     st["decisions"].append({"date": today, "from": a, "to": b, "step": step, "why": why})
     if step == "war":
-        st["allowed"].append({"from": a, "to": b, "date": today,
-                              "until": campaign.shift(today, ALLOW_DAYS)})
-        sync(camp)
-        return step, f"{name(a)} may go to war with {name(b)} (its AI strikes when ready)"
+        if declare(camp, a, b):
+            return step, f"{name(a)} declared war on {name(b)}"
+        st["decisions"][-1]["step"] = "wait"
+        return "wait", f"{name(a)} waits with {name(b)} (it wanted war; the game refused the declaration)"
     if step == "ultimatum":
         from . import storyteller
         aim = x["aim"]

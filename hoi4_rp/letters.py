@@ -930,6 +930,8 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     task = (_initiative_task(them, me, reason) + "\n\n"
             + actions.letter_help(them.name, me.name, offers, asks, steps, expected)
             + ("\n\n" + actions.bound_note(them.name, me.name, rel.bound) if rel.bound else "")
+            + ("\n\n" + actions.faction_full_note(them.name, me.name, rel)
+               if actions.faction_full_note(them.name, me.name, rel) else "")
             + ("\n\n" + _peace_note(them, me, camp, offers, reply=False) if rel.at_war else "")
             + ("\n\n" + treaties.help_text() if (offers or asks) and not rel.at_war else "")
             + ("\n\n" + ultimatums.help_text(them.name, me.name) if _may_threaten(camp, sender, rel) else ""))

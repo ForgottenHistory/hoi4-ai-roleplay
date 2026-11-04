@@ -156,6 +156,8 @@ class CountryState:
     fallen: Set[str] = field(default_factory=set)             # faction members and enemies that have capitulated
     strength: Dict[str, float] = field(default_factory=dict)  # STRENGTH_FIELDS -> value (industry, army, manpower)
     equipment: Dict[str, tuple] = field(default_factory=dict)  # EQUIPMENT_KINDS name -> (in storage, held, needed)
+    damage: Dict[str, float] = field(default_factory=dict)     # DAMAGE_BUILDINGS building -> damaged levels in all
+    damaged_states: List[tuple] = field(default_factory=list)  # (state name, factories damaged), the worst first
     # At war only:
     surrender: Optional[float] = None       # surrender progress 0..1: occupation / limit (1 = capitulation)
     occupation: Optional[float] = None      # share of its victory points others control (bridge.surrender)
@@ -199,6 +201,12 @@ STRENGTH_FIELDS = {
 EQUIPMENT_KINDS = {"rifles": "infantry_equipment", "support equipment": "support_equipment",
                    "artillery": "artillery_equipment", "trucks": "motorized_equipment"}
 
+# Buildings out of action until repaired (strategic bombing, sabotage, nuclear strikes), in the states it controls:
+# building -> words. Infrastructure is told by the states it is damaged in.
+DAMAGE_BUILDINGS = {"industrial_complex": "civilian factories", "arms_factory": "military factories",
+                    "dockyard": "dockyards", "infrastructure": "infrastructure"}
+_DAMAGED = " ".join(f"check_variable = {{ damaged_building_level@{b} > 0 }}" for b in DAMAGE_BUILDINGS)
+
 
 def _effect(tag: str) -> str:
     """One effect that logs everything script can tell us about a country, as `key|value` lines."""
@@ -232,6 +240,8 @@ def _effect(tag: str) -> str:
         f'if = {{ limit = {{ has_capitulated = yes }} log = "{p}fallen|[THIS.GetTag]" }} }}',
         f'every_neighbor_country = {{ log = "{p}neighbor|{tn}" }}',
         f'every_owned_state = {{ log = "{p}state|[THIS.GetID]|[THIS.GetName]" }}',
+        f'every_controlled_state = {{ limit = {{ OR = {{ {_DAMAGED} }} }} log = "{p}damaged|[THIS.GetName]|'
+        + "|".join(f"[?THIS.damaged_building_level@{b}]" for b in DAMAGE_BUILDINGS) + '" }',
         # The front (PREV inside a state loop is the country): surrender progress, enemy strength, occupation.
         f'if = {{ limit = {{ has_war = yes }} '
         f'log = "{p}war|[?THIS.surrender_progress]|[?THIS.enemies_strength_ratio]|[?THIS.alliance_strength_ratio]" '
@@ -495,6 +505,15 @@ def country(tag: str) -> CountryState:
             name, *nums = (rest.split("|") + ["", "", ""])[:4]
             vals = [max(0.0, _float(x) or 0.0) for x in nums]     # a deficit shows as a stock below zero
             s.equipment[name.strip()] = (vals[0], vals[1], vals[2])
+        elif key == "damaged":
+            sname, *nums = rest.split("|")
+            vals = [max(0.0, _float(x) or 0.0) for x in nums]
+            for b, x in zip(DAMAGE_BUILDINGS, vals):
+                s.damage[b] = s.damage.get(b, 0.0) + (1 if b == "infrastructure" and x else x)
+            factories = sum(vals[:3])
+            if factories:
+                s.damaged_states.append((sname.strip(), factories))
+                s.damaged_states.sort(key=lambda x: -x[1])
         elif key == "war":
             sp, esr, asr = (rest.split("|") + ["", ""])[:3]
             s.surrender, s.enemy_strength, s.side_strength = _float(sp), _float(esr), _float(asr)
@@ -627,6 +646,27 @@ def _men(thousands: float) -> str:
     return f"{n / 1e6:.2f}".rstrip("0").rstrip(".") + " million" if n >= 1e6 else f"{n:,.0f}"
 
 
+def damage_text(s: CountryState) -> str:
+    """' Damaged by bombing...: ...' (with a leading space), or '' when nothing is damaged. Through another's
+    intelligence (intel.view) the numbers are rough, and the worst-hit states named only from intel.ROUGH."""
+    from . import intel
+    d = {b: x for b, x in s.damage.items() if x}
+    if not d:
+        return ""
+    seen = s.intel is not None
+    num = lambda x: f"about {round(x)}" if seen else (f"{x:.0f}" if x >= 1 else "part of one")
+    word = lambda b, x: DAMAGE_BUILDINGS[b] if round(x) > 1 else DAMAGE_BUILDINGS[b].replace("ies", "y").rstrip("s")
+    parts = [f"{num(x)} {word(b, x)}" for b, x in d.items() if b != "infrastructure"]
+    text = (f" Damaged by bombing, sabotage or nuclear strikes and out of action until repaired: "
+            f"{', '.join(parts)}" if parts else " Damaged by bombing, sabotage or nuclear strikes:")
+    if s.damaged_states and (not seen or s.intel.get("civilian", 0) >= intel.ROUGH):
+        text += f" (worst hit: {', '.join(n for n, _ in s.damaged_states[:3])})"
+    if d.get("infrastructure"):
+        n = round(d["infrastructure"])
+        text += (";" if parts else "") + f" roads and railways in {n} state{'s' if n != 1 else ''}"
+    return text + "."
+
+
 def strength_text(s: CountryState) -> str:
     """Industry, armed forces and manpower in one paragraph (empty if unknown)."""
     v = s.strength
@@ -639,7 +679,7 @@ def strength_text(s: CountryState) -> str:
     n = lambda k: f"{w(k)}{v.get(k, 0):.0f}"
     men = lambda k: f"{w(k)}{_men(v.get(k, 0))}"
     return (f"Industry: {n('civ')} civilian factories, {n('mil')} military factories, {n('dock')} "
-            f"dockyards. Armed forces: {n('divisions')} divisions ({men('army_k')} soldiers deployed), "
+            f"dockyards.{damage_text(s)} Armed forces: {n('divisions')} divisions ({men('army_k')} soldiers deployed), "
             f"navy {men('navy_k')} sailors, air force {n('planes')} planes ({men('air_k')} airmen). "
             f"Manpower available to recruit: {men('manpower_k')}; population {men('population_k')}.")
 

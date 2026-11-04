@@ -98,6 +98,8 @@ def instructions(them_name: str, me_name: str, rel: "actions.Relation", war_part
            f"{actions.ECONOMY['equipment']} {actions.ECONOMY['pp']}"
            if any(k in actions.GOODS_GIVES + actions.GOODS_ASKS for k in gives + asks) else "")
         + (f"\n\n{actions.bound_note(them_name, me_name, rel.bound)}" if rel.bound else "")
+        + (f"\n\n{actions.faction_full_note(them_name, me_name, rel)}"
+           if actions.faction_full_note(them_name, me_name, rel) else "")
         + (f"\n\n{actions.WAR_NOTE}" if any(actions.is_war(k) or actions.is_pledge(k) for k in gives + asks) else "")
         + (f"\n\n{actions.ALIGN_NOTE}" if any(actions.third_kind(k) for k in gives + asks) else "")
         + war_part

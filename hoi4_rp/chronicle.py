@@ -1,5 +1,6 @@
 """World chronicle: snapshot the whole world in one query and turn the differences between two
-snapshots into dated events (wars, peace, capitulations, factions, subjects, governments, territory).
+snapshots into dated events (wars, peace, capitulations, factions, subjects, governments, territory, nuclear
+strikes: nukes.py).
 
 A snapshot costs one bridge query (~30 ms for the vanilla world), so it can run every few seconds.
 
@@ -140,7 +141,7 @@ def front(tags: List[str]) -> Dict[str, Dict]:
 # (agreements granted, proposals answered). Only these refresh policies or lift a refusal.
 WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_left", "faction_founded",
                "faction_joined", "independence", "subject", "capitulation", "war", "peace", "territory",
-               "justification", "wargoal", "civil_war", "faction_dissolved",
+               "justification", "wargoal", "civil_war", "faction_dissolved", "nuke",
                # treaties.py: a treaty broken, renounced, called on or lapsing changes what the two are to each other
                "treaty:broken", "treaty:renounced", "treaty:clause", "treaty:lapsed",
                # ultimatums.py: a threat of war, and how it ended
@@ -171,9 +172,11 @@ def snapshot(player: str) -> Dict:
     front: {tag: ...} (the player and their enemies, see _read_front)}"""
     snap: Dict = {"campaign": 0, "date": "", "date_text": "", "countries": {}, "wars": [], "states": {}}
     wars: Set[str] = set()
-    from . import world
+    from . import nukes, world
     effect = _EFFECT.replace("%VOICELESS%", world.voiceless_script())
-    lines = query(f"{player} = {{ {effect} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} }}")
+    lines = query(f"{player} = {{ {effect} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} }} "
+                  f"{nukes.script()}")
+    nukes.read(lines, snap)
     snap["ties"] = _read_ties(lines, player)
     snap["tie_kinds"] = sorted(TIES)                  # what was looked for: a kind added later isn't news at first
     snap["player"] = player
@@ -369,6 +372,9 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
             for t in tags if len(tags) <= MARKET_MASS else ():
                 add([player, t], AGREEMENTS["market"][1 if end else 0].format(p=name(player), o=name(t)),
                     f"agreement:market{end}")
+
+    from . import nukes
+    nukes.events(old, new, name, add)
 
     moved: Dict[Tuple[str, str], List[str]] = defaultdict(list)
     for sid, (sname, owner) in new["states"].items():

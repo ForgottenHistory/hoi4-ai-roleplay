@@ -186,12 +186,14 @@ def _pct(x: float) -> str:
     return f"{round(x * 100)}%"
 
 
-def tension_line(name: str, level: float, rules: dict) -> str:
-    """'France may now send lend-lease; needs more tension to guarantee another country (25%), ...'"""
-    may = [label for k, label in TENSION_RULES if rules.get(k, 0) <= level]
-    later = [f"{label} ({_pct(rules[k])})" for k, label in sorted(TENSION_RULES, key=lambda r: rules.get(r[0], 0))
+def tension_line(name: str, level: float, rules: dict, skip=()) -> str:
+    """'France may now send lend-lease; needs more tension to guarantee another country (25%), ...' (rules in
+    `skip` left out)."""
+    kept = [(k, label) for k, label in TENSION_RULES if k not in skip]
+    may = [label for k, label in kept if rules.get(k, 0) <= level]
+    later = [f"{label} ({_pct(rules[k])})" for k, label in sorted(kept, key=lambda r: rules.get(r[0], 0))
              if level < rules.get(k, 0) <= 1]
-    never = [label for k, label in TENSION_RULES if rules.get(k, 0) > 1]
+    never = [label for k, label in kept if rules.get(k, 0) > 1]
     parts = [f"may now {', '.join(may)}" if may else "may do none of these yet"]
     if later:
         parts.append("needs more tension to " + ", ".join(later))
@@ -207,10 +209,15 @@ def tension_text(names: dict) -> str:
     except Exception as e:                          # the game not answering: leave it out rather than fail a letter
         print(f"  world tension could not be read: {e}")
         return ""
-    lines = [tension_line(n, level, rules[t]) for t, n in names.items() if t in rules]
-    if settings().world.tension_rules:
+    on = settings().world.tension_rules
+    skip = () if on else ("guarantee_tension", "join_faction_tension")
+    lines = [tension_line(n, level, rules[t], skip) for t, n in names.items() if t in rules]
+    if on:
         lines.append("Deals by letter keep to these rules too: a guarantee only once the guarantor may give one, a "
                      "faction only once both sides may join one. Offer, ask or promise nothing else of the kind.")
+    else:
+        lines.append("A guarantee or a faction agreed between governments waits on no particular tension (though in a "
+                     "quiet world it can look alarmist); what is possible is in the deals you are offered.")
     return (f"WORLD TENSION: {_pct(level)}. It rises with every war goal justified, annexation and war, and falls "
             f"with guarantees and lasting peace; the game ties what governments may do to it (low tension: a quiet "
             f"world that would see guarantees, alliances and war preparations as alarmism; high: a world bracing for "

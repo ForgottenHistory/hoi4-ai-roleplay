@@ -334,6 +334,8 @@ def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool
     lines = actions._item_lines("offer ", offers, f) + actions._item_lines("ask ", asks, f)
     if lines:
         lines += actions._notes(offers + asks)
+        if actions.faction_full_note(an, bn, rel):
+            lines.append(actions.faction_full_note(an, bn, rel))
     return offers, asks, "\n".join(lines)
 
 
@@ -749,12 +751,14 @@ def record(camp: campaign.Campaign, a: str, b: str, text: str, stance: str, item
         lines.append(f"  ({usage})")
     log(lines)
     if not isinstance(why[0], int):                      # a storyteller incident: news in the chronicle (dry: talks only)
-        _news(camp, a, b, name(a), name(b), deal or "closer ties", answer, bool(news), key, threat, u)
+        _news(camp, a, b, name(a), name(b), deal or "closer ties", answer, bool(news), key, threat, u,
+              " ".join(news) if counter else "")
 
 
 def _news(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, deal: str, answer: str, took: bool,
-          key: str, threat: Optional[Tuple[int, str]] = None, u: Optional[Dict] = None) -> None:
-    """What a storyteller incident came to, as a chronicle event the player's story events can be written about."""
+          key: str, threat: Optional[Tuple[int, str]] = None, u: Optional[Dict] = None, done: str = "") -> None:
+    """What a storyteller incident came to, as a chronicle event the player's story events can be written about.
+    `done`: after a counter-offer, what was put in place (the proposal itself was not)."""
     from . import storyteller
     if threat:                                            # an ultimatum: the demand is the story, not the "deal"
         by = f" by {campaign.date_words(u['deadline'])}" if u else f" within {threat[0]} months"
@@ -765,7 +769,9 @@ def _news(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, deal: str, 
                           "major": any(c.get(t, {}).get("major") for t in (a, b))}])
         return
     said = next((x for x in reversed(storyteller._state(camp)["incidents"]) if x["from"] == a and x["to"] == b), None)
-    result = (f"{bn} agreed, and it took effect" if took else
+    result = (f"{bn} answered with a counter-offer, and only this was agreed and took effect: {done.rstrip('.')}"
+              if took and done else
+              f"{bn} agreed, and it took effect" if took else
               f"{bn} agreed in principle" if answer == "accept" else f"{bn} turned it down" if answer == "decline"
               else f"{bn} answered with a counter-offer")
     text = f"{an} proposed to {bn}: {deal}. {result}." + (f" Behind it: {said['why']}" if said else "")

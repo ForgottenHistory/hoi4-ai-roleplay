@@ -15,6 +15,10 @@ the storyteller sees the result and works around it.
              faction's enemy, another ideology without a war in common; the member leaves or the leader expels it.
              Rare: one in the world every BREAK_GAP_DAYS
 
+Size: a faction led by an AI country holds at most cap() of the world's industry (20% in a calm world, 35% at full
+tension) and two major powers, unless the joiner is already at war beside it (room(), checked for letters and
+exchanges too through actions.possible); a fuller faction scores lower here, so the world splits into blocs.
+
 Distance as for guarantees (guarantees.reach): near (capitals on one continent), present (land there or a border),
 far (only at war together, or with an aim to back the leader). The faction DLC's joining rules (same continent,
 ideology...) are checked when a faction has them (has_active_rule; the rule's own trigger).
@@ -40,6 +44,63 @@ CANDIDATES = 10
 PER_COUNTRY = 2
 REACH_WEIGHT = {"near": 1.0, "present": 0.5, "far": 0.2}
 FOUNDING = {"create_faction", "create_faction_from_template"}
+SHARE_CALM = 0.20            # the most of the world's industry a faction led by the AI holds in a calm world,
+SHARE_TENSE = 0.35           # and at full world tension (linear between)
+MAJORS = 2                   # major powers in one faction at most
+
+
+# ---------------------------------------------------------------- how large a faction may grow
+# A faction led by an AI country holds at most cap(tension) of the world's factories (civilian and military) and
+# MAJORS major powers: in peacetime blocs stay small, and they grow as war nears. A joiner already at war with one of
+# the faction's enemies is let in regardless. The player's own faction is never capped (their buttons are theirs).
+
+def the(name: str) -> str:
+    """'the Axis', and 'The European Combine' left as it is (no 'the The')."""
+    return name if name.lower().startswith("the ") else f"the {name}"
+
+
+def cap(tension: float) -> float:
+    return SHARE_CALM + (SHARE_TENSE - SHARE_CALM) * max(0.0, min(1.0, tension))
+
+
+def too_large(share: float, majors: int, joiner_major: bool, tension: float) -> str:
+    """Why a faction holding `share` of the world's industry and `majors` major powers with the joiner can't take it
+    in ('' if it can)."""
+    if joiner_major and majors > MAJORS:
+        return f"the faction already has {majors - 1} major powers, and {MAJORS} is the most one holds"
+    if share > cap(tension):
+        return (f"with it the faction would hold {share:.0%} of the world's industry, more than the "
+                f"{cap(tension):.0%} a faction holds at this world tension")
+    return ""
+
+
+def room(leader: str, joiner: str, tension: float) -> str:
+    """Why `joiner` can't join `leader`'s faction, or found one with it ('' if it can). One game query."""
+    try:
+        if (bridge.trigger(f"{leader} = {{ is_ai = no }}")
+                or bridge.trigger(f"any_country = {{ has_war_with = {leader} has_war_with = {joiner} }}")):
+            return ""
+        lines = gamestate.query(
+            f'every_country = {{ limit = {{ exists = yes }} '
+            f'log = "AIRPFS|[THIS.GetTag]|[?THIS.num_of_civilian_factories]|[?THIS.num_of_military_factories]" '
+            f'if = {{ limit = {{ OR = {{ tag = {leader} tag = {joiner} is_in_faction_with = {leader} }} }} '
+            f'log = "AIRPFM|[THIS.GetTag]" if = {{ limit = {{ is_major = yes }} log = "AIRPFJ|[THIS.GetTag]" }} }} }}')
+    except (gamestate.StateError, bridge.BridgeError):
+        return ""                                      # the game not answering: the game's own checks still hold
+    num = lambda x: float(x) if x.strip().replace(".", "", 1).isdigit() else 0.0
+    power, members, majors = {}, set(), set()
+    for line in lines:
+        f = [x.strip() for x in line.split("|")]
+        if f[0] == "AIRPFS" and len(f) >= 4:
+            power[f[1]] = num(f[2]) + num(f[3])
+        elif f[0] == "AIRPFM" and len(f) >= 2:
+            members.add(f[1])
+        elif f[0] == "AIRPFJ" and len(f) >= 2:
+            majors.add(f[1])
+    total = sum(power.values())
+    if not total:
+        return ""
+    return too_large(sum(power.get(t, 0) for t in members) / total, len(majors), joiner in majors, tension)
 
 
 # ---------------------------------------------------------------- names
@@ -311,6 +372,14 @@ def candidates(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Dict]:
     facs = world_factions(camp)
     ideo = ideologies()
     rules = active_rules([f["leader"] for f in facs.values() if f["leader"] and f["leader"] != player])
+    try:
+        from . import world
+        level = world.tension([player])[0]
+    except Exception:
+        level = 0.0
+    total = sum(power(t) for t in w) or 1
+    share = lambda tags: sum(power(t) for t in tags) / total
+    majors = lambda tags: sum(1 for t in tags if c.get(t, {}).get("major"))
     out: List[Dict] = []
 
     def aim_line(t: str, target: str, kinds) -> Optional[Dict]:
@@ -361,8 +430,13 @@ def candidates(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Dict]:
                 continue
             if not may_join(x, L, rules.get(L, [])):
                 continue
+            fill = 0.0                                 # a faction near its cap takes members less readily
+            if not shared_war:
+                if too_large(share(members + [x]), majors(members + [x]), bool(c[x].get("major")), level):
+                    continue
+                fill = share(members) / cap(level)
             out.append({"move": "join", "a": x, "b": L, "faction": fname, "stake": stake, "aim": aim, "reach": tier,
-                        "score": s * REACH_WEIGHT[tier]})
+                        "score": s * REACH_WEIGHT[tier] * (1 - fill / 2)})
 
     # found: two countries outside any faction; the founder a major power or the stronger one
     for i, a in enumerate(loose):
@@ -393,6 +467,8 @@ def candidates(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Dict]:
             tier = guarantees.reach(L, x, w)
             if tier == "far" or (tier == "present" and not shared_war):
                 continue                               # a new alliance starts among neighbours
+            if not shared_war and too_large(share([a, b]), majors([a, b]), False, level):
+                continue
             out.append({"move": "found", "a": L, "b": x, "faction": "", "stake": stake, "aim": aim, "reach": tier,
                         "score": s * REACH_WEIGHT[tier]})
 

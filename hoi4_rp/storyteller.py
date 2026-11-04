@@ -946,14 +946,15 @@ class FactionMonth:
             self.cands.append(x)
 
     def line(self, x: Dict) -> str:
+        from . import factions
         n = self.name
         where = {"near": "", "present": "; from another continent: unusual", "far": "; across the world: rare"}
         if x["move"] == "join":
-            head = f"JOIN: {n(x['a'])} ({x['a']}) and the {x['faction']}, led by {n(x['b'])} ({x['b']})"
+            head = f"JOIN: {n(x['a'])} ({x['a']}) and {factions.the(x['faction'])}, led by {n(x['b'])} ({x['b']})"
         elif x["move"] == "found":
             head = f"FOUND: {n(x['a'])} ({x['a']}) founds a new faction with {n(x['b'])} ({x['b']})"
         else:
-            head = (f"BREAK: {n(x['a'])} ({x['a']}) and the {x['faction']}, led by {n(x['b'])} ({x['b']}): the "
+            head = (f"BREAK: {n(x['a'])} ({x['a']}) and {factions.the(x['faction'])}, led by {n(x['b'])} ({x['b']}): the "
                     f"member leaves (FROM {x['a']}) or the leader expels it (FROM {x['b']})")
         return f"- {head}: {'; '.join(x['stake'])}{where.get(x['reach'], '')}"
 
@@ -965,16 +966,21 @@ class FactionMonth:
         me = gamestate.country(player)
         n = self.name
         try:
-            level = f"{round(world.tension([player])[0] * 100)}%"
+            tense = world.tension([player])[0]
+            level = f"{round(tense * 100)}%"
         except Exception:
-            level = "unknown"
+            tense, level = 0.0, "unknown"
         c = self.snap.get("countries", {})
         facs = factions.world_factions(self.camp)
         ideo = factions.ideologies(list({f["leader"] for f in facs.values() if f["leader"]}))
         enemies = lambda t: sorted(factions._enemies(self.snap, t))
-        rows = [f"- the {fname}: led by {n(f['leader'])} ({ideo.get(f['leader'], '?')})"
+        power = lambda x: self.w.get(x, {}).get("civ", 0) + self.w.get(x, {}).get("mil", 0)
+        total = sum(power(x) for x in self.w) or 1
+        rows = [f"- {factions.the(fname)}: led by {n(f['leader'])} ({ideo.get(f['leader'], '?')})"
                 f"{'; at war with ' + ', '.join(n(e) for e in enemies(f['leader'])) if enemies(f['leader']) else ''}; "
-                f"members: {', '.join(n(m) for m in f['members'][1:]) or 'none yet'}" for fname, f in facs.items()]
+                f"members: {', '.join(n(m) for m in f['members'][1:]) or 'none yet'}; "
+                f"{sum(power(m) for m in f['members']) / total:.0%} of the world's industry"
+                for fname, f in facs.items()]
         loose = [n(t) for t, x in sorted(c.items()) if x.get("major") and not x.get("faction")]
         parts = [
             world.text({p.ideology for p in me.parties}),
@@ -991,6 +997,10 @@ class FactionMonth:
             f"THE PLAYER: {me.name} ({player}); a human, never part of a move here (their own letters do that), "
             f"though what happens near them matters to their game.",
             "FACTIONS NOW:\n" + ("\n".join(rows) or "none"),
+            f"At this tension a faction holds at most {factions.cap(tense):.0%} of the world's industry and "
+            f"{factions.MAJORS} major powers (more only for countries already at war beside it); the moves below "
+            f"keep to that. A world of several blocs is more alive than one great alliance: prefer the smaller "
+            f"factions, and founding new ones, over swelling the largest.",
         ]
         if loose:
             parts.append("MAJOR POWERS IN NO FACTION: " + ", ".join(loose))
@@ -1058,8 +1068,8 @@ def finish_faction(camp: campaign.Campaign, f: Optional[Dict]) -> str:
         if not actions._effect(factions.break_effect(x["a"], x["b"], by_leader)):
             diplomacy.log([head + f"break {name(a)} -> {name(b)} failed in the game"])
             return ""
-        text = (f"{name(x['b'])} expelled {name(x['a'])} from the {x['faction']}." if by_leader
-                else f"{name(x['a'])} left the {x['faction']}, led by {name(x['b'])}.")
+        text = (f"{name(x['b'])} expelled {name(x['a'])} from {factions.the(x['faction'])}." if by_leader
+                else f"{name(x['a'])} left {factions.the(x['faction'])}, led by {name(x['b'])}.")
         if pick["why"]:
             text += f" {pick['why']}"
         camp.add_events([{"date": key, "when": campaign.date_words(key), "type": "faction:break",
@@ -1074,7 +1084,7 @@ def finish_faction(camp: campaign.Campaign, f: Optional[Dict]) -> str:
     joiner = x["a"]
     if move == "join":
         aim = (x["aim"]["aim"] if a == joiner and x["aim"] else
-               f"join the {x['faction']}" if a == joiner else f"bring {name(joiner)} into the {x['faction']}")
+               f"join {factions.the(x['faction'])}" if a == joiner else f"bring {name(joiner)} into {factions.the(x['faction'])}")
     else:
         aim = (x["aim"]["aim"] if x["aim"] and a == x["a"] else
                f"found a faction with {name(b)}")
@@ -1215,7 +1225,7 @@ class WarMonth:
             "government starts by its own choice is decided here (wars from national focuses and events, and "
             "allies and guarantors joining a war, come on their own). For each government below, decide as a "
             "shrewd player of that country would, wanting it to survive and prosper:\n"
-            "  war: it goes to war now; its generals strike when the armies are ready\n"
+            "  war: it declares war now\n"
             "  ultimatum: a deadline to give up the land it claims first, so the other side may yield without war\n"
             "  prepare: it may justify a war goal, to be ready when the moment comes (a step short of war)\n"
             "  wait: not now\n"

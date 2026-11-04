@@ -197,6 +197,8 @@ class Relation:
     tension: float = 0.0                  # world tension 0..1, and each side's thresholds (world.tension)
     them_tension: Dict[str, float] = None
     me_tension: Dict[str, float] = None
+    them_full: str = ""                   # why I can't join them's faction or found one led by them (factions.room:
+    me_full: str = ""                     # an AI-led faction's size cap), and them mine; '' if it can
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -273,6 +275,17 @@ def relation(them: str, me: str) -> Relation:
     bound = ("subject" if bridge.trigger(f"{them} = {{ is_subject_of = {me} }}") else
              "overlord" if bridge.trigger(f"{me} = {{ is_subject_of = {them} }}") else
              "faction" if bridge.trigger(f"{me} = {{ is_in_faction_with = {them} }}") else "")
+    them_leader = bridge.trigger(f"{them} = {{ is_faction_leader = yes }}")
+    me_leader = bridge.trigger(f"{me} = {{ is_faction_leader = yes }}")
+    them_in = bridge.trigger(f"{them} = {{ is_in_faction = yes }}")
+    me_in = bridge.trigger(f"{me} = {{ is_in_faction = yes }}")
+    them_full = me_full = ""
+    if not at_war and not bound:
+        from . import factions
+        if (them_leader and not me_in) or not (them_in or me_in):
+            them_full = factions.room(them, me, level)
+        if (me_leader and not them_in) or not (them_in or me_in):
+            me_full = factions.room(me, them, level)
     return Relation(at_war=at_war,
                     exists={name: check(them, me) for name, check in _CHECKS.items()},
                     them_border=border_states(them, me), me_border=border_states(me, them),
@@ -282,10 +295,8 @@ def relation(them: str, me: str) -> Relation:
                     them_subjects=subjects_of(them), me_subjects=subjects_of(me),
                     them_factories=factory_counts(them), me_factories=factory_counts(me),
                     them_rights=rights_held(me, them), me_rights=rights_held(them, me),
-                    them_leader=bridge.trigger(f"{them} = {{ is_faction_leader = yes }}"),
-                    me_leader=bridge.trigger(f"{me} = {{ is_faction_leader = yes }}"),
-                    them_in_faction=bridge.trigger(f"{them} = {{ is_in_faction = yes }}"),
-                    me_in_faction=bridge.trigger(f"{me} = {{ is_in_faction = yes }}"),
+                    them_leader=them_leader, me_leader=me_leader, them_in_faction=them_in, me_in_faction=me_in,
+                    them_full=them_full, me_full=me_full,
                     me_enemies=joinable_enemies(me, them), them_enemies=joinable_enemies(them, me),
                     third=third_countries(them, me),
                     them_equipment=equipment_counts(them), me_equipment=equipment_counts(me),
@@ -1095,8 +1106,9 @@ def transfer_factories(giver: str, receiver: str, kind: str, n: int) -> Optional
     for sid in dict.fromkeys(s for s, _ in taken):
         script.append(f"{sid} = {{ remove_building = {{ type = {building} level = {sum(1 for s, _ in taken if s == sid)} }} }}")
     for sid, _ in placed:
+        # locked slots don't count: a build into one fails silently
         script.append(f"{sid} = {{ if = {{ limit = {{ NOT = {{ free_building_slots = {{ building = {building} size > 0 "
-                      f"include_locked = yes }} }} }} add_extra_state_shared_building_slots = 1 }} "
+                      f"}} }} }} add_extra_state_shared_building_slots = 1 }} "
                       f"add_building_construction = {{ type = {building} level = 1 instant_build = yes }} }}")
     if not _effect(" ".join(script)):
         return None
@@ -1326,13 +1338,14 @@ def possible(rel: Relation, key: str) -> bool:
         return not rel.at_war and bool(info) and _commit_ok(kind, info, actor, ben)
     if key in ("give:faction", "ask:join"):                    # I join them's faction
         return (not rel.at_war and not rel.bound and rel.them_leader and not rel.me_in_faction
-                and not rel.me_subject and not rel.them_subject)
+                and not rel.me_subject and not rel.them_subject and not rel.them_full)
     if key in ("give:join", "ask:faction"):                    # them joins mine
         return (not rel.at_war and not rel.bound and rel.me_leader and not rel.them_in_faction
-                and not rel.me_subject and not rel.them_subject)
+                and not rel.me_subject and not rel.them_subject and not rel.me_full)
     if key in ("give:found", "ask:found"):                     # neither in a faction: one founds it together
         return (not rel.at_war and not rel.bound and not rel.them_in_faction and not rel.me_in_faction
-                and not rel.me_subject and not rel.them_subject)
+                and not rel.me_subject and not rel.them_subject
+                and not (rel.them_full if key == "give:found" else rel.me_full))
     if key == "end:faction":
         return rel.bound == "faction"
     if key == "give:leave":                                    # them leaves its own faction (not ours)
@@ -1580,13 +1593,34 @@ def reply_help(them_name: str, me_name: str, rel: Relation) -> str:
         lines.append(f"You are at war with {me_name}, so no agreements are possible.")
     if rel.bound:
         lines.append(bound_note(them_name, me_name, rel.bound))
+    if faction_full_note(them_name, me_name, rel):
+        lines.append(faction_full_note(them_name, me_name, rel))
     return "\n".join(lines)
 
 
 FACTION_NOTE = ("A faction is a standing alliance: its members are called into each other's wars, and the leader "
                 "speaks for it. A government joins one whose enemies are its own, or whose protection it needs; a "
                 "leader admits a country that adds strength, not one that drags it into wars it doesn't want. "
-                "Leaving or expelling a member is a break that the world notices.")
+                "Leaving or expelling a member is a break that the world notices. No faction may grow without "
+                "bound: in a calm world one holds only a modest share of the world's industry and two major powers "
+                "at most, and the bound widens as the world's tension rises toward war; a country already fighting "
+                "beside a faction may join it regardless.")
+
+
+def faction_full_note(them_name: str, me_name: str, rel: "Relation") -> str:
+    """Why a faction move between the two the menu would otherwise hold isn't possible (factions.room), so the
+    letter or exchange doesn't offer, ask or promise it ('' if nothing is blocked). Written for them."""
+    end = (" Neither side can change that by agreement: say so plainly if it comes up, never promise it; it may "
+           "change as the world's tension rises, or once a war is fought side by side.")
+    if rel.at_war or rel.bound or rel.me_subject or rel.them_subject:
+        return ""
+    if rel.them_leader and not rel.me_in_faction and rel.them_full:
+        return f"{me_name} can't join your faction now: {rel.them_full}." + end
+    if rel.me_leader and not rel.them_in_faction and rel.me_full:
+        return f"You can't join {me_name}'s faction now: {rel.me_full}." + end
+    if not rel.them_in_faction and not rel.me_in_faction and rel.them_full and rel.me_full:
+        return f"You and {me_name} can't found a faction together now: {rel.them_full}." + end
+    return ""
 
 
 def _new_goods_notes(keys: List[str]) -> List[str]:
@@ -2055,6 +2089,12 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
             elif is_subject_key(key):
                 ((rel.them_subjects if key.startswith("give:") else rel.me_subjects) or {}).pop(key.rsplit(":", 1)[1], None)
             elif deal.relation == "faction":
+                # add_to_faction does nothing, without an error, where the game won't have it (a faction's own
+                # joining rules): only what the game shows counts
+                now = bridge.trigger(f"{me} = {{ is_in_faction_with = {them} }}")
+                if now == deal.ends:
+                    print(f"  {key}: the game did not change the faction")
+                    continue
                 rel.bound = "" if deal.ends else "faction"
             else:
                 rel.exists[deal.relation] = not deal.ends

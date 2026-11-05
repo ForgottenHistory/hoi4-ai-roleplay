@@ -26,6 +26,7 @@ import json
 import os
 import random
 import re
+import time
 from typing import Dict, List, Optional
 
 from . import bridge
@@ -144,7 +145,16 @@ class Campaign:
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, self.path)
+        # Windows refuses the replace while another process (a command reading the campaign, a virus scanner)
+        # has the file open: wait a moment and try again
+        for attempt in range(20):
+            try:
+                os.replace(tmp, self.path)
+                return
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.25)
 
     # ------------------------------------------------------------ timeline
     def at(self, key: str) -> bool:

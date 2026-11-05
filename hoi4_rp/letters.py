@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, aipeace, borders, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, faction_view, ledger, llm, news, origins, peace, plight, policy, reputation,
+from . import (actions, aipeace, borders, bridge, campaign, cooldowns, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, faction_view, ledger, llm, news, origins, peace, plight, policy, reputation,
                factions, gates, guarantees, steering, wars, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -1326,6 +1326,7 @@ class _Session:
                         self.pending[tag] = (self.pending.get(tag, "") + " " + why).strip()
                 if ran_out:
                     self._expiry_notice(snap, sorted(ran_out))
+                cooldowns.sync(camp)            # a dropped tie's cooldown that ran out, or a new one
                 if self.steered == camp.id:     # commitments that ended, or a war with their country, since
                     steering.sync_all(camp)
         if rewound or self.steered != camp.id:      # the game's AI follows the policies (steering.py)
@@ -1334,6 +1335,7 @@ class _Session:
             gates.switch()                          # a save holds the flags as they were when saved
             factions.restore()                      # the names of factions we founded live only in `run`
             wars.sync(camp)                         # the bridge's war veto, and the wars allowed now
+            cooldowns.sync(camp, force=True)        # the save's arrays as the campaign's drops say
         if not self.idle() and time.monotonic() >= self.retry_at:
             self.ultimatum_decision(camp, player)
             self.policies(camp, player, snap)

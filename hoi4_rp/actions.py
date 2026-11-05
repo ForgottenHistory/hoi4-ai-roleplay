@@ -31,6 +31,9 @@ Commands (double brackets, anywhere in the letter; removed before it's shown):
     [[offer oppose TAG]] [[offer befriend TAG]] [[offer back TAG]]   a standing commitment toward a third country
                               (ALIGN_NOTE), kept by treaties.py, steering them's AI (steering.py); ask/plain forms too
     [[offer sanction TAG]] [[ask sanction TAG]] [[sanction TAG]]   a trade embargo on a third country, now
+    [[offer drop_guarantee TAG]] [[ask drop_pact TAG]] [[drop_access TAG]]   ending a tie with a third country,
+                              now: a guarantee of it, a non-aggression pact with it, the military access given it
+                              ("end guarantee TAG" and "drop guarantee TAG" are read the same)
     [[offer rifles N]] [[ask artillery N]] [[trucks N]]   stockpiled equipment as currency (EQUIPMENT)
     [[offer pp N]] [[ask pp N]] [[pp N]]   political power as currency (PP_NOTE), up to MAX_PP
     Terms over time ([[for 12 months]], instalments [[offer civ 2 x3]]) and [[end treaty]]: treaties.py
@@ -199,6 +202,7 @@ class Relation:
     me_tension: Dict[str, float] = None
     them_full: str = ""                   # why I can't join them's faction or found one led by them (factions.room:
     me_full: str = ""                     # an AI-led faction's size cap), and them mine; '' if it can
+    cooldown: Set[str] = None             # relations (_CHECKS names) a dropped tie keeps from being made again
 
 
 # Between a subject and its overlord, or within a faction, agreements come with the relationship (access, docking,
@@ -286,8 +290,10 @@ def relation(them: str, me: str) -> Relation:
             them_full = factions.room(them, me, level)
         if (me_leader and not them_in) or not (them_in or me_in):
             me_full = factions.room(me, them, level)
+    from . import cooldowns
     return Relation(at_war=at_war,
                     exists={name: check(them, me) for name, check in _CHECKS.items()},
+                    cooldown=cooldowns.blocked(them, me),
                     them_border=border_states(them, me), me_border=border_states(me, them),
                     peace_ok=at_war and peace.possible(me, them), bound=bound,
                     them_subject=bridge.trigger(f"{them} = {{ is_subject = yes }}"),
@@ -655,7 +661,8 @@ def joinable_enemies(side: str, joiner: str) -> Dict[str, str]:
 
 
 def third_countries(them: str, me: str) -> Dict[str, Dict]:
-    """Countries a war pledge between them and me may name: the major powers and both sides' neighbours, with
+    """Countries a war pledge between them and me may name: the major powers, both sides' neighbours and the
+    countries either side guarantees, has a non-aggression pact with or gives military access, with
     whether they are at war with, allied to, friends of or rivals of either side, and whether each side is a major
     (flags me_major / them_major on every entry)."""
     out: Dict[str, Dict] = {}
@@ -667,6 +674,10 @@ def third_countries(them: str, me: str) -> Dict[str, Dict]:
         f'log = "AIRPTF|[THIS.GetTag]|friend_{"me" if s == me else "them"}" }} '
         f'if = {{ limit = {{ {s} = {{ is_embargoing = PREV }} }} '
         f'log = "AIRPTF|[THIS.GetTag]|embargoed_{"me" if s == me else "them"}" }} '
+        # ties `s` holds with it, which a deal may end (_TIES)
+        + "".join(f'if = {{ limit = {{ {trig.format(a=s, x="PREV")} }} '
+                  f'log = "AIRPTF|[THIS.GetTag]|{flag.format(who="me" if s == me else "them")}" }} '
+                  for trig, _, flag in _TIES.values()) +
         # a quarrel the game knows: claims or cores on each other's land, or a war goal either way
         f'if = {{ limit = {{ OR = {{ any_owned_state = {{ OR = {{ is_claimed_by = {s} is_core_of = {s} }} }} '
         f'any_state = {{ is_owned_by = {s} OR = {{ is_claimed_by = PREV is_core_of = PREV }} }} '
@@ -677,7 +688,9 @@ def third_countries(them: str, me: str) -> Dict[str, Dict]:
         f'log = "AIRPTS|[THIS.GetTag]|[THIS.GetRulingIdeology]|[THIS.Capital.GetContinent]" '
         f'if = {{ limit = {{ is_major = yes }} log = "AIRPTM|[THIS.GetTag]" }} }} '
         f'every_country = {{ limit = {{ NOT = {{ tag = {them} }} NOT = {{ tag = {me} }} '
-        f'OR = {{ is_major = yes is_neighbor_of = {me} is_neighbor_of = {them} }} }} '
+        f'OR = {{ is_major = yes is_neighbor_of = {me} is_neighbor_of = {them} '
+        + "".join(trig.format(a=s, x="PREV") + " " for s in (me, them) for trig, _, _ in _TIES.values())
+        + '} } '
         f'log = "AIRPT|[THIS.GetTag]|[THIS.GetName]|[THIS.GetRulingIdeology]|[THIS.Capital.GetContinent]" '
         f'if = {{ limit = {{ is_major = yes }} log = "AIRPTF|[THIS.GetTag]|major" }} '
         + side(me) + side(them) +
@@ -786,8 +799,25 @@ def pledge_asks(rel: "Relation") -> List[str]:
 # with a country it promised to oppose, war on one it promised to back) and remembers it.
 # "give:sanction:ITA": them embargoes Italy now, at my wish ("ask:": I do). A step, not a clause.
 #     A = { send_embargo = X }
+# "give:drop_guarantee:POL": them withdraws its guarantee of Poland now, at my wish; drop_pact ends its
+# non-aggression pact with the country, drop_access withdraws the military access it gives it. Steps too.
 ALIGN_KINDS = ("oppose", "befriend", "back")
-THIRD_KINDS = ALIGN_KINDS + ("sanction",)
+DROP_KINDS = ("drop_guarantee", "drop_pact", "drop_access")
+STEP_KINDS = ("sanction",) + DROP_KINDS
+THIRD_KINDS = ALIGN_KINDS + STEP_KINDS
+# kind -> (the tie holds: trigger with {a} the side holding it and {x} the third country; the effect ending it;
+# the flag third_countries sets while `who` holds it, "{who}" for "me"/"them")
+_TIES = {
+    "drop_guarantee": ("{a} = {{ has_guaranteed = {x} }}",
+                       "{a} = {{ diplomatic_relation = {{ country = {x} relation = guarantee active = no }} }}",
+                       "guarantor_{who}"),
+    "drop_pact": ("{a} = {{ has_non_aggression_pact_with = {x} }}",
+                  "{a} = {{ diplomatic_relation = {{ country = {x} relation = non_aggression_pact active = no }} }}",
+                  "pact_{who}"),
+    "drop_access": ("{a} = {{ gives_military_access_to = {x} }}",
+                    "{x} = {{ diplomatic_relation = {{ country = {a} relation = military_access active = no }} }}",
+                    "access_{who}"),
+}
 ALIGN_NOTE = ("A commitment toward a third country (oppose, befriend, back) is a standing diplomatic line, not a war and "
               "not a promise to fight: like the Stresa Front against German expansion, or a great power taking a small "
               "state under its wing. The committed government's diplomacy follows it for as long as the treaty stands: "
@@ -797,7 +827,11 @@ ALIGN_NOTE = ("A commitment toward a third country (oppose, befriend, back) is a
               "it serves your own interests too, and ask it of a country whose stance would count. A pact with, a "
               "guarantee of or military access for a country one committed to oppose, or war on or an embargo of one "
               "it committed to befriend or back, breaks the commitment, and it is remembered. A sanction (a trade "
-              "embargo on a third country) is a step taken at once, like the League's sanctions on Italy in 1935.")
+              "embargo on a third country) is a step taken at once, like the League's sanctions on Italy in 1935. "
+              "So is ending a tie with a third country (drop_guarantee, drop_pact, drop_access: a guarantee of it, a "
+              "non-aggression pact with it, the military access given it): it leaves that country exposed, and it "
+              "remembers who dropped it and at whose wish. A government gives up a tie for something worth more to "
+              "it than the tie, or when the tie has stopped serving it.")
 # kind -> (give prompt, ask prompt, give label, ask label, give shown, ask shown, give remembered, ask remembered);
 # {x} the third country's name, {t} its tag
 _COMMIT = {
@@ -831,6 +865,25 @@ _COMMIT = {
                  "{them_name} imposed a trade embargo on {x}.", "We imposed a trade embargo on {x}.",
                  "{them_name} imposed a trade embargo on {x} at {me_name}'s wish.",
                  "{me_name} imposed a trade embargo on {x} at {them_name}'s wish."),
+    "drop_guarantee": ("withdraw your guarantee of the independence of {x} ({t}) at once, at {me_name}'s wish",
+                       "ask {me_name} to withdraw its guarantee of the independence of {x} ({t})",
+                       "the end of their guarantee of {x}", "the end of our guarantee of {x}",
+                       "{them_name} withdrew its guarantee of {x}.", "We withdrew our guarantee of {x}.",
+                       "{them_name} withdrew its guarantee of {x}'s independence at {me_name}'s wish.",
+                       "{me_name} withdrew its guarantee of {x}'s independence at {them_name}'s wish."),
+    "drop_pact": ("end your non-aggression pact with {x} ({t}) at once, at {me_name}'s wish",
+                  "ask {me_name} to end its non-aggression pact with {x} ({t})",
+                  "the end of their non-aggression pact with {x}", "the end of our non-aggression pact with {x}",
+                  "{them_name} ended its non-aggression pact with {x}.", "We ended our non-aggression pact with {x}.",
+                  "{them_name} ended its non-aggression pact with {x} at {me_name}'s wish.",
+                  "{me_name} ended its non-aggression pact with {x} at {them_name}'s wish."),
+    "drop_access": ("withdraw the military access you give {x} ({t}) at once, at {me_name}'s wish",
+                    "ask {me_name} to withdraw the military access it gives {x} ({t})",
+                    "the end of {x}'s military access through their territory",
+                    "the end of {x}'s military access through our territory",
+                    "{them_name} withdrew {x}'s military access.", "We withdrew {x}'s military access.",
+                    "{them_name} withdrew {x}'s military access at {me_name}'s wish.",
+                    "{me_name} withdrew {x}'s military access at {them_name}'s wish."),
 }
 
 
@@ -848,6 +901,10 @@ def is_sanction(key: str) -> bool:
     return third_kind(key) == "sanction"
 
 
+def is_drop(key: str) -> bool:
+    return third_kind(key) in DROP_KINDS
+
+
 def is_third(key: str) -> bool:
     """A deal item naming a third country: a war pledge, a commitment or a sanction."""
     return is_pledge(key) or bool(third_kind(key))
@@ -861,6 +918,8 @@ def _commit_ok(kind: str, info: Dict, actor: str, ben: str) -> bool:
     f = info["flags"]
     if "bound" in f or f"war_{actor}" in f:
         return False
+    if kind in DROP_KINDS:          # a tie `actor` holds with a country that is no ally of `ben`'s
+        return _TIES[kind][2].format(who=actor) in f and f"ally_{ben}" not in f
     # within reach of the committing side: a major, or a country next to it or on its continent (Britain borders
     # Guatemala through a colony; Austria has no line toward it)
     if not ("major" in f or {f"near_{actor}", f"continent_{actor}"} & f):
@@ -1219,7 +1278,10 @@ def get_deal(key: str) -> Optional[Deal]:
         texts = _COMMIT[kind]
         actor = "{them}" if g == 0 else "{me}"
         effect = f"{actor} = {{{{ send_embargo = {tag} }}}}" if kind == "sanction" else ""
-        return Deal(key, "sanction" if kind == "sanction" else "commit", False, True, sub(texts[g]),
+        if kind in DROP_KINDS:          # doubled braces: the deal's effect is formatted again with the tags
+            effect = _TIES[kind][1].replace("{{", "{{{{").replace("}}", "}}}}").format(a=actor, x=tag)
+        relation = {"sanction": "sanction", **{k: "drop" for k in DROP_KINDS}}.get(kind, "commit")
+        return Deal(key, relation, False, True, sub(texts[g]),
                     sub(texts[2 + g]), effect, sub(texts[4 + g]), sub(texts[6 + g]))
     if is_equipment_key(key):
         verb, kind, n = (key + ":0").split(":")[:3]
@@ -1403,6 +1465,8 @@ def possible(rel: Relation, key: str) -> bool:
     d = BY_KEY[key]
     if d.peace and rel.at_war:
         return False
+    if not d.ends and d.relation in (rel.cooldown or ()):      # dropped by a deal not long ago (cooldowns.py)
+        return False
     return rel.exists[d.relation] == d.ends
 
 
@@ -1430,10 +1494,16 @@ def described(key: str) -> str:
     if third_kind(key):
         x = _COUNTRY_NAMES.get(key.rsplit(":", 1)[1], "") or key.rsplit(":", 1)[1]
         gloss = ({"oppose": f"you work against {x} alongside them", "befriend": f"you seek friendship with {x} at "
-                  f"their wish", "back": f"you stand behind {x} with them", "sanction": f"you embargo {x} at their wish"}
+                  f"their wish", "back": f"you stand behind {x} with them", "sanction": f"you embargo {x} at their wish",
+                  "drop_guarantee": f"you withdraw your guarantee of {x} at their wish",
+                  "drop_pact": f"you end your non-aggression pact with {x} at their wish",
+                  "drop_access": f"you withdraw {x}'s military access at their wish"}
                  if key.startswith("give:") else
                  {"oppose": f"they work against {x} alongside you", "befriend": f"they seek friendship with {x} at your "
-                  f"wish", "back": f"they stand behind {x} with you", "sanction": f"they embargo {x} at your wish"})
+                  f"wish", "back": f"they stand behind {x} with you", "sanction": f"they embargo {x} at your wish",
+                  "drop_guarantee": f"they withdraw their guarantee of {x} at your wish",
+                  "drop_pact": f"they end their non-aggression pact with {x} at your wish",
+                  "drop_access": f"they withdraw {x}'s military access at your wish"})
         return f"{word(key)} ({gloss[third_kind(key)]})"
     if key in ("give:faction", "ask:join"):
         return f"{word(key)} (they would join your faction)"
@@ -1730,6 +1800,8 @@ _GOVT = re.compile(r"\[\[\s*(offer\s+|ask\s+)?govt\s+([a-z_]+)\s*\]\]", re.I)   
 _SUBJECT = re.compile(r"\[\[\s*(free|transfer)\s+([^\]]+?)\s*\]\]", re.I)        # [[free Slovakia]]
 _WAR = re.compile(r"\[\[\s*(offer\s+|ask\s+)?(war|pledge|" + "|".join(THIRD_KINDS)
                   + r")\s+(?:against\s+)?([^\]]+?)\s*\]\]", re.I)   # also commitments and sanctions
+# ending a tie with a third country, written as two words: a country after it (bare [[end pact]] is with me)
+_DROP_ALIAS = re.compile(r"\[\[\s*(offer\s+|ask\s+)?(?:end|drop)[ _](guarantee|pact|access)\s+(?=[^\]\s])", re.I)
 
 
 def _country_tag(text: str) -> str:
@@ -1897,6 +1969,7 @@ def _bracket_bare(text: str) -> str:
 def parse(text: str) -> Tuple[str, List[Tuple[str, int]], List[str]]:
     """Strip all commands. Returns (clean text, immediate [(key or 'opinion', number)], proposals [key])."""
     text = _bracket_bare(text)
+    text = _DROP_ALIAS.sub(r"[[\1drop_\2 ", text)      # [[end guarantee POL]] -> [[drop_guarantee POL]]
     immediate: List[Tuple[str, int]] = [(f"cede:{m.group(1)}:{m.group(2)}", 0) for m in _CEDE.finditer(text)]
     immediate += [(f"{m.group(1).lower()}:{m.group(2)}", 0) for m in _SUBJECT.finditer(text)]
     immediate += [(f"give:govt:{m.group(2).lower()}", 0) for m in _GOVT.finditer(text) if not m.group(1)]
@@ -2001,6 +2074,20 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 events.append({"type": key, "tags": [them, me, target], "text": deal.remembered.format(**fmt)})
                 if info := (rel.third or {}).get(target):
                     info["flags"].add(f"embargoed_{'them' if verb == 'give' else 'me'}")
+            continue
+        if is_drop(key):                           # a tie with a third country ended: told once the game shows it
+            verb, kind, target = key.split(":")
+            holder = them if verb == "give" else me
+            holds = _TIES[kind][0].format(a=holder, x=target)
+            if _effect(deal.effect.format(**fmt)) and not bridge.trigger(holds):
+                shown.append((deal.shown.format(**fmt), False))
+                events.append({"type": key, "tags": [them, me, target], "text": deal.remembered.format(**fmt)})
+                if info := (rel.third or {}).get(target):
+                    info["flags"].discard(_TIES[kind][2].format(who="them" if verb == "give" else "me"))
+                from . import cooldowns
+                cooldowns.start(kind, holder, target)          # not made again for a while, by either side
+            else:
+                print(f"  {key}: the tie still holds in the game, not told")
             continue
         if is_war(key):                            # the joining comes WAR_DELAY_DAYS later: treaties.py keeps it
             verb, _, enemy = key.split(":")
@@ -2143,6 +2230,12 @@ def package_text(keys: List[str], who: str = "they") -> str:
                           "ask:back": f"{who} {s('ask')} us to stand behind {name} with {them_it}",
                           "give:sanction": f"{who} {s('offer')} to impose a trade embargo on {name}",
                           "ask:sanction": f"{who} {s('ask')} us to impose a trade embargo on {name}",
+                          "give:drop_guarantee": f"{who} {s('offer')} to withdraw {their} guarantee of {name}",
+                          "ask:drop_guarantee": f"{who} {s('ask')} us to withdraw our guarantee of {name}",
+                          "give:drop_pact": f"{who} {s('offer')} to end {their} non-aggression pact with {name}",
+                          "ask:drop_pact": f"{who} {s('ask')} us to end our non-aggression pact with {name}",
+                          "give:drop_access": f"{who} {s('offer')} to withdraw {name}'s military access",
+                          "ask:drop_access": f"{who} {s('ask')} us to withdraw {name}'s military access",
                           "give:war": f"{who} {s('offer')} to join our war against {name}, entering it "
                                       f"{WAR_DELAY_DAYS} days after the deal",
                           "ask:war": f"{who} {s('ask')} us to join {their} war against {name}, entering it "

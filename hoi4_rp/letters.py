@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, aipeace, borders, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, ledger, llm, news, origins, peace, plight, policy, reputation,
+from . import (actions, aipeace, borders, bridge, campaign, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, faction_view, ledger, llm, news, origins, peace, plight, policy, reputation,
                factions, gates, guarantees, steering, wars, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -83,37 +83,42 @@ def show_reputation(camp: campaign.Campaign, player: str, last: Tuple[str, float
     return text, time.monotonic()
 
 
-def ledger_tab(player: str) -> Optional[int]:
-    """The ledger tab chosen (airp_ledger_tab), or None while the window is closed (no airp_ledger_open). One small
-    query, not a read of the country block, as it is asked twice a second."""
-    lines = gamestate.query(f'{player} = {{ if = {{ limit = {{ has_variable = airp_ledger_open }} '
-                            f'log = "AIRPLEDGER|[?airp_ledger_tab]" }} }}')
-    for line in lines:
-        if line.startswith("AIRPLEDGER|"):
+WINDOWS = {"ledger": ledger, "factions": faction_view}     # the tabbed windows (letter_mod.TABBED): their text
+
+
+def window_tabs(player: str) -> Dict[str, Optional[int]]:
+    """{window: the tab chosen (airp_<P>_tab), or None while it's closed (no airp_<P>_open)}. One small query, not a
+    read of the country block, as it is asked twice a second."""
+    eff = " ".join(f'if = {{ limit = {{ has_variable = airp_{p}_open }} log = "AIRPWIN|{p}|[?airp_{p}_tab]" }}'
+                   for p in WINDOWS)
+    out: Dict[str, Optional[int]] = dict.fromkeys(WINDOWS)
+    for line in gamestate.query(f"{player} = {{ {eff} }}"):
+        f = line.split("|")
+        if f[0] == "AIRPWIN" and len(f) >= 3 and f[1] in out:
             try:
-                return int(float(line[11:].strip()) or 1)
+                out[f[1]] = int(float(f[2].strip()) or 1)
             except ValueError:
-                return 1
-    return None
+                out[f[1]] = 1
+    return out
 
 
-def show_ledger(camp: campaign.Campaign, player: str, tab: Optional[int], last: str) -> str:
-    """While the ledger window is open (tab not None), set its heading and body for the chosen tab whenever they
+def show_window(camp: campaign.Campaign, player: str, window: str, tab: Optional[int], last: str) -> str:
+    """While a tabbed window is open (tab not None), set its heading and body for the chosen tab whenever they
     change. `last` is the text last set ("" while closed); returns the new one. Not set again while unchanged: that
     would scroll the player back to the top."""
     if tab is None:
         return ""
     names = (camp.snapshot or {}).get("countries", {})
-    head, body = ledger.text(camp, player, tab, lambda t: names.get(t, {}).get("name", t), _clean_for_game)
+    head, body = WINDOWS[window].text(camp, player, tab, lambda t: names.get(t, {}).get("name", t), _clean_for_game)
     text = head + "|" + body
     if text == last:
         return last
     bad = [r for r in bridge.send(
-        f"bridge.setloc airp_ledger_head {_loc_line(head)}",
-        f"bridge.setloc airp_ledger_body {_loc_line(body)}",
-        f"eval_effect {player} = {{ add_to_variable = {{ airp_ledger_refresh = 1 }} }}") if not r.startswith("OK")]
+        f"bridge.setloc airp_{window}_head {_loc_line(head)}",
+        f"bridge.setloc airp_{window}_body {_loc_line(body)}",
+        f"eval_effect {player} = {{ add_to_variable = {{ airp_{window}_refresh = 1 }} }}") if not r.startswith("OK")]
     if bad:
-        print("  could not set the ledger:", " | ".join(bad))
+        print(f"  could not set the {window} window:", " | ".join(bad))
     return text
 
 
@@ -1193,7 +1198,8 @@ class _Session:
         self.resumed: Dict[tuple, float] = {}   # (campaign id, country) -> when its waiting letter was resumed
         self.rep_shown: Tuple[str, float] = ("", 0.0)   # the reputation box's text as last set, and when
         self.treaties_shown: Tuple[str, float] = ("", 0.0)   # the same for the diplomacy view's treaty box
-        self.ledger_shown = ""                               # the ledger window's text as last set ("" while closed)
+        self.shown: Dict[str, str] = {}                      # each tabbed window's text as last set ("" while closed)
+        self.windows_of: tuple = ()                          # (campaign, country) the windows were set for
         self.steered = 0                         # campaign whose game AI strategies were last brought in line
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
@@ -2066,14 +2072,18 @@ def _log_to_file() -> str:
 
 
 def _ledger_loop(session: "_Session") -> None:
-    """Keep the ledger window's text up to date, whatever the main loop is busy with."""
+    """Keep the ledger's and the faction window's text up to date, whatever the main loop is busy with."""
     failed = ""
     while True:
         try:
             camp = session.camp
             if camp:
                 player = camp.data["player"]
-                session.ledger_shown = show_ledger(camp, player, ledger_tab(player), session.ledger_shown)
+                if session.windows_of != (id(camp), player):    # another game or country: work it all out again
+                    session.windows_of, session.shown = (id(camp), player), {}
+                    faction_view.forget()
+                for window, tab in window_tabs(player).items():
+                    session.shown[window] = show_window(camp, player, window, tab, session.shown.get(window, ""))
             failed = ""
         except (bridge.BridgeUnavailable, gamestate.StateError, RuntimeError):
             time.sleep(3)                          # no game, or not in one: the main loop says so

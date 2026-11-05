@@ -1,6 +1,6 @@
 """The ledger: an in-game window listing what the campaign has recorded, newest first, so the player needn't read
 the run log. letter_mod.py builds the window (a button in the top-bar reputation box opens it); letters.py sets its
-text (show_ledger) while it's open.
+text (show_window) while it's open.
 
 Everything comes from what the campaign already keeps, so a loaded earlier save drops later entries by itself:
     1 Yours        events the player took part in, letters to and from the player, the player's judged deeds

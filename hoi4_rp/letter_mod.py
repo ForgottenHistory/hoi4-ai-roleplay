@@ -117,7 +117,7 @@ _GUI = """guiTypes = {
 		containerWindowType = {
 			name = "airp_rep_box"
 			position = { x = 1125 y = 2 }
-			size = { width = 280 height = 33 }
+			size = { width = 378 height = 33 }
 			moveable = yes
 
 			background = {
@@ -139,10 +139,19 @@ _GUI = """guiTypes = {
 				pdx_tooltip = "AIRP_REP_TIP"
 			}
 
-			# Opens and closes the ledger window.
+			# Open and close the faction window and the ledger.
+			buttonType = {
+				name = "airp_factions_button"
+				position = { x = 182 y = 1 }
+				quadTextureSprite = "GFX_button_94x31"
+				buttonFont = "hoi_16mbs"
+				buttonText = "AIRP_FACTIONS_OPEN"
+				pdx_tooltip = "AIRP_FACTIONS_OPEN_TIP"
+				clicksound = click_default
+			}
 			buttonType = {
 				name = "airp_ledger_button"
-				position = { x = 182 y = 1 }
+				position = { x = 280 y = 1 }
 				quadTextureSprite = "GFX_button_94x31"
 				buttonFont = "hoi_16mbs"
 				buttonText = "AIRP_LEDGER_OPEN"
@@ -154,63 +163,11 @@ _GUI = """guiTypes = {
 
 	# The ledger: what the campaign has recorded, newest first, in four tabs. letters.py sets the heading and body
 	# (airp_ledger_head, airp_ledger_body) while it's open.
-	containerWindowType = {
-		name = "airp_ledger_window"
-		position = { x = -310 y = -320 }
-		size = { width = 620 height = 640 }
-		orientation = center
-		moveable = yes
-		clipping = no
+@LEDGER_WINDOW@
 
-		background = {
-			name = "background"
-			spriteType = "GFX_tiled_window_2b_border"
-		}
-
-		instantTextBoxType = {
-			name = "airp_ledger_title"
-			position = { x = 20 y = 18 }
-			font = "hoi_20b"
-			format = center
-			text = "AIRP_LEDGER_TITLE"
-			maxWidth = 580
-			maxHeight = 30
-			fixedsize = yes
-		}
-
-@LEDGER_TABS@
-
-		instantTextBoxType = {
-			name = "airp_ledger_head"
-			position = { x = 25 y = 100 }
-			font = "hoi_16mbs"
-			format = left
-			text = "AIRP_LEDGER_HEAD"
-			maxWidth = 570
-			maxHeight = 20
-			fixedsize = yes
-		}
-
-		instantTextBoxType = {
-			name = "airp_ledger_body"
-			position = { x = 25 y = 130 }
-			font = "hoi_18mbs"
-			format = left
-			text = "AIRP_LEDGER_BODY"
-			maxWidth = 570
-			maxHeight = 440
-			scrollbartype = "standardtext_slider"
-		}
-
-		buttonType = {
-			name = "airp_ledger_close"
-			position = { x = 248 y = 586 }
-			quadTextureSprite = "GFX_button_123x34"
-			buttonFont = "hoi_16mbs"
-			buttonText = "AIRP_CLOSE"
-			clicksound = click_close
-		}
-	}
+	# The faction window: the world's factions and what this mod does with them (faction_view.py), in four tabs.
+	# letters.py sets the heading and body (airp_factions_head, airp_factions_body) while it's open.
+@FACTIONS_WINDOW@
 
 @REPLY_WINDOWS@
 }
@@ -303,26 +260,91 @@ def _reply_window(size: int, text_h: int) -> str:
     return out
 
 
-def _ledger_tabs() -> str:
-    """The ledger's tab buttons, one per ledger.TABS entry, in a row under the title."""
-    from .ledger import TABS
+# A window of tabs over a heading and a scrolling body, all set by letters.py: the ledger (ledger.py) and the faction
+# window (faction_view.py). Element names are airp_<P>_window, _title, _tab<N>, _head, _body, _close; loc keys the
+# same in capitals (AIRP_<P>_TITLE, ...).
+_TABBED_WINDOW = """	containerWindowType = {
+		name = "airp_@P@_window"
+		position = { x = -310 y = -320 }
+		size = { width = 620 height = 640 }
+		orientation = center
+		moveable = yes
+		clipping = no
+
+		background = {
+			name = "background"
+			spriteType = "GFX_tiled_window_2b_border"
+		}
+
+		instantTextBoxType = {
+			name = "airp_@P@_title"
+			position = { x = 20 y = 18 }
+			font = "hoi_20b"
+			format = center
+			text = "AIRP_@PP@_TITLE"
+			maxWidth = 580
+			maxHeight = 30
+			fixedsize = yes
+		}
+
+@TABS@
+
+		instantTextBoxType = {
+			name = "airp_@P@_head"
+			position = { x = 25 y = 100 }
+			font = "hoi_16mbs"
+			format = left
+			text = "AIRP_@PP@_HEAD"
+			maxWidth = 570
+			maxHeight = 20
+			fixedsize = yes
+		}
+
+		instantTextBoxType = {
+			name = "airp_@P@_body"
+			position = { x = 25 y = 130 }
+			font = "hoi_18mbs"
+			format = left
+			text = "AIRP_@PP@_BODY"
+			maxWidth = 570
+			maxHeight = 440
+			scrollbartype = "standardtext_slider"
+		}
+
+		buttonType = {
+			name = "airp_@P@_close"
+			position = { x = 248 y = 586 }
+			quadTextureSprite = "GFX_button_123x34"
+			buttonFont = "hoi_16mbs"
+			buttonText = "AIRP_CLOSE"
+			clicksound = click_close
+		}
+	}"""
+
+
+def _tabbed_window(prefix: str, tabs) -> str:
+    """The window with one tab button per entry of `tabs`, in a row under the title."""
     width, gap = 123, 10
-    left = (620 - len(TABS) * width - (len(TABS) - 1) * gap) // 2
-    return "\n".join(f"""		buttonType = {{
-			name = "airp_ledger_tab{n}"
+    left = (620 - len(tabs) * width - (len(tabs) - 1) * gap) // 2
+    P = prefix.upper()
+    buttons = "\n".join(f"""		buttonType = {{
+			name = "airp_{prefix}_tab{n}"
 			position = {{ x = {left + i * (width + gap)} y = 55 }}
 			quadTextureSprite = "GFX_button_123x34"
 			buttonFont = "hoi_16mbs"
-			buttonText = "AIRP_LEDGER_TAB{n}"
-			pdx_tooltip = "AIRP_LEDGER_TAB{n}_TIP"
+			buttonText = "AIRP_{P}_TAB{n}"
+			pdx_tooltip = "AIRP_{P}_TAB{n}_TIP"
 			clicksound = click_default
-		}}""" for i, n in enumerate(TABS))
+		}}""" for i, n in enumerate(tabs))
+    return _TABBED_WINDOW.replace("@TABS@", buttons).replace("@PP@", P).replace("@P@", prefix)
 
 
 def _gui() -> str:
+    from . import faction_view, ledger
     windows = "\n".join(_reply_window(i + 1, h) for i, h in enumerate(REPLY_TEXT_HEIGHTS))
     return (_GUI.replace("@EDITBOX@", EDITBOX_NAME).replace("@PAGE@", PAGE_NAME)
-            .replace("@REPLY_WINDOWS@", windows).replace("@LEDGER_TABS@", _ledger_tabs()))
+            .replace("@REPLY_WINDOWS@", windows).replace("@LEDGER_WINDOW@", _tabbed_window("ledger", ledger.TABS))
+            .replace("@FACTIONS_WINDOW@", _tabbed_window("factions", faction_view.TABS)))
 
 
 def reply_size_for(text: str) -> int:
@@ -416,37 +438,52 @@ scripted_gui = {
 		visible = { always = yes }
 		dirty = airp_rep_refresh             # a paused game has no ticks: letters.py bumps this when the text changes
 		effects = {
-			airp_ledger_button_click = {
-				if = {
-					limit = { has_variable = airp_ledger_open }
-					clear_variable = airp_ledger_open
-				}
-				else = {
-					set_variable = { airp_ledger_open = 1 }
-				}
-				add_to_variable = { airp_ledger_refresh = 1 }
-			}
+@OPEN_EFFECTS@
 		}
 		ai_enabled = { always = no }
 	}
 
-	# The ledger window; letters.py sets its text (airp_ledger_head, airp_ledger_body) for the tab in airp_ledger_tab.
-	airp_ledger = {
+	# The ledger and faction windows; letters.py sets the text (airp_<P>_head, airp_<P>_body) of the tab in
+	# airp_<P>_tab.
+@TABBED_GUIS@
+}
+"""
+
+# Each window's button in the reputation box opens or closes it; opening one closes the other (they share the middle
+# of the screen).
+_OPEN_EFFECT = """			airp_@P@_button_click = {
+				if = {
+					limit = { has_variable = airp_@P@_open }
+					clear_variable = airp_@P@_open
+				}
+				else = {
+					set_variable = { airp_@P@_open = 1 }
+@CLOSE_OTHERS@
+				}
+				add_to_variable = { airp_@P@_refresh = 1 }
+			}"""
+
+_TABBED_GUI = """	airp_@P@ = {
 		context_type = player_context
-		window_name = "airp_ledger_window"
-		visible = { has_variable = airp_ledger_open }
-		dirty = airp_ledger_refresh
+		window_name = "airp_@P@_window"
+		visible = { has_variable = airp_@P@_open }
+		dirty = airp_@P@_refresh
 		effects = {
-@LEDGER_TAB_EFFECTS@
-			airp_ledger_close_click = {
-				clear_variable = airp_ledger_open
-				add_to_variable = { airp_ledger_refresh = 1 }
+@TAB_EFFECTS@
+			airp_@P@_close_click = {
+				clear_variable = airp_@P@_open
+				add_to_variable = { airp_@P@_refresh = 1 }
 			}
 		}
 		ai_enabled = { always = no }
-	}
-}
-"""
+	}"""
+
+TABBED = ("factions", "ledger")      # the tabbed windows, as the buttons stand in the reputation box
+
+
+def _tab_module(prefix: str):
+    from . import faction_view, ledger
+    return {"ledger": ledger, "factions": faction_view}[prefix]
 
 
 _REPLY_GUI = """	airp_letter_reply_@SIZE@ = {
@@ -489,14 +526,20 @@ _REPLY_GUI = """	airp_letter_reply_@SIZE@ = {
 
 
 def _scripted_guis() -> str:
-    from .ledger import TABS
     guis = "\n".join(_REPLY_GUI.replace("@SIZE@", str(i + 1)).replace("@NAME@", reply_window_name(i + 1))
                      for i in range(len(REPLY_TEXT_HEIGHTS)))
-    tabs = "\n".join(f"""			airp_ledger_tab{n}_click = {{
-				set_variable = {{ airp_ledger_tab = {n} }}
-				add_to_variable = {{ airp_ledger_refresh = 1 }}
-			}}""" for n in TABS)
-    return _SCRIPTED_GUIS.replace("@REPLY_GUIS@", guis).replace("@LEDGER_TAB_EFFECTS@", tabs)
+    opens, tabbed = [], []
+    for p in TABBED:
+        others = "\n".join(f"""					clear_variable = airp_{o}_open
+					add_to_variable = {{ airp_{o}_refresh = 1 }}""" for o in TABBED if o != p)
+        opens.append(_OPEN_EFFECT.replace("@CLOSE_OTHERS@", others).replace("@P@", p))
+        tabs = "\n".join(f"""			airp_{p}_tab{n}_click = {{
+				set_variable = {{ airp_{p}_tab = {n} }}
+				add_to_variable = {{ airp_{p}_refresh = 1 }}
+			}}""" for n in _tab_module(p).TABS)
+        tabbed.append(_TABBED_GUI.replace("@TAB_EFFECTS@", tabs).replace("@P@", p))
+    return (_SCRIPTED_GUIS.replace("@REPLY_GUIS@", guis).replace("@OPEN_EFFECTS@", "\n".join(opens))
+            .replace("@TABBED_GUIS@", "\n\n".join(tabbed)))
 
 
 # ---------------------------------------------------------------- common/scripted_localisation
@@ -527,21 +570,14 @@ defined_text = {
 		localization_key = airp_rep_tip
 	}
 }
-defined_text = {
-	name = GetAirpLedgerHead
-	text = {
-		trigger = { always = yes }
-		localization_key = airp_ledger_head
-	}
-}
-defined_text = {
-	name = GetAirpLedgerBody
-	text = {
-		trigger = { always = yes }
-		localization_key = airp_ledger_body
-	}
-}
-"""
+""" + "".join(f"""defined_text = {{
+	name = GetAirp{p.capitalize()}{part.capitalize()}
+	text = {{
+		trigger = {{ always = yes }}
+		localization_key = airp_{p}_{part}
+	}}
+}}
+""" for p in ("ledger", "factions") for part in ("head", "body"))
 
 
 # ---------------------------------------------------------------- localisation
@@ -573,13 +609,22 @@ def _loc() -> str:
         ' AIRP_LEDGER_BODY:0 "[This.GetAirpLedgerBody]"',
         ' airp_ledger_head:0 ""',
         ' airp_ledger_body:0 "§gThe ledger fills once the AI Roleplay script is running.§!"',
+        ' AIRP_FACTIONS_OPEN:0 "Factions"',
+        ' AIRP_FACTIONS_OPEN_TIP:0 "Open the faction window: the world\'s factions and how large they may grow, where you '
+        'could stand, who might join, found or break one, and how they changed."',
+        ' AIRP_FACTIONS_TITLE:0 "Factions"',
+        ' AIRP_FACTIONS_HEAD:0 "[This.GetAirpFactionsHead]"',
+        ' AIRP_FACTIONS_BODY:0 "[This.GetAirpFactionsBody]"',
+        ' airp_factions_head:0 ""',
+        ' airp_factions_body:0 "§gThe faction window fills once the AI Roleplay script is running.§!"',
         ' AIRP_CLOSE:0 "Close"',
         ' AIRP_ACCEPT:0 "Accept"',
         ' AIRP_DECLINE:0 "Decline"',
     ]
-    from .ledger import HEADINGS, TABS
-    for n, label in TABS.items():
-        lines += [f' AIRP_LEDGER_TAB{n}:0 "{label}"', f' AIRP_LEDGER_TAB{n}_TIP:0 "{HEADINGS[n]}."']
+    for p in TABBED:
+        mod = _tab_module(p)
+        for n, label in mod.TABS.items():
+            lines += [f' AIRP_{p.upper()}_TAB{n}:0 "{label}"', f' AIRP_{p.upper()}_TAB{n}_TIP:0 "{mod.HEADINGS[n]}."']
     from .actions import opinion_loc
     lines += opinion_loc()
     return "\n".join(lines) + "\n"

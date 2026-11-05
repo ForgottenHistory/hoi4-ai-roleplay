@@ -18,7 +18,8 @@ after updating, and restart HOI4 (`reload events` is unreliable).
 
 - **Letters**: open a country in the diplomacy view and pick **Write Letter**. It answers in a reply window, and may
   attach a proposal you Accept or Decline. Countries also write to you on their own.
-- **Ledger**: the button in the top-bar reputation box lists everything the campaign recorded.
+- **Ledger**: the button in the top-bar reputation box lists everything the campaign recorded; the
+  **Factions** button beside it shows the world's factions, where you could stand, and who might join or break one.
 - **Memory** is per playthrough, saved with your save game; loading an earlier save forgets what came after.
 
 ## Commands
@@ -34,7 +35,7 @@ More (debugging and dry runs) in [docs/development.md](docs/development.md).
 ## Docs
 
 - [Letters and deals](docs/letters.md): what a letter can do, treaties, guarantees, wagers, peace, ultimatums
-- [The world](docs/world.md): chronicle, reputation, story and news events, crises, plotlines, ledger
+- [The world](docs/world.md): chronicle, reputation, story and news events, crises, plotlines, ledger, faction window
 - [How the AI countries think](docs/ai.md): policies, steering HOI4's AI, agendas, the storyteller, AI-to-AI diplomacy
 - [Settings and other mods](docs/settings.md): config, lore files, Kaiserreich and total conversions
 - [Development](docs/development.md): code layout, debug commands, logs

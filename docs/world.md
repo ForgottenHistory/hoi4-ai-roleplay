@@ -36,6 +36,22 @@ fading over years. The top-bar reputation box shows your standing; its tooltip h
 The button in the reputation box opens what the campaign recorded, newest first, in tabs: yours (your events, letters
 and judged deeds), diplomacy (deals, treaties, ultimatums, crises, news, stories), world headlines, reputation.
 
+## Faction window
+
+The Factions button beside it shows the world's factions and what this mod does with them, in tabs:
+
+- **Factions**: each faction's leader, members and wars, its share of the world's industry against the size limit for
+  factions the AI leads (20% in a calm world, up to 35% at full tension; two major powers), and the faction DLC's
+  joining rules.
+- **Yours**: your faction and how its members stand toward you; out of one, which factions could take you in by
+  letter; what each country's policy toward you would offer or ask about factions.
+- **Prospects**: the joins, foundings and breaks the storyteller would weigh (made with `factions = ours`), and the
+  blocs: countries whose aims or commitments point the same way.
+- **History**: factions founded, joined, left and dissolved, deals by letter about factions, and the storyteller's
+  faction talks with their reasons.
+
+`python -m hoi4_rp factions [TAB]` prints a tab.
+
 ## Story events
 
 Your own country reacts to what you did through this mod: deals by letter (land, factories, subjects, governments,

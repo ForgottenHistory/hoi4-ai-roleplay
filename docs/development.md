@@ -11,6 +11,7 @@
     python -m hoi4_rp agendas [TAG...] # write and print agendas
     python -m hoi4_rp storyteller [--months N]   # blocs and a simulated monthly incident pick
     python -m hoi4_rp storyteller --guarantees | --factions | --wars [--prompt]   # the month's guarantee, faction move or wars, dry
+    python -m hoi4_rp factions [TAB]   # the faction window's text (tabs 1-4)
     python -m hoi4_rp plots            # the player's plotlines
     python -m hoi4_rp course [TAG]     # focus under way and the likely next ones
     python -m hoi4_rp intent [TAG]     # what the country's game AI is set on
@@ -58,6 +59,7 @@ LLM output is plain text: `KEY: value` lines or `[[commands]]`, parsed leniently
     hoi4_rp/news.py        news popups
     hoi4_rp/reputation.py  deeds, promises, threats and how they're judged
     hoi4_rp/ledger.py      the ledger window's text
+    hoi4_rp/faction_view.py the faction window's text
     hoi4_rp/chronicle.py   world snapshots and their differences as dated events
     hoi4_rp/origins.py     how wars began, from the game
     hoi4_rp/campaign.py    per-playthrough memory (data/campaigns/<id>.json)
@@ -72,7 +74,7 @@ LLM output is plain text: `KEY: value` lines or `[[commands]]`, parsed leniently
     hoi4_rp/world.py       the setting: lore files and notes
     hoi4_rp/style.py       letter styles
     hoi4_rp/mod_files.py   the generated mod: events, localisation, modifiers
-    hoi4_rp/letter_mod.py  the generated GUI: letter windows, reputation box, ledger, treaty row
+    hoi4_rp/letter_mod.py  the generated GUI: letter windows, reputation box, ledger, faction window, treaty row
     hoi4_rp/game.py        show an event, wait for the pick, run effects
     hoi4_rp/llm.py         NanoGPT client and call log
     hoi4_rp/config.py      config.ini loading

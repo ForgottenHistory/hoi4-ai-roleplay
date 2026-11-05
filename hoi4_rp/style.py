@@ -167,6 +167,11 @@ def last_word(form: str, before: List[str] = ()) -> str:
 
 
 _FEELING_LINE = re.compile(r"^[\W_]*feeling[*_\s]*[:\-–].*$\n?", re.I | re.M)
+# The feeling without its label, as models often write it: a bare word or few on the first line, then a blank line
+# ("Cold fury", "Contempt edged with weariness"). A salutation ends in a comma or starts with an address.
+_BARE_FEELING = re.compile(r"\A\s*[*_]*([A-Za-z][A-Za-z' -]{1,40}?)[*_]*[ \t]*\n[ \t]*\n")
+_ADDRESS = re.compile(r"(?i)^(to|dear|my|comrade|sheikh|herr|monsieur|madame|excellency|mr|mrs|sir|general|"
+                      r"president|your|his|her|in the name)\b")
 
 
 def strip_feeling(raw: str, who: str = "", camp=None) -> str:
@@ -174,7 +179,11 @@ def strip_feeling(raw: str, who: str = "", camp=None) -> str:
     `camp` kept as the country's latest (feelings())."""
     m = _FEELING_LINE.search(raw)
     if not m:
-        return raw
+        b = _BARE_FEELING.match(raw)
+        if not b or len(b.group(1).split()) > 5 or _ADDRESS.match(b.group(1).strip()):
+            return raw
+        raw = f"FEELING: {b.group(1).strip()}\n" + raw[b.end():]
+        m = _FEELING_LINE.search(raw)
     feeling = m.group(0).split(":", 1)[-1].strip(" *_.\n").lower()
     if who:
         print(f"  {who} writes in {feeling or '?'}")

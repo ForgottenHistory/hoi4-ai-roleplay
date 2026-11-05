@@ -455,11 +455,13 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
             ended = [t["labels"].get(k, k) for k in t["items"]
                      if _endable(k) and _still(rel, k) and actions._effect(_end_script(k, tag, player))]
             _close(t, "ended", today, "its term ran out")
-            text = (f"The term of the treaty of {t['when']} between {them_name} and {me_name} ran out"
-                    + (f": {', '.join(ended)} came to an end." if ended else "."))
+            changed = True
+            if not ended:
+                continue                  # nothing of it held still (the pact had ended before): nothing to tell
+            text = (f"The term of the treaty of {t['when']} between {them_name} and {me_name} ran out: "
+                    f"{', '.join(ended)} came to an end.")
             _event(camp, "ended", [tag, player], text)
             letters.append((tag, text))
-            changed = True
             continue
         for p in t["payments"]:
             if _left(p) <= 0 or today < _next_due(t, p):

@@ -9,6 +9,11 @@ no civil war, the player not fighting in the war at all: player_at_table) are lo
                 STALL_MOVE in the last STALL_DAYS
     lopsided    one side at LOPSIDED surrender progress or more
 
+and no other front of the war live (live_elsewhere): the conference ends the whole war, so a quiet front's peace
+would take a won war from a third country. Both factions come to the table whole (peace.make), members fighting
+on their own included: a peace with a faction's leader alone left its members at war, and the leader was called
+back in weeks later.
+
 with the war at least MIN_DAYS old and the pair not talked to in COOLDOWN_DAYS. At most PER_MONTH of them, the
 stalled first. The side worse off writes (in a stalemate, either): two short LLM calls, an offer (OFFER: yes or no,
 it may decide to fight on) and the answer (ANSWER: accept or decline). Both see the same picture: the war's
@@ -64,6 +69,23 @@ def _moved(camp: campaign.Campaign, tag: str, today: str) -> Optional[float]:
     return None if then is None or now is None else abs(now - then)
 
 
+def live_elsewhere(camp: campaign.Campaign, a: str, b: str, today: str) -> str:
+    """A country other than the two fighting either of them whose front is live: capitulated, or its surrender
+    progress moved STALL_MOVE in STALL_DAYS (its name, or ""). The conference ends that war too: an Italy-USA white
+    peace across the ocean took Britain's win over a capitulated Ireland, twice."""
+    snap = camp.snapshot or {}
+    c = snap.get("countries", {})
+    others = {t for key in snap.get("wars", []) for t in key.split("|")
+              if {a, b} & set(key.split("|"))} - {a, b}
+    for t in sorted(others):
+        if c.get(t, {}).get("capitulated"):
+            return f"{c[t].get('name', t)} has capitulated"
+        m = _moved(camp, t, today)
+        if m is not None and m >= STALL_MOVE:
+            return f"{c.get(t, {}).get('name', t)}'s front is moving"
+    return ""
+
+
 def player_at_table(player: str, a: str, b: str) -> bool:
     """Would the player sit at a conference between a and b? The game's conference ends the whole war: everyone
     fighting either of them, not only their factions and subjects (the player fighting Britain beside the USA lost
@@ -92,7 +114,7 @@ def candidates(camp: campaign.Campaign) -> List[Tuple[str, str, str]]:
             continue
         if today and st["pairs"].get(key) and _days(today) - _days(st["pairs"][key]) < COOLDOWN_DAYS:
             continue
-        if not peace.possible(a, b) or player_at_table(player, a, b):
+        if not peace.possible(a, b) or player_at_table(player, a, b) or live_elsewhere(camp, a, b, today):
             continue
         try:
             sa, sb = gamestate.country(a), gamestate.country(b)
@@ -112,6 +134,8 @@ def candidates(camp: campaign.Campaign) -> List[Tuple[str, str, str]]:
         elif (worse.surrender or 0) >= LOPSIDED:
             found.append((1, worse.tag, b if worse.tag == a else a, "lopsided"))
     found.sort(key=lambda x: x[0])
+    for _, w, o, _ in found[:PER_MONTH]:
+        st["pairs"][campaign.pair(w, o)] = today    # talks under way: a month ticking over before they end starts none
     return [(w, o, why) for _, w, o, why in found[:PER_MONTH]]
 
 

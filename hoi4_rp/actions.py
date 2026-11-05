@@ -181,6 +181,8 @@ class Relation:
     me_parties: Dict[str, str] = None
     them_rights: Set[str] = None    # them's states whose resource rights I already hold
     me_rights: Set[str] = None      # my states whose resource rights them already holds
+    them_rights_away: Dict[str, str] = None   # them's states whose rights anyone holds: state -> holder
+    me_rights_away: Dict[str, str] = None
     them_leader: bool = False       # them leads a faction
     me_leader: bool = False
     them_in_faction: bool = False   # them is in any faction
@@ -301,6 +303,7 @@ def relation(them: str, me: str) -> Relation:
                     them_subjects=subjects_of(them), me_subjects=subjects_of(me),
                     them_factories=factory_counts(them), me_factories=factory_counts(me),
                     them_rights=rights_held(me, them), me_rights=rights_held(them, me),
+                    them_rights_away=rights_given(them), me_rights_away=rights_given(me),
                     them_leader=them_leader, me_leader=me_leader, them_in_faction=them_in, me_in_faction=me_in,
                     them_full=them_full, me_full=me_full,
                     me_enemies=joinable_enemies(me, them), them_enemies=joinable_enemies(them, me),
@@ -580,18 +583,34 @@ def is_rights(key: str) -> bool:
     return key.startswith(("give:rights:", "ask:rights:"))
 
 
+# A supply route in a country block, with the country its resource rights go to:
+#   delivery_route={ type=2 from_state=1048 to_state=126 from_port=7982 to_port=11374 sender="IRQ" receiver="ENG"
+#   convoys_owner="ENG" naval_path={ ... } dirty=no } given_resource_rights={ { aluminium "ENG" } ... }
+# (ports only on a route by sea)
+_ROUTE = re.compile(r'from_state=(\d+)\s+to_state=\d+(?:\s+\w+=\d+)*\s+sender="(\w+)"\s+receiver="(\w+)"'
+                    r'(?:[^{}]|\{[^{}]*\})*\}\s*given_resource_rights=\{\s*\{\s*\w+\s+"(\w+)"')
+
+
 def rights_held(receiver: str, giver: str) -> Set[str]:
     """`giver`'s states whose resource rights `receiver` already holds (from `receiver`'s supply routes)."""
     try:
         block = bridge.country_block(receiver)
     except Exception:
         return set()
-    out = set()
-    for m in re.finditer(r'from_state=(\d+)\s+to_state=\d+\s+sender="(\w+)"\s+receiver="(\w+)"', block):
-        if m.group(2) == giver and m.group(3) == receiver and \
-                "given_resource_rights" in block[m.end():m.end() + 600]:
-            out.add(m.group(1))
-    return out
+    return {m.group(1) for m in _ROUTE.finditer(block)
+            if m.group(2) == giver and m.group(3) == receiver and m.group(4) == receiver}
+
+
+def rights_given(giver: str) -> Dict[str, str]:
+    """`giver`'s states whose resource rights some country already holds: state id -> holder (from `giver`'s own
+    block, where each of its states' routes names who the output goes to). Such rights can't be sold again: the
+    game would just move them to the new buyer."""
+    try:
+        block = bridge.country_block(giver)
+    except Exception:
+        return {}
+    return {m.group(1): m.group(4) for m in _ROUTE.finditer(block)
+            if m.group(2) == giver and m.group(3) == giver and m.group(4) != giver}
 
 
 def rights_gives(rel: "Relation") -> List[str]:
@@ -1435,7 +1454,8 @@ def possible(rel: Relation, key: str) -> bool:
         if not state and give and key in _AFTER:         # the land is still mine: it is theirs once the package runs
             state = tradeable(rel.me_border).get(sid)
         held = (rel.them_rights if give else rel.me_rights) or set()
-        return not rel.at_war and bool(state and state.resources) and sid not in held
+        away = (rel.them_rights_away if give else rel.me_rights_away) or {}    # sold to someone already
+        return not rel.at_war and bool(state and state.resources) and sid not in held and sid not in away
     if is_state(key):
         sid = key.rsplit(":", 1)[1]
         if key.startswith("give:") and rel.them_subject and rel.bound != "subject":

@@ -207,12 +207,15 @@ def parse(raw: str) -> Dict:
 def _resolve(line: str, scope: str, tags: List[str], names: Dict[str, str]) -> List[str]:
     """The tags a TAGS line means when it gave names instead ("Czechoslovak Republic"): the known countries in it,
     in the order they appear."""
+    from .storyteller import _NAME_FILLER
     flat = lambda x: " ".join(re.findall(r"[a-z0-9]+", x.lower()))
     low = flat(line)
     found = []
     for t in tags:
+        # the tag, the full name, or a telling word of it ("Iran" for Imperial State of Iran)
+        words = [w for w in flat(names.get(t, "")).split() if len(w) >= 4 and w not in _NAME_FILLER | {"imperial"}]
         pats = (re.search(r"(?<![a-z0-9])" + re.escape(flat(x)) + r"(?![a-z0-9])", low)
-                for x in (t, names.get(t, "")) if x)
+                for x in (t, names.get(t, ""), *words) if x)
         spots = [m.start() for m in pats if m]
         if spots:
             found.append((min(spots), t))
@@ -225,7 +228,9 @@ def check(camp: campaign.Campaign, pick: Dict, pairs: List[Tuple[str, str]], tag
     scope, t = pick["scope"], pick["tags"]
     if scope in ("inside", "between") and names and not (
             len(t) == (1 if scope == "inside" else 2) and all(x in tags for x in t)):
-        t = pick["tags"] = _resolve(pick.get("tags_line", ""), scope, tags, names) or t
+        # a TAGS line of names; else of something else ("civil unrest"): the countries the crisis itself names
+        t = pick["tags"] = (_resolve(pick.get("tags_line", ""), scope, tags, names)
+                            or _resolve(f"{pick.get('title', '')} {pick.get('text', '')}", scope, tags, names) or t)
     if scope in ("none", ""):
         return False, "none" if scope else "no readable pick"
     if not pick["text"] or not pick["title"]:

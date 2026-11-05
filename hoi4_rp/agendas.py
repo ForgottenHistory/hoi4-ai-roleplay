@@ -293,7 +293,7 @@ def generate(camp: campaign.Campaign, w: Dict[str, Dict], tags: List[str], show:
             msgs = prompt(me, cands, snap)
             if show:
                 print(f"----- prompt for {me.name}\n{msgs[0]['content']}\n-----")
-            jobs.append((me, cands, pool.submit(llm.chat, msgs, None, 0.7, 1500, "ai:agenda", tag)))
+            jobs.append((me, cands, pool.submit(llm.chat, msgs, None, 0.7, None, "ai:agenda", tag)))
         for me, cands, fut in jobs:
             r = {"me": me, "tag": me.tag, "cands": cands, "aims": [], "dropped": [], "raw": "", "error": ""}
             try:

@@ -263,7 +263,9 @@ def make(me: str, other: str, player_leads: bool = True) -> Optional[str]:
     follow = (f"every_country = {{ limit = {{ NOT = {{ tag = {me} }} OR = {{ is_in_faction_with = {me} "
               f"is_subject_of = {me} }} }} set_country_flag = {FOLLOW} "
               f"add_dynamic_modifier = {{ modifier = {SCORE} }} }}") if player_leads else ""
-    scopes = f"set_country_flag = {FACTION_SCOPE} " if player_leads else ""
+    # Between AI countries too: the default scope left a faction member fighting on in its own war with the other
+    # side (Mongolia with Japan), and its leader was called back into it weeks after the peace.
+    scopes = f"set_country_flag = {FACTION_SCOPE} "
     # started by EVENT within the game hour, not here inside the frame (see _EVENTS)
     reply = bridge.send(f"eval_effect {winner} = {{ {follow} {flag} {scopes}"
                         f"set_variable = {{ {SCORE_VAR} = {abs(margin):.3f} }} "

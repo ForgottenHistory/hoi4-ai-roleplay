@@ -183,6 +183,12 @@ def clear_letter_box() -> None:
     bridge.editbox_set(EDITBOX_NAME)
 
 
+# Letters outside Latin-1 that are not an accented letter, so NFKD can't take them apart ("Kâzım" lost its ı)
+_NO_ACCENT = {"ı": "i", "İ": "I", "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ħ": "h", "Ħ": "H", "ŧ": "t", "Ŧ": "T",
+              "ŋ": "ng", "Ŋ": "Ng", "œ": "oe", "Œ": "Oe", "ſ": "s", "ə": "e", "Ə": "E", "ʻ": "'", "ʼ": "'",
+              "‚": ",", "„": '"', "•": "-", "‐": "-", "‑": "-", "‒": "-", "―": "-", "€": "EUR"}
+
+
 def _clean_for_game(text: str) -> str:
     """Make LLM text safe for HOI4 localisation: no markup characters, only Latin-1 letters. If the model wrote
     several drafts separated by a rule line (---), only the first is kept."""
@@ -195,12 +201,14 @@ def _clean_for_game(text: str) -> str:
     text = re.sub(r"[§$£\[\]@]", "", text)            # HOI4 colour codes, key refs, icons, scripted loc
     text = re.sub(r"[ 	]*-[ 	]*(?=\S)", lambda m: " - " if m.group(0).strip() != m.group(0) else "-", text)
     text = re.sub(r"[ 	]{2,}", " ", text)
+    text = re.sub(r"(?m)^[ \t]*-[ \t]*-[ \t]*", "- ", text)    # "- [[offer pact]] - a pact", its command taken out
     out = []
     for ch in text:
         if ord(ch) < 256:
             out.append(ch)
         else:
-            out.append(unicodedata.normalize("NFKD", ch).encode("latin-1", "ignore").decode("latin-1"))
+            out.append(_NO_ACCENT.get(ch) or
+                       unicodedata.normalize("NFKD", ch).encode("latin-1", "ignore").decode("latin-1"))
     return re.sub(r"\n{3,}", "\n\n", "".join(out)).strip()
 
 
@@ -1120,13 +1128,17 @@ def _not_by_letter(camp: campaign.Campaign, player: str, snap: Dict, events: Lis
         tie, ended = kind.split(":")[1], kind.endswith(":end")
         other = next((t for t in e["tags"] if t != player), "")
         mine = [x for x in recent if other in x["tags"] and player in x["tags"]]
+        # a deal with a third country about this tie: "ask:sanction:ENG" (the player embargoes ENG at someone's
+        # wish), "give:drop_pact:IRQ" (someone ends its pact with the player at a third's wish)
+        third = lambda x, what: re.fullmatch(rf"(give|ask):{what}:({other}|{player})", x.get("type", ""))
         if ended:
             deal = tie.replace("my_", "").replace("their_", "")
             told = at_war(other) or any(x.get("type", "") in (f"end:{deal}", "end:embargo" if "embargo" in tie else "",
                                                               "treaty:lapsed", "guarantee:expired", "war")
-                                        for x in mine)
+                                        or third(x, f"drop_{deal}") for x in mine)
         else:
-            told = any(x.get("type", "") in _BY_LETTER.get(tie, ()) for x in mine)
+            told = any(x.get("type", "") in _BY_LETTER.get(tie, ())
+                       or ("embargo" in tie and third(x, "sanction")) for x in mine)
         if not told:
             out.append(e)
     return out
@@ -1456,7 +1468,7 @@ class _Session:
             print(f"  [ai] storyteller (wars): {line}")
         if not self.plot_job and plots.due(camp):
             plots._store(camp)["tick"] = month.snap.get("date", "")
-            self.plot_job = (self.ai_pool.submit(llm.chat, plots.messages(camp, month.snap), None, 0.7, 1500,
+            self.plot_job = (self.ai_pool.submit(llm.chat, plots.messages(camp, month.snap), None, 0.7, None,
                                                  "ai:plots", ""), camp.id)
         if not self.crisis and crises.due(camp):
             self._start_crisis(camp, month)
@@ -1494,7 +1506,7 @@ class _Session:
         pairs, tags = crises.candidates(camp, snap, month.w, month.scored)
         msgs = crises.messages(camp, snap, month.w, pairs, tags, month.now)
         if msgs:
-            self.crisis = (self.ai_pool.submit(llm.chat, msgs, None, 0.9, 1500, "ai:crisis", ""), camp.id, pairs, tags)
+            self.crisis = (self.ai_pool.submit(llm.chat, msgs, None, 0.9, None, "ai:crisis", ""), camp.id, pairs, tags)
 
     def _expiry_notice(self, snap: Dict, texts: List[str]) -> None:
         """One popup for the agreements that ran out today, with the reminder that renewing takes a letter."""
@@ -1731,7 +1743,7 @@ class _Session:
         camp.save()
         print(f"  news event: writing one about: {ev['text'][:200]}")
         msgs = news.messages(camp, ev, me.name, [p.ideology for p in me.parties])
-        self.news_job = (self.story_pool.submit(llm.chat, msgs, None, 1.0, 1500, "news", ev["tags"][0]), camp.id,
+        self.news_job = (self.story_pool.submit(llm.chat, msgs, None, 1.0, None, "news", ev["tags"][0]), camp.id,
                          ev["date"])
 
     def news_tick(self, player: str, block: str) -> None:

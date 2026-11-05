@@ -506,7 +506,7 @@ class Month:
             print(f"  [storyteller] no agenda for {tag}: {e}")
             return
         cands = agendas.candidates(me, self.snap, self.w)
-        self.jobs.append((me, cands, self.pool.submit(llm.chat, agendas.prompt(me, cands, self.snap, self.camp), None, 0.7, 1500,
+        self.jobs.append((me, cands, self.pool.submit(llm.chat, agendas.prompt(me, cands, self.snap, self.camp), None, 0.7, None,
                                                       "ai:agenda", tag)))
 
     def _agendas_done(self) -> bool:
@@ -542,7 +542,7 @@ class Month:
                 else:
                     msgs = self.wm.messages()
                     if msgs:
-                        self.wfut = self.pool.submit(llm.chat, msgs, None, 0.7, 900, "ai:storyteller", "wars")
+                        self.wfut = self.pool.submit(llm.chat, msgs, None, 0.7, None, "ai:storyteller", "wars")
                     else:
                         self.war = {"error": "", "raw": "", "picks": [], "note": "no war to weigh; no call made"}
                     self.phase = "options"              # on to the incident's call
@@ -580,7 +580,7 @@ class Month:
                         self.main = {"pick": None, "ok": False, "why": "", "aim": None, "raw": "", "error": "",
                                      "pairs": 0}
                     else:
-                        self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 1200, "ai:storyteller", "")
+                        self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, None, "ai:storyteller", "")
                         self.phase = "wait"
                         continue
                     if not self._guarantees():
@@ -617,7 +617,7 @@ class Month:
                         if not self._factions():
                             return self.main
                         continue
-                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 800, "ai:storyteller", "guarantees")
+                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, None, "ai:storyteller", "guarantees")
                     self.phase = "g_wait"
             elif self.phase == "g_wait":
                 if not self.fut.done():
@@ -639,7 +639,7 @@ class Month:
                         if not self._end():
                             return self.main
                         continue
-                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, 800, "ai:storyteller", "factions")
+                    self.fut = self.pool.submit(llm.chat, msgs, None, 0.8, None, "ai:storyteller", "factions")
                     self.phase = "f_wait"
             elif self.phase == "f_wait":
                 if not self.fut.done():
@@ -897,7 +897,7 @@ def guarantees_main(args: List[str]) -> int:
         return 0
     if "--prompt" in args:
         print(f"\n----- prompt\n{msgs[0]['content']}\n-----")
-    res = gm.read(llm.chat(msgs, None, 0.8, 800, "ai:storyteller", "guarantees"))
+    res = gm.read(llm.chat(msgs, None, 0.8, None, "ai:storyteller", "guarantees"))
     p = res["pick"]
     print("\nPICK: " + (f"{p['from']} -> {p['to']} " + ("(allowed)" if res["ok"] else f"(DROPPED: {res['why_not']})")
                         + f"\n  {p['why']}" if p else "none")
@@ -1123,7 +1123,7 @@ def factions_main(args: List[str]) -> int:
         return 0
     if "--prompt" in args:
         print(f"\n----- prompt\n{msgs[0]['content']}\n-----")
-    res = fm.read(llm.chat(msgs, None, 0.8, 800, "ai:storyteller", "factions"))
+    res = fm.read(llm.chat(msgs, None, 0.8, None, "ai:storyteller", "factions"))
     p = res["pick"]
     print("\nPICK: " + (f"{p['from']} -> {p['to']}" + (f" ({p['name']})" if p["name"] else "")
                         + (" (allowed)" if res["ok"] else f" (DROPPED: {res['why_not']})") + f"\n  {p['why']}"
@@ -1262,12 +1262,18 @@ class WarMonth:
             if not m:
                 continue
             left = m.group(1)
-            for i, x in enumerate(self.cands):     # the pair named on the left, by tag or name, in that order
-                a, b = _named_at(left, x["from"], self.name(x["from"])), _named_at(left, x["to"], self.name(x["to"]))
-                if i not in done and a is not None and b is not None and a < b:
-                    done.add(i)
-                    out["picks"].append((x, m.group(2).lower(), m.group(3).strip(" *")))
-                    break
+            named = lambda x: (_named_at(left, x["from"], self.name(x["from"])),
+                               _named_at(left, x["to"], self.name(x["to"])))
+            # the pair named on the left, by tag or name, in that order; else the one open pair it names one side
+            # of (a model writes CHI for the Chinese Soviet Republic, PRC)
+            pick = next((i for i, x in enumerate(self.cands) if i not in done and None not in named(x)
+                         and named(x)[0] < named(x)[1]), None)
+            if pick is None:
+                half = [i for i, x in enumerate(self.cands) if i not in done and named(x) != (None, None)]
+                pick = half[0] if len(half) == 1 else None
+            if pick is not None:
+                done.add(pick)
+                out["picks"].append((self.cands[pick], m.group(2).lower(), m.group(3).strip(" *")))
         return out
 
 
@@ -1330,7 +1336,7 @@ def wars_main(args: List[str]) -> int:
         return 0
     if "--prompt" in args:
         print(f"\n----- prompt\n{msgs[0]['content']}\n-----")
-    res = wm.read(llm.chat(msgs, None, 0.7, 900, "ai:storyteller", "wars"))
+    res = wm.read(llm.chat(msgs, None, 0.7, None, "ai:storyteller", "wars"))
     print("\nDECISIONS:\n" + ("\n".join(f"- {x['from']} -> {x['to']}: {s} - {why}" for x, s, why in res["picks"])
                               or f"none readable:\n{res['raw']}"))
     return 0
@@ -1377,7 +1383,7 @@ def main(args: List[str]) -> int:
             continue
         if show and i == 0:
             print(f"\n----- prompt\n{msgs[0]['content']}\n-----")
-        raw = llm.chat(msgs, None, 0.8, 1200, "ai:storyteller", "")
+        raw = llm.chat(msgs, None, 0.8, None, "ai:storyteller", "")
         pick = parse(raw)
         ok, why, aim = check(camp, pick, w, snap, now, sim, opts)
         if not pick["kind"]:

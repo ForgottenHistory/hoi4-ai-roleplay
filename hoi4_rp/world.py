@@ -62,8 +62,11 @@ def lore() -> Dict[str, Setting]:
     return out
 
 
-_FALLBACK = Setting("vanilla", "Vanilla", "This game follows real history from 1936, but the live situation below may "
-                    "already have diverged from it: trust the situation over your own historical knowledge.")
+_FALLBACK = Setting("vanilla", "Vanilla", "SETTING: this game starts in 1936 from the world as it really stood, and "
+                    "from there it is open: any country may take another government, other friends and enemies, "
+                    "other wars. What happened in real history after that is not a script; what happens here is "
+                    "decided in play. Trust the live situation below over your own historical knowledge, and let "
+                    "each country act on its present rulers' outlook and interests, not on the part history gave it.")
 
 _LORE = ("Stay true to this world's lore in everything you write: who your country is decides how it speaks, what "
          "it knows and what it would never do.")

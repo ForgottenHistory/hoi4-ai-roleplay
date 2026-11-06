@@ -13,7 +13,8 @@ the storyteller sees the result and works around it.
              Comintern... would be pre-empted)
     break    a member and its leader that no longer belong together: an aim against each other, backing the
              faction's enemy (or the leader backing the member's), another ideology without a war in common (two of
-             democratic, communist, fascist count double); the member leaves or the leader expels it.
+             democratic, communist, fascist count double, and the two calling each other friends doesn't cancel
+             that); the member leaves or the leader expels it.
              Rare: one in the world every BREAK_GAP_DAYS
 
 Size: a faction led by an AI country holds at most cap() of the world's industry (20% in a calm world, 35% at full
@@ -508,11 +509,17 @@ def candidates(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Dict]:
             if led:
                 s, stake = s + 3, stake + [f"the leader stands by {', '.join(name(t) for t in sorted(led))}, whom "
                                            f"it opposes"]
+            clash = bool(ideo.get(x) and ideo.get(L) and ideo[x] != ideo[L] and {ideo[x], ideo[L]} <= CLASHING)
             if ideo.get(x) and ideo.get(L) and ideo[x] != ideo[L]:
-                s += 4 if {ideo[x], ideo[L]} <= CLASHING else 2
+                s += 4 if clash else 2
                 stake.append(f"its government is now {ideo[x]}, the leader's {ideo[L]}")
             if x in friends(L) or L in friends(x):
-                s -= 3
+                # friendship outweighs a lesser difference; a democracy under a fascist (or the like) stays a
+                # question for the storyteller, who sees both sides
+                if clash:
+                    stake.append("yet the two still call each other friends")
+                else:
+                    s -= 3
             if s < 4:
                 continue
             out.append({"move": "break", "a": x, "b": L, "faction": fname, "stake": stake, "aim": aim,

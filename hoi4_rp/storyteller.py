@@ -123,6 +123,13 @@ def blocs(camp: campaign.Campaign) -> List[Dict]:
     return sorted(out, key=lambda b: (-len(b["members"]), b["target"]))
 
 
+def gov(snap: Dict, tag: str) -> str:
+    """'TAG; fascist under Oswald Mosley': who rules a country, so a pick weighs the government it has now."""
+    x = snap.get("countries", {}).get(tag, {})
+    rule = x.get("ideology", "") + (f" under {x['leader']}" if x.get("leader") else "")
+    return f"{tag}; {rule}" if rule else tag
+
+
 def blocs_text(camp: campaign.Campaign, name) -> str:
     rows = blocs(camp)
     if not rows:
@@ -257,7 +264,8 @@ def messages(camp: campaign.Campaign, snap: Dict, w: Dict[str, Dict], shortlist:
     if shortlist:
         parts.append("PAIRS, AND THE INCIDENTS POSSIBLE BETWEEN THEM NOW (the game's rules already checked; pick only "
                      "from these):\n" + "\n".join(
-                         f"- {name(a)} ({a}) and {name(b)} ({b}): {', '.join(why)}{possible(a, b)}{possible(b, a)}"
+                         f"- {name(a)} ({gov(snap, a)}) and {name(b)} ({gov(snap, b)}): {', '.join(why)}"
+                         f"{possible(a, b)}{possible(b, a)}"
                          for _, a, b, why, _ in shortlist))
     from . import crises, plots
     ctx = crises.context(camp, tags, name, now)
@@ -302,6 +310,20 @@ _KEYLINE = r"^[\W_]*{key}[*_\s]*[:\-–]+\s*(.+)$"
 def _line(text: str, key: str) -> str:
     m = re.search(_KEYLINE.format(key=key), text, re.I | re.M)
     return m.group(1).strip(" *_.") if m else ""
+
+
+def _named_pair(said: str, pairs: List[Tuple[str, str]], names: Dict[str, str],
+                aliases: Optional[Dict[str, str]] = None) -> List[str]:
+    """The two tags of an offered pair that a pick line means when it gives names instead of tags ("Kingdom of
+    Belgium United Kingdom", "Republic of Poland to British Empire (JOIN)"), in the order they appear; [] when it
+    names no offered pair. `aliases` {other name: tag}: a faction's name stands for its leader ("FRA Allies")."""
+    from .crises import _resolve
+    for alias, tag in (aliases or {}).items():
+        said = re.sub(r"(?<![A-Za-z0-9])(the\s+)?" + re.escape(alias) + r"(?![A-Za-z0-9])", f" {tag} ", said,
+                      flags=re.I)
+    tags = sorted({t for p in pairs for t in p})
+    t = _resolve(said, "between", tags, names)
+    return t if len(t) == 2 and any({t[0], t[1]} == {a, b} for a, b in pairs) else []
 
 
 def parse(raw: str) -> Dict:
@@ -789,8 +811,9 @@ class GuaranteeMonth:
             parts.append("POSSIBLE GUARANTEES (the game's rules checked; pick only from these). Either side may make "
                          "the move: the guarantor offers (FROM guarantor, TO threatened) or the threatened asks "
                          "(FROM threatened, TO guarantor):\n" + "\n".join(
-                             f"- {name(x['by'])} ({x['by']}) for {name(x['of'])} ({x['of']}) against "
-                             f"{name(x['against'])}: {', '.join(x['stake'])}; {where[x['reach']]}" for x in self.cands))
+                             f"- {name(x['by'])} ({gov(self.snap, x['by'])}) for {name(x['of'])} "
+                             f"({gov(self.snap, x['of'])}) against {name(x['against'])} "
+                             f"({gov(self.snap, x['against'])}):{', '.join(x['stake'])}; {where[x['reach']]}" for x in self.cands))
         mine = [x for x in _state(self.camp)["incidents"] if x["kind"] == "guarantee"][-RECENT:]
         if mine:
             parts.append("YOUR LATEST GUARANTEES (vary them):\n" + "\n".join(
@@ -813,6 +836,9 @@ class GuaranteeMonth:
         said = _line(raw, "guarantee")
         out = {"raw": raw, "error": "", "pick": None, "ok": False, "why_not": "", "cand": None, "renew": []}
         t = tags(said)
+        pairs = [(x["by"], x["of"]) for x in self.cands]
+        if "none" not in said.lower() and not (len(t) >= 2 and any({t[0], t[1]} == set(p) for p in pairs)):
+            t = _named_pair(said, pairs, {x: self.name(x) for p in pairs for x in p}) or t
         if len(t) >= 2 and "none" not in said.lower():
             out["pick"] = {"from": t[0], "to": t[1], "why": _line(raw, "why")}
             cand = next((x for x in self.cands if {x["by"], x["of"]} == {t[0], t[1]}), None)
@@ -948,13 +974,14 @@ class FactionMonth:
     def line(self, x: Dict) -> str:
         from . import factions
         n = self.name
+        a, b = gov(self.snap, x["a"]), gov(self.snap, x["b"])
         where = {"near": "", "present": "; from another continent: unusual", "far": "; across the world: rare"}
         if x["move"] == "join":
-            head = f"JOIN: {n(x['a'])} ({x['a']}) and {factions.the(x['faction'])}, led by {n(x['b'])} ({x['b']})"
+            head = f"JOIN: {n(x['a'])} ({a}) and {factions.the(x['faction'])}, led by {n(x['b'])} ({b})"
         elif x["move"] == "found":
-            head = f"FOUND: {n(x['a'])} ({x['a']}) founds a new faction with {n(x['b'])} ({x['b']})"
+            head = f"FOUND: {n(x['a'])} ({a}) founds a new faction with {n(x['b'])} ({b})"
         else:
-            head = (f"BREAK: {n(x['a'])} ({x['a']}) and {factions.the(x['faction'])}, led by {n(x['b'])} ({x['b']}): the "
+            head = (f"BREAK: {n(x['a'])} ({a}) and {factions.the(x['faction'])}, led by {n(x['b'])} ({b}): the "
                     f"member leaves (FROM {x['a']}) or the leader expels it (FROM {x['b']})")
         return f"- {head}: {'; '.join(x['stake'])}{where.get(x['reach'], '')}"
 
@@ -1025,6 +1052,11 @@ class FactionMonth:
         said = _line(raw, "move")
         t = re.findall(r"\b[A-Z][A-Z0-9]{2}\b", said)
         out = {"raw": raw, "error": "", "pick": None, "ok": False, "why_not": "", "cand": None}
+        pairs = [(x["a"], x["b"]) for x in self.cands]
+        if "none" not in said.lower() and not (len(t) >= 2 and any({t[0], t[1]} == set(p) for p in pairs)):
+            # names instead of tags; a faction's name stands for its leader (joins and breaks)
+            leaders = {x["faction"]: x["b"] for x in self.cands if x.get("faction") and x["move"] != "found"}
+            t = _named_pair(said, pairs, {x: self.name(x) for p in pairs for x in p}, leaders) or t
         if len(t) < 2 or "none" in said.lower():
             return out
         name = _line(raw, "name")
@@ -1205,7 +1237,7 @@ class WarMonth:
         steps = (["war", "ultimatum", "wait"] if x["ultimatum_ok"] else ["war", "wait"]) if x["kind"] == "war" \
             else ["prepare", "wait"]
         way = f"\n  course: {c}" if (c := course.short(a)) else ""
-        return (f"=== {n(a)} ({a}) and {n(b)} ({b}): {'; '.join(why)}\n"
+        return (f"=== {n(a)} ({gov(self.snap, a)}) and {n(b)} ({gov(self.snap, b)}): {'; '.join(why)}\n"
                 f"{n(a)}'s aims:\n{_aims_lines(self.camp, a)}{way}\n{x['balance']}\n"
                 f"Possible: {', '.join(steps)}")
 

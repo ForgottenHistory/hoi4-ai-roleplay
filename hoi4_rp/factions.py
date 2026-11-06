@@ -456,9 +456,14 @@ def candidates(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Dict]:
             if b in friends(a) or a in friends(b):
                 s, stake = s + 2, stake + ["one aims to stand by the other"]
                 aim = aim or aim_line(L, x, ("back", "befriend"))
+            # A threat in common is what founds an alliance of neighbours (the Little Entente, the Balkan Pact), and
+            # it counts for minor countries, which mostly have no aims of their own (agendas cover the few
+            # dozen that matter most): with the same ideology, or a border, it is enough.
             common = threat_by.get(a, set()) & threat_by.get(b, set())
             if common:
-                s, stake = s + 2, stake + [f"both threatened by {', '.join(name(t) for t in sorted(common))}"]
+                s, stake = s + 3, stake + [f"both threatened by {', '.join(name(t) for t in sorted(common))}"]
+            if b in w[a]["neighbours"]:
+                s, stake = s + 1, stake + ["neighbours"]
             same = ideo.get(a) and ideo.get(a) == ideo.get(b)
             if same:
                 s, stake = s + 1, stake + ["the same ideology"]

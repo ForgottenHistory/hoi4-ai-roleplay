@@ -306,6 +306,13 @@ def threats(camp: campaign.Campaign, w: Dict[str, Dict]) -> List[Dict]:
     return sorted(out, key=lambda x: -x["weight"])
 
 
+def protects(by: Dict[str, int], of: Dict[str, int]) -> bool:
+    """Is a guarantor with factories `by` ({"civ", "mil"}) strong enough to protect a ward with `of`? Not when it
+    has less than half the ward's industry: Fengtian's guarantee of Japan protects nothing."""
+    power = lambda f: (f or {}).get("civ", 0) + (f or {}).get("mil", 0)
+    return power(by) >= 0.5 * power(of)
+
+
 def candidates(camp: campaign.Campaign, w: Dict[str, Dict], found: List[Dict]) -> List[Dict]:
     """Who might guarantee whom against what: [{"by", "of", "against", "stake": [words], "aim": the guarantor's
     aim at stake or None, "reach", "score"}], best first, at most PER_WARD per country and CANDIDATES in all.
@@ -315,7 +322,6 @@ def candidates(camp: campaign.Campaign, w: Dict[str, Dict], found: List[Dict]) -
     c, wars = snap.get("countries", {}), set(snap.get("wars", []))
     name = lambda t: c.get(t, {}).get("name", t)
     threatened = {(x["of"], x["by"]) for x in found}
-    power = lambda t: w.get(t, {}).get("civ", 0) + w.get(t, {}).get("mil", 0)
     out = []
     for t in found:
         of, by = t["of"], t["by"]
@@ -344,7 +350,7 @@ def candidates(camp: campaign.Campaign, w: Dict[str, Dict], found: List[Dict]) -
                 s, stake = s + 1, stake + ["neighbours"]
             if c[g].get("major"):
                 s += 1
-            if s < 3 or power(g) < 0.5 * power(of):
+            if s < 3 or not protects(w[g], w[of]):
                 continue                               # a guarantee from one much weaker protects nothing
             tier = reach_ok(camp, g, of, w, aim is not None)
             if not tier or (tier == "far" and not backs):

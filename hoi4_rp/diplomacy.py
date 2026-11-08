@@ -27,8 +27,9 @@ off the player's continent counts FAR_WEIGHT as much unless both are major power
 an Austrian story than Hungary and Romania, but the world isn't silent). A pair talks
 again only after COOLDOWN days, a country starts at most one exchange a month.
 
-Kept in the campaign: data["ai_diplomacy"] = {"tick": date, "queue": [[a, b]], "pairs": {"A|B": date},
-"started": {tag: date}}; the letters themselves under their pair (campaign.letters_with(a, b)), marked "dry".
+Kept in the campaign: data["ai_diplomacy"] = {"tick": date, "queue": [[a, b]], "flight": [moves being written],
+"pairs": {"A|B": date}, "started": {tag: date}}; the letters themselves under their pair (campaign.letters_with(a,
+b)), marked "dry".
 Logged readably to data/logs/ai_diplomacy.txt.
 """
 
@@ -163,9 +164,72 @@ def pick(camp: campaign.Campaign, scored: List[Tuple], n: int, cooldown_days: in
 
 def _state(camp: campaign.Campaign) -> Dict:
     st = camp.data.setdefault("ai_diplomacy", {})
-    for k, v in (("tick", ""), ("queue", []), ("pairs", {}), ("started", {}), ("applied", [])):
+    for k, v in (("tick", ""), ("queue", []), ("pairs", {}), ("started", {}), ("applied", []), ("flight", [])):
         st.setdefault(k, v)
     return st
+
+
+# ---------------------------------------------------------------- the storyteller's moves, queued until recorded
+#
+# A move ([from, to, kind, [aim], brief]) waits in "queue", and from its dispatch until its exchange is recorded in
+# "flight", both saved with the campaign: a restart queues the moves in flight again (resume()), a failed call
+# tries once more (retry()), and loading an earlier save keeps the moves queued before it. The brief keeps the day
+# it was queued: a move not written within STALE_DAYS is dropped, its moment passed. Japan's ultimatum to the
+# Qing, Russia's guarantee of the Qing and Fengtian joining Japan (October 1937) were lost when the game was
+# restarted and its save loaded.
+
+STALE_DAYS = 60
+
+
+def _brief(item: List) -> Optional[Dict]:
+    return item[4] if len(item) > 4 and isinstance(item[4], dict) else None
+
+
+def queued_on(item: List) -> str:
+    return (_brief(item) or {}).get("date", "")
+
+
+def enqueue(camp: campaign.Campaign, item: List) -> None:
+    """Queue a storyteller move, dated."""
+    if _brief(item) is not None:
+        _brief(item).setdefault("date", (camp.snapshot or {}).get("date") or camp.data.get("last_date") or "")
+    _state(camp)["queue"].append(item)
+
+
+def stale(camp: campaign.Campaign, item: List) -> bool:
+    d, today = queued_on(item), (camp.snapshot or {}).get("date", "")
+    return bool(d and today and campaign.shift(d, STALE_DAYS) < today)
+
+
+def sent(camp: campaign.Campaign, item: List) -> None:
+    """The move's dispatch is being written."""
+    _state(camp)["flight"].append(item)
+
+
+def landed(camp: campaign.Campaign, item: List) -> None:
+    """The move's exchange is over (recorded, or given up)."""
+    fl = _state(camp)["flight"]
+    if item in fl:
+        fl.remove(item)
+
+
+def retry(camp: campaign.Campaign, item: List) -> bool:
+    """A move whose exchange failed (the model timed out) goes back to the front of the queue, once."""
+    landed(camp, item)
+    brief = _brief(item)
+    if not brief or brief.get("tries", 0) >= 1:
+        return False
+    brief["tries"] = brief.get("tries", 0) + 1
+    _state(camp)["queue"].insert(0, item)
+    return True
+
+
+def resume(camp: campaign.Campaign) -> int:
+    """A new run: the moves whose exchanges were being written when the last one stopped are queued again, first."""
+    st = _state(camp)
+    back, st["flight"] = st["flight"], []
+    st["queue"][:0] = back
+    return len(back)
 
 
 # ---------------------------------------------------------------- the monthly draw
@@ -321,6 +385,13 @@ def menu(camp: campaign.Campaign, a: str, b: str, an: str, bn: str, threat: bool
                                  + actions.rights_asks(rel) + actions.dmz_asks(rel)
                                  + actions.subject_asks(rel) + actions.govt_asks(rel)
                                  + actions.war_asks(rel) + actions.commit_asks(rel))
+    from . import guarantees
+    # a guarantee only from one strong enough to protect the other: Japan, already Fengtian's guarantor, asked
+    # Fengtian to guarantee Japan
+    if not guarantees.protects(rel.them_factories, rel.me_factories):
+        offers = [k for k in offers if k != "give:guarantee"]
+    if not guarantees.protects(rel.me_factories, rel.them_factories):
+        asks = [k for k in asks if k != "ask:guarantee"]
     if only:
         offers, asks = [k for k in offers if only(k)], [k for k in asks if only(k)]
     from . import gates
@@ -448,11 +519,13 @@ def _only(brief: Dict):
 
 
 def dispatch_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: gamestate.CountryState,
-                    w: Dict[str, Dict], brief: Optional[Dict] = None) -> Tuple[List[Dict], List[str], List[str], bool]:
+                    w: Dict[str, Dict], brief: Optional[Dict] = None
+                    ) -> Tuple[Optional[List[Dict]], List[str], List[str], bool]:
     """`a`'s dispatch to `b`: (messages, offers, asks, whether it may set an ultimatum). `brief`: the storyteller's
     incident (storyteller.finish()): the dispatch is about it, its proposal holds the incident's item (anything
     else on the menu may come with it, given or asked in return), and an ultimatum is set only for an ultimatum
-    incident."""
+    incident. Messages are None when nothing of the incident is possible any longer (Finland asked to join the
+    Reichspakt after Germany's letter had taken it in)."""
     from . import actions
     threat = may_threaten(camp, a.tag, b.tag, actions.relation(a.tag, b.tag))
     if brief:
@@ -465,12 +538,12 @@ def dispatch_prompt(camp: campaign.Campaign, a: gamestate.CountryState, b: games
         f = actions._fmt(a.name, b.name)
         core = "\n".join(actions._item_lines("offer ", [k for k in offers if test(k)], f)
                          + actions._item_lines("ask ", [k for k in asks if test(k)], f))
+        if not core:
+            return None, offers, asks, threat   # done since it was queued, or no longer possible: no dispatch
         proposal = (f"{_moment(brief, a.name, b.name)} Add the proposal that does it, {n}, unless something in the "
                     f"situation makes {a.name} think better of it. It holds one of these:\n{core}\nand may add "
                     f"anything below that a real treaty of this kind would bring with it (what you pay for it, or "
-                    f"ask in return):\n{lines}\n{SHORT_NOTE}"
-                    if core else f"{_moment(brief, a.name, b.name)} Nothing of it is possible any longer: propose "
-                                 f"nothing.")
+                    f"ask in return):\n{lines}\n{SHORT_NOTE}")
     else:
         proposal = (f"Only if {a.name} really wants a deal now, add a proposal, {n}:\n"
                     f"{lines}\n{SHORT_NOTE}" if lines else "No agreement is possible between you now: propose nothing.")
@@ -827,10 +900,13 @@ def ultimatum_messages(camp: campaign.Campaign, u: Dict, a: gamestate.CountrySta
 
 
 def drop_after(camp: campaign.Campaign, key: str) -> None:
-    """An earlier save was loaded: this month's draw, the cooldowns and what took effect since are forgotten (the
-    save holds the game as it was; the letters, stances and guarantees go with their own rewinds)."""
+    """An earlier save was loaded: this month's draw, the moves queued since, the cooldowns and what took effect
+    since are forgotten (the save holds the game as it was; the letters, stances and guarantees go with their own
+    rewinds). Moves the storyteller queued before it stay."""
     st = _state(camp)
-    st["queue"] = []
+    before = lambda x: bool(queued_on(x)) and queued_on(x) < key      # the storyteller's moves made before it
+    st["queue"] = [x for x in st["queue"] if before(x)]
+    st["flight"] = [x for x in st["flight"] if before(x)]
     st["tick"] = st["tick"] if st["tick"] < key else ""
     st["pairs"] = {k: d for k, d in st["pairs"].items() if d < key}
     st["started"] = {k: d for k, d in st["started"].items() if d < key}

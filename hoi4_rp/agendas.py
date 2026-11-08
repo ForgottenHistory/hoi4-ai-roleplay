@@ -13,9 +13,11 @@ a war goal either way, a faction or overlord tie, a strong opinion, a rival majo
 the model remembers from history but the map has put far away. The prompt builds the aims from the live situation
 and tells the model not to follow real history.
 
-Covered: the major powers plus the countries in diplomacy.score()'s shortlist (MAX_COUNTRIES in all). Refreshed
-every REFRESH_DAYS of game time, or after something that changes what the country is (war, peace, capitulation, a
-new government, a faction or subject change, vanishing or appearing).
+Covered: the major powers, the countries the player has exchanged letters with lately, and the countries in
+diplomacy.score()'s shortlist (MAX_COUNTRIES in all). Refreshed every REFRESH_DAYS of game time, or after something
+that changes what the country is (war, peace, capitulation, a new government, a faction or subject change,
+vanishing or appearing). After a new government, a civil war, a capitulation or a change of overlord the old
+agenda isn't used at all until it is written again (outdated()).
 
     python -m hoi4_rp agendas [TAG ...] [--prompt] [--save]   print agendas for these countries (default: the covered
                                                               ones); --save keeps them (stop `run` first)
@@ -38,7 +40,11 @@ AIM_WORDS = 12
 TRIGGERS = {"war", "peace", "capitulation", "government", "country_new", "country_gone", "faction_left",
             "faction_founded", "faction_joined", "independence", "subject", "crisis", "fork", "civil_war",
             "faction_dissolved", "nuke"}
-KINDS = {"oppose": "work against TARGET: contain it, isolate it, prepare for a clash",
+# Events after which an agenda no longer speaks for the country at all: until it is written again the country has
+# no aims (the USA's, written before its civil war, still shaped MacArthur's letter a year later)
+OUTDATED = {"government", "civil_war", "capitulation", "subject", "independence"}
+LETTER_DAYS = 180            # a country that wrote to or heard from the player this recently has an agenda kept
+KINDS = {"oppose":"work against TARGET: contain it, isolate it, prepare for a clash",
          "befriend": "seek TARGET's friendship",
          "back": "stand behind TARGET: protect and support it",
          "land": "win territory from TARGET, a neighbour of yours, by pressure or by force",
@@ -212,10 +218,32 @@ def of(camp: campaign.Campaign, tag: str) -> Optional[Dict]:
     return a
 
 
+_OUTDATED: Dict = {"key": None, "tags": set()}
+
+
+def outdated(camp: campaign.Campaign, tag: str) -> bool:
+    """Has `tag` had a new government, a civil war, a capitulation or a change of overlord since its agenda was
+    written? Worked out once for all countries while the events and agendas stay as they are."""
+    store, ev = _store(camp), camp.data["events"]
+    key = (id(camp.data), len(ev), tuple(sorted((t, a["date"]) for t, a in store.items())))
+    if _OUTDATED["key"] != key:
+        tags = set()
+        for e in ev:
+            if e.get("type") in OUTDATED:
+                for t in (e["tags"] if e["type"] == "civil_war" else e["tags"][:1]):
+                    if t in store and e["date"] > store[t]["date"]:
+                        tags.add(t)
+        _OUTDATED.update(key=key, tags=tags)
+    return tag in _OUTDATED["tags"]
+
+
 def aims_of(camp: campaign.Campaign, tag: str) -> List[Dict]:
-    """The country's aims; one aimed at a tag that has been another country since it was written is dropped."""
+    """The country's aims; one aimed at a tag that has been another country since it was written is dropped, and
+    an outdated agenda (outdated()) has none."""
     a = of(camp, tag)
-    return [x for x in a["aims"] if not (x["target"] and _reborn(camp, x["target"], a["date"]))] if a else []
+    if not a or outdated(camp, tag):
+        return []
+    return [x for x in a["aims"] if not (x["target"] and _reborn(camp, x["target"], a["date"]))]
 
 
 def keep(camp: campaign.Campaign, tag: str, aims: List[Dict]) -> None:
@@ -245,7 +273,8 @@ def wants(camp: campaign.Campaign, tag: str, target: str, kind: str = "unite") -
 
 
 def covered(camp: campaign.Campaign, w: Dict[str, Dict], scored: List[Tuple]) -> List[str]:
-    """The countries that have an agenda: the major powers, then those in the storyteller's shortlist."""
+    """The countries that have an agenda: those of the player's story, the major powers, those the player has
+    exchanged letters with lately (what they write comes from it), then those in the storyteller's shortlist."""
     c = (camp.snapshot or {}).get("countries", {})
     player = camp.data["player"]
     ok = lambda t: (t in c and t != player and not c[t].get("capitulated") and not c[t].get("voiceless")
@@ -253,8 +282,10 @@ def covered(camp: campaign.Campaign, w: Dict[str, Dict], scored: List[Tuple]) ->
     from . import plots
     story = [t for t in plots.tags(camp) if ok(t)]       # the countries of the player's story first
     majors = [t for t in w if c.get(t, {}).get("major") and ok(t)]
+    since = campaign.shift((camp.snapshot or {}).get("date", ""), -LETTER_DAYS)
+    writing = [t for t, ls in camp.threads().items() if ls and since and ls[-1]["date"] >= since and ok(t)]
     shortlist = [t for x in scored[:12] for t in (x[1], x[2]) if ok(t)]
-    return list(dict.fromkeys(story + majors + shortlist))[:MAX_COUNTRIES]
+    return list(dict.fromkeys(story + majors + writing + shortlist))[:MAX_COUNTRIES]
 
 
 def describe(camp: campaign.Campaign, tag: str, name_of) -> str:

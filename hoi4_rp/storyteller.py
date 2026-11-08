@@ -730,7 +730,7 @@ def finish(camp: campaign.Campaign, res: Dict) -> Optional[List]:
     brief = {"kind": pick["kind"], "aim": aim["aim"], "aim_kind": aim["kind"], "target": aim["target"],
              "why": pick["why"]}
     item = [pick["from"], pick["to"], pick["kind"], [aim["aim"]], brief]
-    diplomacy._state(camp)["queue"].append(item)
+    diplomacy.enqueue(camp, item)
     diplomacy.log([head + f"{line}   [{aim['aim']}]", f"  {pick['why']}"])
     return item
 
@@ -894,7 +894,7 @@ def finish_guarantee(camp: campaign.Campaign, g: Optional[Dict]) -> Optional[Lis
     brief = {"kind": "guarantee", "aim": aim, "aim_kind": "back", "target": x["of"] if offers else x["by"],
              "why": pick["why"]}
     item = [pick["from"], pick["to"], "guarantee", [aim], brief]
-    diplomacy._state(camp)["queue"].append(item)
+    diplomacy.enqueue(camp, item)
     diplomacy.log([head + f"{line}   [{aim}; {x['reach']}]", f"  {pick['why']}"])
     camp.save()
     return item
@@ -1124,7 +1124,7 @@ def finish_faction(camp: campaign.Campaign, f: Optional[Dict]) -> str:
              "name": factions._clean(pick["name"]) if move == "found" else ""}
     _state(camp)["incidents"].append({"date": key, "kind": move, "from": a, "to": b, "aim": aim,
                                       "why": pick["why"], "slot": "faction", "reach": x["reach"]})
-    diplomacy._state(camp)["queue"].append([a, b, move, [aim], brief])
+    diplomacy.enqueue(camp, [a, b, move, [aim], brief])
     line = (f"{move} {name(a)} -> {name(b)}" + (f" ({brief['name']})" if brief["name"] else "")
             + (f" [{x['faction']}]" if x["faction"] else ""))
     diplomacy.log([head + f"{line}   [{aim}; {x['reach']}]", f"  {pick['why']}"])

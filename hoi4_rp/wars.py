@@ -227,7 +227,7 @@ def decide(camp: campaign.Campaign, x: Dict, step: str, why: str) -> Tuple[str, 
         brief = {"kind": "ultimatum", "aim": aim["aim"], "aim_kind": "land", "target": b, "why": why}
         storyteller._state(camp)["incidents"].append({"date": today, "kind": "ultimatum", "from": a, "to": b,
                                                       "aim": aim["aim"], "why": why, "slot": "war"})
-        diplomacy._state(camp)["queue"].append([a, b, "ultimatum", [aim["aim"]], brief])
+        diplomacy.enqueue(camp, [a, b, "ultimatum", [aim["aim"]], brief])
         return step, f"{name(a)} sets {name(b)} an ultimatum before any war"
     if step == "prepare":
         # conquer is what makes the AI justify (vanilla ends such plans once it has_wargoal_against the target);

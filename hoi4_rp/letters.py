@@ -1276,6 +1276,7 @@ class _Session:
         self.steered = 0                         # campaign whose game AI strategies were last brought in line
         self.last_snapshot = 0.0
         self.pending: Dict[str, str] = {}      # country -> why it wants to write ("" = unprompted)
+        self.letter_retried: set = set()       # countries whose letter failed once and were queued again
         self.parallel = settings().llm.parallel   # background calls of one kind at once ([llm] parallel)
         self.pool = ThreadPoolExecutor(max_workers=self.parallel)  # policy refreshes, side by side
         self.policy_jobs: List[tuple] = []        # [(tag, future, date key, Relation, campaign id, basis, war baseline)]
@@ -1339,10 +1340,15 @@ class _Session:
             self.story_job = self.story_draft = self.news_job = self.news_draft = None
             self.ultimatum_job = None
             self.letter_job = self.reply_job = None
+            self.letter_retried = set()
             self.ai_jobs = []
             self.month = None
             print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
                   f"{sum(len(v) for v in self.camp.data['letters'].values())} letters remembered")
+            back = diplomacy.resume(self.camp)    # exchanges cut off when the last run stopped
+            if back:
+                print(f"  [ai] {back} exchange(s) cut off last time queued again")
+                self.camp.save()
         return self.camp
 
     def chronicle(self, player: str, force: bool = False) -> campaign.Campaign:
@@ -1480,12 +1486,24 @@ class _Session:
             camp.save()
         snap = camp.snapshot or {}
         w = None
-        while st["queue"] and len(self.ai_jobs) < self.parallel:
-            item = st["queue"].pop(0)
+        # two countries in an exchange already: their next move waits for it to end (and may be done by then)
+        busy = {campaign.pair(j[1][0], j[1][1]) for j in self.ai_jobs if j[0] in ("dispatch", "answer", "final")}
+        i, changed = 0, False
+        while i < len(st["queue"]) and len(self.ai_jobs) < self.parallel:
+            item = st["queue"][i]
             a, b = item[0], item[1]
+            if campaign.pair(a, b) in busy:
+                i += 1
+                continue
+            st["queue"].pop(i)
+            changed = True
             if a not in snap.get("countries", {}) or b not in snap.get("countries", {}) \
                     or campaign.pair(a, b) in snap.get("wars", []):
                 continue                                 # gone, or at war since the draw
+            if diplomacy.stale(camp, item):
+                print(f"  [ai] {item[2]} {a} -> {b} of {campaign.date_words(diplomacy.queued_on(item))} dropped: "
+                      f"never written, its moment passed")
+                continue
             try:
                 w = w or diplomacy.world()
                 msgs, offers, asks, threat_ok = diplomacy.dispatch_prompt(camp, gamestate.country(a),
@@ -1494,11 +1512,18 @@ class _Session:
             except gamestate.StateError as e:
                 print(f"  [ai] {a} could not write to {b}: {e}")
                 continue
+            if msgs is None:
+                diplomacy.log([f"=== {campaign.date_words(snap.get('date', ''))}: {item[2]} {a} -> {b} not sent: "
+                               f"done since it was queued, or no longer possible"])
+                continue
             st["pairs"][campaign.pair(a, b)] = st["started"][a] = camp.data.get("last_date") or ""
-            camp.save()
+            diplomacy.sent(camp, item)
+            busy.add(campaign.pair(a, b))
             self.ai_jobs.append(("dispatch", item, self.ai_pool.submit(llm.chat, msgs, None, None, None,
                                                                        "ai:dispatch", a), camp.id,
                                  (offers, asks, w, threat_ok)))
+        if changed:
+            camp.save()
 
     def storyteller(self, camp: campaign.Campaign) -> None:
         """The storyteller's month (storyteller.py): the game queries are worked out a slice per tick so that this loop
@@ -1643,12 +1668,19 @@ class _Session:
                                happened or f"(still readied; reconsidering in {ultimatums.REVIEW_MONTHS} months: {why})"])
             return None
         a, b = item[0], item[1]
+        exchange = stage in ("dispatch", "answer", "final")
         try:
             raw = fut.result()
         except llm.LLMError as e:
             print(f"  [ai] {a} -> {b} failed: {e}")
             self.failed()
+            if exchange:
+                if diplomacy.retry(camp, item):          # once more, from the dispatch
+                    print(f"  [ai] {a} -> {b}: queued to try again")
+                camp.save()
             return None
+        if exchange:
+            return self._exchange_step(camp, stage, item, raw, ctx)
         if stage == "peace_offer":
             why, w = ctx
             offered, text = aipeace.read_offer(raw)
@@ -1669,6 +1701,19 @@ class _Session:
             aipeace.record(camp, a, b, why, True, text, accepted, reply)
             camp.save()
             return None
+        return None
+
+    def _exchange_step(self, camp: campaign.Campaign, stage: str, item: List, raw: str, ctx) -> Optional[tuple]:
+        """A dispatch, answer or final word written: the exchange's next call, or (None) the exchange is over and
+        its move leaves the moves in flight."""
+        nxt = self._exchange(camp, stage, item, raw, ctx)
+        if not nxt:
+            diplomacy.landed(camp, item)
+            camp.save()
+        return nxt
+
+    def _exchange(self, camp: campaign.Campaign, stage: str, item: List, raw: str, ctx) -> Optional[tuple]:
+        a, b = item[0], item[1]
         if stage == "dispatch":
             offers, asks, w, threat_ok = ctx
             text, stance, items, threat = diplomacy.read_dispatch(raw, offers, asks, threat_ok, a, b)
@@ -2070,7 +2115,7 @@ class _Session:
         if self.letter_job:
             self._letter_written(player, block)
             return
-        if not self.pending or not self.camp or self.idle() or not self.running():
+        if not self.pending or not self.camp or self.idle() or not self.running() or time.monotonic() < self.retry_at:
             return
         if re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
             return
@@ -2124,14 +2169,20 @@ class _Session:
             return
         if not active(self.camp.snapshot, ctx["sender"]):
             return                                     # capitulated (or gone) while it wrote
+        sender = ctx["sender"]
         try:
             done = fut.result()
-        except Exception as e:                         # the thread's own failure: the letter is lost, the loop runs on
-            print(f"  {ctx['sender']} could not write: {e!r}")
+        except Exception as e:                         # the thread's own failure: the loop runs on
+            print(f"  {sender} could not write: {e!r}")
+            done = None
+        if done is None:                               # the model failed (Anqing's letter timed out): once more
             self.failed()
+            if sender not in self.letter_retried:
+                self.letter_retried.add(sender)
+                self.pending.setdefault(sender, ctx["reason"])
+                print(f"  {sender} will try to write again")
             return
-        if done is None:
-            self.failed()
+        self.letter_retried.discard(sender)
         finish_first(self.camp, ctx, done)
 
 

@@ -147,9 +147,11 @@ def show_treaties(camp: campaign.Campaign, player: str, last: Tuple[str, float])
     return text, time.monotonic()
 
 
-def resume_letter(camp: campaign.Campaign, player: str, to: str) -> None:
+def resume_letter(camp: campaign.Campaign, player: str, to: str, answer=None) -> None:
     """The game waits on a reply no letter is being answered for: a save made while the reply was being written,
-    then loaded. Answer the letter sent to `to` by then (kept in camp.data["sent"]); with no copy, close the wait."""
+    then loaded. Answer the letter sent to `to` by then (kept in camp.data["sent"]) with `answer` (handle_letter's
+    arguments; handle_letter itself by default); with no copy, close the wait."""
+    answer = answer or handle_letter
     now = camp.data.get("last_date") or ""
     sent = [x for x in camp.data.get("sent", []) if x["to"] == to and (not now or x["date"] <= now)]
     thread = camp.letters_with(to)
@@ -166,7 +168,7 @@ def resume_letter(camp: campaign.Campaign, player: str, to: str) -> None:
     if text:
         print(f"\nthe loaded save waits on a reply from {to}: answering the letter sent "
               f"{campaign.date_words(sent[-1]['date']) if sent else 'before'}")
-        handle_letter(camp, player, to, text)
+        answer(camp, player, to, text)
     else:
         print(f"\nthe loaded save waits on a reply from {to}, but no copy of the letter is kept")
         _show_reply(player, to, "(Your letter was lost on the way, and no copy survives. Write again.)")
@@ -547,23 +549,33 @@ def _conversation(camp: campaign.Campaign, them: gamestate.CountryState,
 
 
 def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> None:
+    """Answer the player's letter to `to`, all at once. The running loop does it in three parts instead
+    (_Session.start_reply), the model's calls in a thread."""
+    ctx = prepare_reply(camp, player, to, text)
+    if ctx:
+        finish_reply(camp, ctx, compose_reply(ctx))
+
+
+def prepare_reply(camp: campaign.Campaign, player: str, to: str, text: str) -> Optional[Dict]:
+    """Keep the player's letter, and read what `to`'s answer needs: its prompt (None when there is nobody to
+    answer, and the player was told so)."""
     print(f"\n{player} -> {to}: {text}")
     try:
         me, them = gamestate.country(player), gamestate.country(to)
     except gamestate.StateError as e:
         print("  could not read the game state:", e)
         _show_reply(player, to, "(The courier could not find his way: the game state is unavailable.)")
-        return
+        return None
     if them.capitulated:                               # no government left to answer: no LLM call
         print(f"  {them.name} has capitulated; no reply")
         _show_reply(player, to, f"(No answer comes. {them.name} has capitulated, and no government remains "
                                 f"to receive your letter.)")
-        return
+        return None
     if world.voiceless(them):                          # creatures, not a government: nobody to read it
         print(f"  {them.name} is no government; no reply")
         _show_reply(player, to, f"(No answer comes. {them.name} is no government but a tide of creatures from beyond "
                                 f"this world: there is no one to read your letter, and the courier does not return.)")
-        return
+        return None
     key = campaign.date_key(them.date)
     camp.at(key)
     camp.add_letter(to, player, text, key)
@@ -589,26 +601,46 @@ def handle_letter(camp: campaign.Campaign, player: str, to: str, text: str) -> N
                     if them.overlord and them.overlord != player else "")
                  + ("\n\n" + treaties.help_text(wager=True) if not rel.at_war else "")
                  + ("\n\n" + ultimatums.help_text(them.name, me.name) if _may_threaten(camp, to, rel) else ""))
+    form = style.roll()
+    prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text, form=form)}]
+              + _conversation(camp, them, me,
+                              f"(Reply as {style.last_word(form, style.feelings(camp, to))}.)"))
+    return {"player": player, "to": to, "key": key, "me": me, "them": them, "rel": rel, "offers": offers,
+            "asks": asks, "grants": actions.reply_grants(rel), "prompt": prompt}
+
+
+def compose_reply(ctx: Dict) -> Dict:
+    """The model's calls for a reply prepare_reply() set up: the reply, and commands its text speaks of but left
+    out. No game access, no campaign writes: safe in a thread. {"error": ...} when the model failed."""
+    prompt, to = ctx["prompt"], ctx["to"]
     try:
-        form = style.roll()
-        prompt = ([{"role": "system", "content": _system_prompt(them, me, camp, actions_help=help_text, form=form)}]
-                  + _conversation(camp, them, me,
-                                  f"(Reply as {style.last_word(form, style.feelings(camp, to))}.)"))
-        raw = style.strip_feeling(llm.chat(prompt, kind="reply", about=to), to, camp)
+        raw, feeling = style.split_feeling(llm.chat(prompt, kind="reply", about=to))
     except llm.LLMError as e:
-        print("  LLM error:", e)
-        _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {e})"[:300]))
-        return
+        return {"error": str(e)}
     raw, ultimatum = ultimatums.parse(raw)
     if extra := _missing_commands(prompt, raw, to, grants=True):
         raw += "\n\n" + extra
     raw, terms = treaties.parse_terms(raw)
     letter, commands, proposals = actions.parse(raw)
     if fixed := _unmatched(prompt, raw, to, proposals + [k for k, _ in commands],
-                           offers + asks + actions.reply_grants(rel), grants=True):
+                           ctx["offers"] + ctx["asks"] + ctx["grants"], grants=True):
         raw, terms = treaties.parse_terms(fixed)
         letter, commands, proposals = actions.parse(raw)
-    commands, renounced = treaties.take_renounce(commands)
+    return {"error": "", "feeling": feeling, "ultimatum": ultimatum, "terms": terms, "letter": letter,
+            "commands": commands, "proposals": proposals}
+
+
+def finish_reply(camp: campaign.Campaign, ctx: Dict, done: Dict) -> None:
+    """A reply compose_reply() wrote: kept, what it grants applied, its proposal attached, shown to the player."""
+    player, to, key, me, them, rel = ctx["player"], ctx["to"], ctx["key"], ctx["me"], ctx["them"], ctx["rel"]
+    offers, asks = ctx["offers"], ctx["asks"]
+    if done["error"]:
+        print("  LLM error:", done["error"])
+        _show_reply(player, to, _clean_for_game(f"(The courier returned without an answer: {done['error']})"[:300]))
+        return
+    terms, ultimatum, letter, proposals = done["terms"], done["ultimatum"], done["letter"], done["proposals"]
+    style.keep_feeling(done["feeling"], to, camp)
+    commands, renounced = treaties.take_renounce(done["commands"])
     # Payments agreed for later ([[civ 1 in 12 months]]) are kept by the treaty, not made now; only what they could
     # grant now (asked for, and possible) counts.
     later = [k for k, _ in commands if treaties.deferred(terms, k) and k.startswith("give:")
@@ -922,12 +954,20 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
 
 
 def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) -> None:
-    """`sender` writes to the player on its own initiative (reason: an event text, or "" if unprompted)."""
+    """`sender` writes to the player on its own initiative (reason: an event text, or "" if unprompted), all at
+    once. The running loop does it in three parts instead (_Session.deliver), the model's calls in a thread."""
+    ctx = prepare_first(camp, player, sender, reason)
+    if ctx:
+        finish_first(camp, ctx, compose_first(ctx))
+
+
+def prepare_first(camp: campaign.Campaign, player: str, sender: str, reason: str) -> Optional[Dict]:
+    """The game reads a letter on `sender`'s initiative needs, and its prompt (None if it can't write now)."""
     try:
         me, them = gamestate.country(player), gamestate.country(sender)
     except gamestate.StateError as e:
         print(f"  {sender} could not write: {e}")
-        return
+        return None
     key = campaign.date_key(them.date)
     pol = policy.current(camp, sender)
     rel = actions.relation(sender, player)
@@ -955,11 +995,19 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
               + [{"role": "user", "content": f"(No new letter from {me.name}. It is {campaign.date_words(key)}. "
                                              f"Write your letter to them now, as "
                                              f"{style.last_word(form, style.feelings(camp, sender))}.)"}])
+    return {"player": player, "sender": sender, "reason": reason, "key": key, "me": me, "them": them,
+            "letters": len(camp.letters_with(sender)), "offers": offers, "asks": asks, "steps": steps, "prompt": prompt}
+
+
+def compose_first(ctx: Dict) -> Optional[Dict]:
+    """The model's calls for a letter prepare_first() set up: the letter, and commands its text speaks of but
+    left out. No game access, no campaign writes: safe in a thread. None when the model failed."""
+    prompt, sender, offers, asks = ctx["prompt"], ctx["sender"], ctx["offers"], ctx["asks"]
     try:
-        raw = style.strip_feeling(llm.chat(prompt, kind="letter", about=sender), sender, camp)
+        raw, feeling = style.split_feeling(llm.chat(prompt, kind="letter", about=sender))
     except llm.LLMError as e:
         print(f"  {sender} could not write (LLM error): {e}")
-        return
+        return None
     raw, ultimatum = ultimatums.parse(raw)
     if (offers or asks) and (extra := _missing_commands(prompt, raw, sender, grants=False)):
         raw += "\n\n" + extra
@@ -968,8 +1016,21 @@ def write_first(camp: campaign.Campaign, player: str, sender: str, reason: str) 
     if (offers or asks) and (fixed := _unmatched(prompt, raw, sender, proposals, offers + asks)):
         raw, terms = treaties.parse_terms(fixed)
         letter, commands, proposals = actions.parse(raw)
-    commands, renounced = treaties.take_renounce(commands)
-    text = _clean_for_game(letter)
+    return {"feeling": feeling, "ultimatum": ultimatum, "terms": terms, "letter": letter, "commands": commands,
+            "proposals": proposals}
+
+
+def finish_first(camp: campaign.Campaign, ctx: Dict, done: Optional[Dict]) -> None:
+    """A letter compose_first() wrote: kept, its steps taken, its proposal attached, shown to the player."""
+    if not done:
+        return
+    player, sender, reason, key = ctx["player"], ctx["sender"], ctx["reason"], ctx["key"]
+    me, them, offers, asks, steps = ctx["me"], ctx["them"], ctx["offers"], ctx["asks"], ctx["steps"]
+    rel = actions.relation(sender, player)       # read again: the game ran on while the letter was written
+    terms, ultimatum, proposals = done["terms"], done["ultimatum"], done["proposals"]
+    style.keep_feeling(done["feeling"], sender, camp)
+    commands, renounced = treaties.take_renounce(done["commands"])
+    text = _clean_for_game(done["letter"])
     camp.add_letter(sender, sender, text, key)
     camp.letters_with(sender)[-1]["initiated"] = True
     outcomes, events = actions.apply(sender, player, them.name, me.name, commands, allowed=steps)
@@ -1227,6 +1288,13 @@ class _Session:
         self.story_draft: Optional[tuple] = None  # a written event waiting to be shown: (draft, campaign id, ...)
         self.war_pool = ThreadPoolExecutor(max_workers=1)    # ultimatum decisions
         self.ultimatum_job: Optional[tuple] = None   # (ultimatum, future, campaign id)
+        # a letter a country writes on its own is written here, so the loop runs on meanwhile (a reasoning model
+        # took up to eight minutes, and the game's months went by with no storyteller or news)
+        self.letter_pool = ThreadPoolExecutor(max_workers=1)
+        self.letter_job: Optional[tuple] = None   # (future, campaign id, prepare_first()'s context)
+        # the reply to the player's own letter is written here too: the game waits on it, the loop doesn't
+        self.reply_pool = ThreadPoolExecutor(max_workers=1)
+        self.reply_job: Optional[tuple] = None    # (future, campaign id, prepare_reply()'s context)
         # AI-to-AI exchanges (diplomacy.py) side by side, and room beside them for the storyteller's month (agendas, its calls)
         self.ai_pool = ThreadPoolExecutor(max_workers=self.parallel + 4)
         self.ai_jobs: List[tuple] = []            # [(stage, queue item, future, campaign id, what the next stage needs)]
@@ -1270,6 +1338,7 @@ class _Session:
             self.gm_job = None
             self.story_job = self.story_draft = self.news_job = self.news_draft = None
             self.ultimatum_job = None
+            self.letter_job = self.reply_job = None
             self.ai_jobs = []
             self.month = None
             print(f"campaign {cid} ({player}): {len(self.camp.data['events'])} events, "
@@ -1996,7 +2065,11 @@ class _Session:
         return True
 
     def deliver(self, player: str, block: str) -> None:
-        """Let one waiting country write, if the player isn't reading or awaiting a letter."""
+        """Let one waiting country write, if the player isn't reading or awaiting a letter. The letter is written
+        in letter_pool; once written, it is shown at the next moment the player is free."""
+        if self.letter_job:
+            self._letter_written(player, block)
+            return
         if not self.pending or not self.camp or self.idle() or not self.running():
             return
         if re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block):
@@ -2005,7 +2078,61 @@ class _Session:
         reason = self.pending.pop(tag)
         if not active(self.camp.snapshot, tag):
             return                                     # capitulated (or gone) since it was queued
-        write_first(self.camp, player, tag, reason)
+        ctx = prepare_first(self.camp, player, tag, reason)
+        if ctx:
+            self.letter_job = (self.letter_pool.submit(compose_first, ctx), self.camp.id, ctx)
+
+    def start_reply(self, camp: campaign.Campaign, player: str, to: str, text: str) -> None:
+        """Answer the player's letter: kept and read now, the reply written in reply_pool (reply_tick shows it)."""
+        ctx = prepare_reply(camp, player, to, text)
+        if ctx:
+            self.reply_job = (self.reply_pool.submit(compose_reply, ctx), camp.id, ctx)
+
+    def reply_tick(self, player: str) -> None:
+        """A reply written: apply and show it (the game is waiting on it, so at once)."""
+        if not self.reply_job or not self.reply_job[0].done():
+            return
+        fut, cid, ctx = self.reply_job
+        self.reply_job = None
+        if not self.camp or cid != self.camp.id or ctx["player"] != player:
+            return                                     # another game since: a loaded save resumes it (resume_letter)
+        if ctx["key"] > (self.camp.data.get("last_date") or ctx["key"]):
+            print(f"  {ctx['to']}'s reply dropped: an earlier save was loaded")   # resume_letter, if it still waits
+            return
+        try:
+            done = fut.result()
+        except Exception as e:                         # the thread's own failure: tell the player, the loop runs on
+            done = {"error": repr(e)}
+        finish_reply(self.camp, ctx, done)
+
+    def _letter_written(self, player: str, block: str) -> None:
+        """A letter being written: when done, and the player isn't reading or awaiting one, show it."""
+        fut, cid, ctx = self.letter_job
+        if not fut.done():
+            return
+        if not self.camp or cid != self.camp.id or ctx["player"] != player:
+            self.letter_job = None                     # another game since
+            return
+        if re.search(r"\bairp_(reply_from|awaiting_from|outbox_to)=", block) or self.idle() or not self.running():
+            return                                     # the player is busy, or paused: the letter waits
+        self.letter_job = None
+        if len(self.camp.letters_with(ctx["sender"])) != ctx["letters"]:
+            print(f"  {ctx['sender']}'s letter dropped: the two wrote to each other while it was being written")
+            return
+        if ctx["key"] > (self.camp.data.get("last_date") or ctx["key"]):
+            print(f"  {ctx['sender']}'s letter of {campaign.date_words(ctx['key'])} dropped: an earlier save was loaded")
+            return
+        if not active(self.camp.snapshot, ctx["sender"]):
+            return                                     # capitulated (or gone) while it wrote
+        try:
+            done = fut.result()
+        except Exception as e:                         # the thread's own failure: the letter is lost, the loop runs on
+            print(f"  {ctx['sender']} could not write: {e!r}")
+            self.failed()
+            return
+        if done is None:
+            self.failed()
+        finish_first(self.camp, ctx, done)
 
 
 def _wait_for_game() -> str:
@@ -2116,16 +2243,22 @@ def run() -> int:
     threading.Thread(target=leaders.warm, daemon=True).start()
     # The ledger window answers in its own thread: this loop waits on the model while it writes a reply
     threading.Thread(target=_ledger_loop, args=(session,), daemon=True).start()
+    said = ""                     # the last wait line printed: a wait is told once, not every few seconds
     while True:
         try:
             player = bridge.player_tag()
+            said = ""
             session.chronicle(player)
+            session.reply_tick(player)
             if session.camp:
                 session.rep_shown = show_reputation(session.camp, player, session.rep_shown)
                 session.treaties_shown = show_treaties(session.camp, player, session.treaties_shown)
             block = bridge.country_block(player)
             to = read_outbox(block)
-            if to:
+            if session.reply_job:
+                pass                                   # a reply is being written: the game waits on it, and so does
+                                                       # any further letter (left in the outbox until then)
+            elif to:
                 # Clear first so the same letter is never handled twice.
                 bridge.send(f"eval_effect {player} = {{ clear_variable = airp_outbox_to }}")
                 try:
@@ -2139,16 +2272,16 @@ def run() -> int:
                     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from add_to_variable = {{ airp_awaiting_refresh = 1 }} }}")
                 elif to and text.strip():
                     session.active_at = time.monotonic()      # the player is here
-                    handle_letter(session.chronicle(player, force=True), player, to, text)
+                    session.start_reply(session.chronicle(player, force=True), player, to, text)
                 else:
                     print("empty letter; nothing to answer")
                     bridge.send(f"eval_effect {player} = {{ clear_variable = airp_awaiting_from add_to_variable = {{ airp_awaiting_refresh = 1 }} }}")
             elif (waiting := read_awaiting(block)) and session.camp:
-                # Letters are answered here, in this loop, so a wait with no letter in hand came from a loaded save
+                # A reply being written is in reply_job, so a wait with no reply in hand came from a loaded save
                 mark = (session.camp.id, waiting)
                 if time.monotonic() - session.resumed.get(mark, -RESUME_SECONDS) >= RESUME_SECONDS:
                     session.resumed[mark] = time.monotonic()
-                    resume_letter(session.chronicle(player, force=True), player, waiting)
+                    resume_letter(session.chronicle(player, force=True), player, waiting, session.start_reply)
             else:
                 answer = re.search(r"\bairp_offer_answer=(\d)", block)
                 if answer and session.camp:
@@ -2161,11 +2294,15 @@ def run() -> int:
                     session.news_tick(player, block)
                     session.deliver(player, block)
         except bridge.BridgeUnavailable:
-            print("waiting for HOI4 / the bridge...")
+            if said != "waiting":
+                print("waiting for HOI4 / the bridge...")
+                said = "waiting"
             time.sleep(5)
             continue
         except RuntimeError as e:   # e.g. not in a game yet
-            print("bridge:", e)
+            if said != str(e):
+                print("bridge:", e)
+                said = str(e)
             time.sleep(3)
             continue
         except KeyboardInterrupt:

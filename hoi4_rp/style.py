@@ -15,7 +15,7 @@ from __future__ import annotations
 import random
 import re
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .config import settings
 
@@ -169,28 +169,41 @@ def last_word(form: str, before: List[str] = ()) -> str:
 _FEELING_LINE = re.compile(r"^[\W_]*feeling[*_\s]*[:\-–].*$\n?", re.I | re.M)
 # The feeling without its label, as models often write it: a bare word or few on the first line, then a blank line
 # ("Cold fury", "Contempt edged with weariness"). A salutation ends in a comma or starts with an address.
-_BARE_FEELING = re.compile(r"\A\s*[*_]*([A-Za-z][A-Za-z' -]{1,40}?)[*_]*[ \t]*\n[ \t]*\n")
+_BARE_FEELING = re.compile(r"\A\s*[*_]*([A-Za-z][A-Za-z' -]{1,40}?)[.!]?[*_]*[ \t]*\n[ \t]*\n")
 _ADDRESS = re.compile(r"(?i)^(to|dear|my|comrade|sheikh|herr|monsieur|madame|excellency|mr|mrs|sir|general|"
                       r"president|your|his|her|in the name)\b")
 
 
-def strip_feeling(raw: str, who: str = "", camp=None) -> str:
-    """The letter without the FEELING line last_word() asked for. The feeling is printed for the log, and with
-    `camp` kept as the country's latest (feelings())."""
+def split_feeling(raw: str) -> Tuple[str, Optional[str]]:
+    """(the letter without the FEELING line last_word() asked for, the feeling; None when it wrote none)."""
     m = _FEELING_LINE.search(raw)
     if not m:
         b = _BARE_FEELING.match(raw)
         if not b or len(b.group(1).split()) > 5 or _ADDRESS.match(b.group(1).strip()):
-            return raw
+            return raw, None
         raw = f"FEELING: {b.group(1).strip()}\n" + raw[b.end():]
         m = _FEELING_LINE.search(raw)
     feeling = m.group(0).split(":", 1)[-1].strip(" *_.\n").lower()
+    return _FEELING_LINE.sub("", raw, count=1).lstrip("\n"), feeling
+
+
+def keep_feeling(feeling: Optional[str], who: str = "", camp=None) -> None:
+    """Print a letter's feeling for the log, and with `camp` keep it as the country's latest (feelings())."""
+    if feeling is None:
+        return
     if who:
         print(f"  {who} writes in {feeling or '?'}")
     if camp is not None and who and feeling:
         kept = camp.data.setdefault("feelings", {})
         kept[who] = (kept.get(who, []) + [feeling[:40]])[-FEELINGS_KEPT:]
-    return _FEELING_LINE.sub("", raw, count=1).lstrip("\n")
+
+
+def strip_feeling(raw: str, who: str = "", camp=None) -> str:
+    """The letter without the FEELING line last_word() asked for. The feeling is printed for the log, and with
+    `camp` kept as the country's latest (feelings())."""
+    raw, feeling = split_feeling(raw)
+    keep_feeling(feeling, who, camp)
+    return raw
 
 
 def feelings(camp, who: str) -> List[str]:

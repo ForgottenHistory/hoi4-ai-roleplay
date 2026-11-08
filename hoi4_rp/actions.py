@@ -1828,7 +1828,8 @@ def _country_tag(text: str) -> str:
     """A country named in a war or pledge command: its tag, or the name if it isn't a known one (the command is
     then not possible and ignored)."""
     text = re.sub(r"\(.*?\)", "", text).strip()
-    tag = _recipient(text, {t: {"name": n} for t, n in _COUNTRY_NAMES.items()})
+    # a copy first: a letter is parsed in its own thread while the loop may add countries to the names
+    tag = _recipient(text, {t: {"name": n} for t, n in _COUNTRY_NAMES.copy().items()})
     return tag or text.upper()
 
 

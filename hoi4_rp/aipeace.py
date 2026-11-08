@@ -239,6 +239,12 @@ def record(camp: campaign.Campaign, a: str, b: str, why: str, offered: bool, off
         lines.append("  peace not made: the player now fights in this war, and its peace is theirs to make")
         diplomacy.log(lines)
         return
+    # the talks take game weeks: a front elsewhere in the war may have come alive since (Yunnan capitulated the day
+    # before a Shanxi-Guangzhou peace, and the conference handed Guangzhou its capital)
+    if accepted and (live := live_elsewhere(camp, a, b, key)):
+        lines.append(f"  peace not made: {live} since the talks began")
+        diplomacy.log(lines)
+        return
     if accepted:
         outcome = peace.make(a, b, player_leads=False) if settings().ai.mode == "on" else None
         if outcome:

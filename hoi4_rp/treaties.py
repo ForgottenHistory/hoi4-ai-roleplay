@@ -86,18 +86,30 @@ def parse_terms(text: str) -> Tuple[str, Dict]:
         n = int(m.group(1)) * (12 if m.group(2).lower().startswith("year") else 1)
         terms["months"] = max(TERM[0], min(TERM[1], n))
     text = _TERM.sub("", text)
+    now_too = set()                                    # items also offered plainly, to be paid now
 
     def plain(m: re.Match) -> str:
         verb = (m.group(1) or "").strip().lower()
         kind, n, count = m.group(2).lower(), int(m.group(3)), int(m.group(4) or 1)
         every = int(m.group(5) or 12)
         start = int(m.group(6) or 0) * (12 if (m.group(7) or "").lower().startswith("year") else 1)
+        key = f"{'ask' if verb == 'ask' else 'give'}:{kind}:{n}"
         if count >= 2 or start:
-            key = f"{'ask' if verb == 'ask' else 'give'}:{kind}:{n}"
             terms["payments"][key] = [min(count, MAX_PAYMENTS), max(EVERY[0], min(EVERY[1], every)),
                                       min(start, TERM[1])]
+        else:
+            now_too.add(key)
         return f"[[{verb + ' ' if verb else ''}{kind} {n}]]"
-    return _INSTALMENTS.sub(plain, text), terms
+    text = _INSTALMENTS.sub(plain, text)
+    # "one factory now, a second within the year": [[offer civ 1]] [[offer civ 1 in 12 months]] is one payment now
+    # and the deferred ones after it (the deferred line alone would hold back the one promised now)
+    for key in now_too:
+        spec = terms["payments"].get(key)
+        if spec and _start(spec) > 0:
+            count, every, start = spec
+            terms["payments"][key] = [min(count + 1, MAX_PAYMENTS),
+                                      every if count >= 2 else max(EVERY[0], min(EVERY[1], start)), 0]
+    return text, terms
 
 
 def _start(spec: List[int]) -> int:

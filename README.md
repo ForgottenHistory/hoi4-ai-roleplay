@@ -4,9 +4,21 @@ An LLM game master for singleplayer HOI4 (vanilla or mods like Kaiserreich). You
 countries and they write back, make deals, threaten and remember. The world around you gets its own story:
 policies, agendas, crises, news and AI-to-AI diplomacy. HOI4's own AI still plays the countries; the LLM steers it.
 
+- **Singleplayer only**, Windows, Steam version of HOI4 (tested on 1.19.x).
+- Needs [hoi4-bridge](https://github.com/ForgottenHistory/hoi4-bridge) (a `version.dll` proxy) and an API key
+  for an OpenAI-compatible LLM service (set up for [NanoGPT](https://nano-gpt.com)).
+- Python standard library only, no `pip install`.
+- Experimental: it reads game memory through the bridge, so a HOI4 patch can break it until the bridge is updated.
+
+> Unofficial; not affiliated with Paradox Interactive. Game state (countries, wars, your letters) is sent to the
+> LLM service you configure, and each letter and background job is a paid API call; `python -m hoi4_rp usage`
+> shows what a session used.
+
 ## Setup
 
-1. Clone the `hoi4-bridge` repo next to this one and install its `version.dll` in the HOI4 folder.
+1. Clone [hoi4-bridge](https://github.com/ForgottenHistory/hoi4-bridge) next to this one (so the folders are
+   `hoi4-bridge/` and `hoi4-ai-roleplay/`, or set `HOI4_BRIDGE_CLIENT` to its `client/` folder), build it and run its
+   `install.bat` to put `version.dll` in the HOI4 folder.
 2. Python 3.10+, and a NanoGPT API key in the `NANOGPT_API_KEY` environment variable.
 3. `python -m hoi4_rp write-mod`, enable "AI Roleplay" in your playset, restart HOI4.
 4. `python -m hoi4_rp run` (or `start.bat`) and keep it running while you play.
@@ -39,3 +51,7 @@ More (debugging and dry runs) in [docs/development.md](docs/development.md).
 - [How the AI countries think](docs/ai.md): policies, steering HOI4's AI, agendas, the storyteller, AI-to-AI diplomacy
 - [Settings and other mods](docs/settings.md): config, lore files, Kaiserreich and total conversions
 - [Development](docs/development.md): code layout, debug commands, logs
+
+## License
+
+MIT, see [LICENSE](LICENSE).

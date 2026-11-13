@@ -2362,5 +2362,10 @@ def package_text(keys: List[str], who: str = "they") -> str:
     return "; ".join(parts)
 
 
-def proposal_line(keys: List[str], them_name: str) -> str:
+def proposal_line(keys: List[str], them_name: str, wager: bool = False) -> str:
+    if wager:                                          # a coin toss: only one side's stake changes hands
+        gives = [k for k in keys if k.startswith("give:")]
+        asks = [k for k in keys if k.startswith("ask:")]
+        return (f"§YWager from {them_name}: on Accept a coin is tossed. Win, and {package_text(gives)}; lose, and "
+                f"{package_text(asks)}. Only one of the two happens. Accept or decline below.§!")
     return f"§YProposal from {them_name}: {package_text(keys)}. Accept or decline below.§!"

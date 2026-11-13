@@ -150,10 +150,7 @@ def _every_words(every: int) -> str:
 def terms_line(terms: Optional[Dict], items: List[str], them_name: str) -> str:
     """Under a proposal: what its terms mean, in plain words ('' if none)."""
     terms = for_items(terms, items)
-    parts = []
-    if terms.get("wager"):
-        parts.append(f"a wager: a coin is tossed when you accept; win and {them_name} gives what it offers, lose and "
-                     f"we give what it asks, nothing else changes hands")
+    parts = []                                         # a wager is explained by actions.proposal_line
     if terms["months"]:
         parts.append(f"the agreements last {terms['months']} months, then end")
     for key, spec in terms["payments"].items():

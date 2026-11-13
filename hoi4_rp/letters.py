@@ -684,7 +684,7 @@ def finish_reply(camp: campaign.Campaign, ctx: Dict, done: Dict) -> None:
         print(f"  commands: {commands} -> {[o for o, _ in outcomes] or 'nothing applied'}")
     shown = reply + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
     if items:
-        shown += ("\n\n" + actions.proposal_line(items, them.name) + treaties.terms_line(terms, items, them.name)
+        shown += ("\n\n" + actions.proposal_line(items, them.name, treaties.is_wager(terms, items)) + treaties.terms_line(terms, items, them.name)
                   + guarantees.proposal_line(camp, items, to, them.name, terms) + _peace_line(items, me, them))
     _show_reply(player, to, shown, offer=bool(items))
 
@@ -1063,7 +1063,7 @@ def finish_first(camp: campaign.Campaign, ctx: Dict, done: Optional[Dict]) -> No
         print(f"  steps: {[o for o, _ in outcomes]}")
     shown = text + ("\n\n" + actions.outcome_text(outcomes) if outcomes else "")
     if items:
-        shown += ("\n\n" + actions.proposal_line(items, them.name) + treaties.terms_line(terms, items, them.name)
+        shown += ("\n\n" + actions.proposal_line(items, them.name, treaties.is_wager(terms, items)) + treaties.terms_line(terms, items, them.name)
                   + guarantees.proposal_line(camp, items, sender, them.name, terms) + _peace_line(items, me, them))
     _show_reply(player, sender, shown, offer=bool(items))
 
@@ -2046,9 +2046,11 @@ class _Session:
         for e in events:
             # market access alone is no reason to write: the game opens it with half the world at once. Nor is an
             # agreement ending (a term run out, or the game dropping it: a faction formed, a government fallen):
-            # it stays in what the country remembers and weighs in its policy, but it brings no letter of its own
+            # it stays in what the country remembers and weighs in its policy, but it brings no letter of its own.
+            # Embargoes neither: a hostile world imposes them by the dozen, and each letter only restated it
             kind = e.get("type", "")
             if (player not in e["tags"] or kind.startswith("agreement:market")
+                    or kind.startswith(("agreement:their_embargo", "agreement:my_embargo"))
                     or (kind.startswith("agreement:") and kind.endswith(":end"))
                     or kind in ("treaty:ended", "guarantee:expired", "troops:withdrawn")):
                 continue

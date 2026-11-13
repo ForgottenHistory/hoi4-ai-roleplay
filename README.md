@@ -6,7 +6,8 @@ policies, agendas, crises, news and AI-to-AI diplomacy. HOI4's own AI still play
 
 - **Singleplayer only**, Windows, Steam version of HOI4 (tested on 1.19.x).
 - Needs [hoi4-bridge](https://github.com/ForgottenHistory/hoi4-bridge) (a `version.dll` proxy) and an API key
-  for an OpenAI-compatible LLM service (set up for [NanoGPT](https://nano-gpt.com)).
+  for an LLM service: [NanoGPT](https://nano-gpt.com) (recommended), OpenRouter, OpenAI, Anthropic, Gemini, DeepSeek,
+  Mistral, Groq, xAI, Together, any other OpenAI-compatible server, or a local model in Ollama or LM Studio.
 - Python standard library only, no `pip install`.
 - Experimental: it reads game memory through the bridge, so a HOI4 patch can break it until the bridge is updated.
 
@@ -19,7 +20,9 @@ policies, agendas, crises, news and AI-to-AI diplomacy. HOI4's own AI still play
 1. Clone [hoi4-bridge](https://github.com/ForgottenHistory/hoi4-bridge) next to this one (so the folders are
    `hoi4-bridge/` and `hoi4-ai-roleplay/`, or set `HOI4_BRIDGE_CLIENT` to its `client/` folder), build it and run its
    `install.bat` to put `version.dll` in the HOI4 folder.
-2. Python 3.10+, and a NanoGPT API key in the `NANOGPT_API_KEY` environment variable.
+2. Python 3.10+, and an API key in your provider's environment variable, e.g. `setx NANOGPT_API_KEY "your-key"`
+   (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`...). Using another provider than NanoGPT, set
+   `provider` and `model` in `config.ini`; `python -m hoi4_rp llm` checks the connection.
 3. `python -m hoi4_rp write-mod`, enable "AI Roleplay" in your playset, restart HOI4.
 4. `python -m hoi4_rp run` (or `start.bat`) and keep it running while you play.
 

@@ -1443,7 +1443,7 @@ class _Session:
         return camp
 
     # ---- AI-to-AI diplomacy (diplomacy.py): two or three short calls per exchange, up to [llm] parallel side by side,
-    #      in their own queue beside the letters to the player (NanoGPT takes parallel calls)
+    #      in their own queue beside the letters to the player (the LLM service takes parallel calls)
     def ai_diplomacy(self, camp: campaign.Campaign) -> None:
         cfg = settings().ai
         if cfg.mode not in ("dry", "on"):

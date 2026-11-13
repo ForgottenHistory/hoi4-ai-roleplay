@@ -5,7 +5,7 @@
                                  `letters` is the same)
    python -m hoi4_rp story       write a story event about the campaign's latest deal or deed now, show it and
                                  apply the pick (for trying events out; stop `run` first)
-   python -m hoi4_rp llm "text"  send one message to the LLM (NanoGPT) and print the reply
+   python -m hoi4_rp llm "text"  send one message to the LLM and print the reply
    python -m hoi4_rp usage [DAYS]  LLM calls and tokens of the last DAYS days (default 1), by kind and country
    python -m hoi4_rp subjects [TAG]  list the subject levels the game and mods define, or one subject's
                                  level, the levels open to it and its progress
@@ -125,7 +125,9 @@ if __name__ == "__main__":
     if cmd == "llm":
         from . import llm
         prompt = " ".join(sys.argv[2:]) or "Say hello in one short sentence."
-        print(f"[{llm.model()}]")
+        from .config import settings
+        cfg = settings().llm
+        print(f"[{cfg.provider}: {cfg.model} at {cfg.base_url}]")
         print(llm.chat([{"role": "user", "content": prompt}]))
         sys.exit(0)
     print(__doc__)

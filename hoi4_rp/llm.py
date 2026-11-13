@@ -1,10 +1,13 @@
-"""LLM client for any OpenAI-compatible chat API (NanoGPT by default), standard library only.
+"""LLM client, standard library only: any OpenAI-compatible chat API (NanoGPT by default, OpenRouter, OpenAI,
+Gemini, DeepSeek, Mistral, Groq, xAI, Together, Ollama, LM Studio...) and Anthropic's Messages API.
 
     from hoi4_rp import llm
     text = llm.chat([{"role": "user", "content": "Write a one-line headline."}])
 
-Endpoint, model and limits come from config.ini [llm]. The API key is read from the environment
-variable named by api_key_env (NANOGPT_API_KEY by default).
+Provider, endpoint, model and limits come from config.ini [llm] (config.PROVIDERS has the presets). The API key is
+read from the environment variable named by api_key_env (the provider's own, e.g. NANOGPT_API_KEY, by default).
+Parameters a model refuses (max_tokens on OpenAI's reasoning models, temperature on some) are changed or left out
+and the call sent again; that is remembered for the session.
 
 Every call is logged to data/logs/llm.jsonl: what it was for (kind: reply, letter, policy, promises, judge),
 which country, tokens in and out (the API's own count, else an estimate), seconds and model. With
@@ -33,10 +36,11 @@ class LLMError(RuntimeError):
 
 
 def _api_key() -> str:
-    env = settings().llm.api_key_env
-    key = os.environ.get(env, "").strip()
-    if not key:
-        raise LLMError(f"{env} is not set")
+    cfg = settings().llm
+    key = os.environ.get(cfg.api_key_env, "").strip()
+    if not key and cfg.key_required:
+        raise LLMError(f"{cfg.api_key_env} is not set (provider {cfg.provider}); set it with "
+                       f'setx {cfg.api_key_env} "your-key" and open a new terminal')
     return key
 
 
@@ -165,39 +169,124 @@ def chat(messages: List[Dict[str, str]], model_name: Optional[str] = None,
     return ""
 
 
+# Request changes a model needed, kept for the session: model -> {"max_completion_tokens", "no_temperature"}
+_quirks: Dict[str, set] = defaultdict(set)
+
+
+def _quirk(model_name: str, status: int, detail: str) -> bool:
+    """Learn from a 400 which parameter the model refuses; True when there is something new to try."""
+    if status != 400:
+        return False
+    text, q = detail.lower(), _quirks[model_name]
+    if "max_tokens" in text and "max_completion_tokens" in text and "max_completion_tokens" not in q:
+        q.add("max_completion_tokens")
+        return True
+    if "temperature" in text and any(w in text for w in ("unsupported", "not support", "only the default",
+                                                         "deprecated", "does not support")) \
+            and "no_temperature" not in q:
+        q.add("no_temperature")
+        return True
+    return False
+
+
+def _openai_request(cfg, key: str, model_name: str, messages, temperature: float, max_tokens: int):
+    q = _quirks[model_name]
+    body = {"model": model_name, "messages": messages}
+    if "no_temperature" not in q:
+        body["temperature"] = temperature
+    if cfg.provider == "openai" or "max_completion_tokens" in q:
+        body["max_completion_tokens"] = max_tokens      # OpenAI's reasoning models refuse max_tokens
+    else:
+        body["max_tokens"] = max_tokens
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return f"{cfg.base_url}/chat/completions", body, headers
+
+
+def _openai_reply(data):
+    choice = data["choices"][0]
+    content = choice["message"].get("content") or ""
+    if isinstance(content, list):                       # some servers send content parts
+        content = "".join(p.get("text") or "" for p in content if isinstance(p, dict))
+    return content, (data.get("usage") or {}), choice.get("finish_reason") or ""
+
+
+def _anthropic_request(cfg, key: str, model_name: str, messages, temperature: float, max_tokens: int):
+    system = "\n\n".join(m.get("content") or "" for m in messages if m.get("role") == "system")
+    turns: List[Dict[str, str]] = []
+    for m in messages:
+        if m.get("role") == "system":
+            continue
+        role = "assistant" if m.get("role") == "assistant" else "user"
+        if turns and turns[-1]["role"] == role:          # user and assistant take turns
+            turns[-1]["content"] += "\n\n" + (m.get("content") or "")
+        else:
+            turns.append({"role": role, "content": m.get("content") or ""})
+    if not turns or turns[0]["role"] != "user":
+        turns.insert(0, {"role": "user", "content": "(begin)"})
+    body = {"model": model_name, "messages": turns, "max_tokens": max_tokens}
+    if system:
+        body["system"] = system
+    if "no_temperature" not in _quirks[model_name]:
+        body["temperature"] = min(temperature, 1.0)     # Anthropic takes 0-1
+    headers = {"Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"}
+    return f"{cfg.base_url}/messages", body, headers
+
+
+def _anthropic_reply(data):
+    content = "".join(b.get("text") or "" for b in data["content"] if b.get("type") == "text")
+    u = data.get("usage") or {}
+    usage = {"prompt_tokens": (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0)
+             + (u.get("cache_creation_input_tokens") or 0), "completion_tokens": u.get("output_tokens") or 0}
+    finish = "length" if data.get("stop_reason") == "max_tokens" else data.get("stop_reason") or ""
+    return content, usage, finish
+
+
+def _wait(attempt: int, e: Optional[urllib.error.HTTPError] = None) -> float:
+    """Seconds before the next try: the server's Retry-After when it gives one (rate limits), else 2, 4, 6..."""
+    try:
+        return min(60.0, float(e.headers.get("Retry-After")))
+    except (AttributeError, TypeError, ValueError):
+        return 2.0 * (attempt + 1)
+
+
 def _chat(messages: List[Dict[str, str]], model_name: Optional[str], temperature: Optional[float],
           max_tokens: Optional[int]):
     cfg = settings().llm
-    payload = json.dumps({
-        "model": model_name or cfg.model,
-        "messages": messages,
-        "temperature": cfg.temperature if temperature is None else temperature,
-        "max_tokens": max_tokens or cfg.max_tokens,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        f"{cfg.base_url}/chat/completions", data=payload, method="POST",
-        headers={"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"},
-    )
-    for attempt in range(cfg.retries + 1):
+    name = model_name or cfg.model
+    build, read = (_anthropic_request, _anthropic_reply) if cfg.provider == "anthropic" \
+        else (_openai_request, _openai_reply)
+    key = _api_key()
+    temp = cfg.temperature if temperature is None else temperature
+    attempt, adjusted = 0, 0
+    while True:
+        url, body, headers = build(cfg, key, name, messages, temp, max_tokens or cfg.max_tokens)
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=cfg.timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             break
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:500]
-            if e.code >= 500 and attempt < cfg.retries:
-                time.sleep(2 * (attempt + 1))
+            if adjusted < 3 and _quirk(name, e.code, detail):
+                adjusted += 1                            # sent again without what the model refused
                 continue
-            raise LLMError(f"LLM HTTP {e.code}: {detail}") from None
-        except (urllib.error.URLError, TimeoutError) as e:
+            if (e.code >= 500 or e.code == 429) and attempt < cfg.retries:
+                time.sleep(_wait(attempt, e))
+                attempt += 1
+                continue
+            raise LLMError(f"LLM HTTP {e.code} ({cfg.provider}): {detail}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             if attempt < cfg.retries:
-                time.sleep(2 * (attempt + 1))
+                time.sleep(_wait(attempt))
+                attempt += 1
                 continue
-            raise LLMError(f"LLM request failed: {e}") from None
+            raise LLMError(f"LLM request to {url} failed: {e}") from None
+        except ValueError as e:
+            raise LLMError(f"LLM reply was not JSON: {e}") from None
     try:
-        choice = data["choices"][0]
-        content = choice["message"]["content"] or ""
-    except (KeyError, IndexError, TypeError):
+        content, usage, finish = read(data)
+    except (KeyError, IndexError, TypeError, AttributeError):
         raise LLMError(f"unexpected LLM reply: {str(data)[:500]}") from None
-    usage = (data.get("usage") or {}) if isinstance(data, dict) else {}
-    return _strip_thinking(content), usage, choice.get("finish_reason") or ""
+    return _strip_thinking(content), usage, finish

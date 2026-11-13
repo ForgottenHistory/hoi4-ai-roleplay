@@ -21,8 +21,9 @@ CONFIG_PATH = os.environ.get("HOI4_RP_CONFIG") or os.path.join(_ROOT, "config.in
 
 DEFAULTS = {
     "llm": {
-        "base_url": "https://nano-gpt.com/api/v1",
-        "api_key_env": "NANOGPT_API_KEY",
+        "provider": "",
+        "base_url": "",
+        "api_key_env": "",
         "model": "xiaomi/mimo-v2.6-pro",
         "temperature": "0.9",
         "max_tokens": "1500",
@@ -68,8 +69,45 @@ DEFAULTS = {
 }
 
 
+# LLM services: name -> (base_url, environment variable with the API key, key required). Each speaks the OpenAI chat
+# API except anthropic (its own Messages API, llm._anthropic). Local servers need no key.
+PROVIDERS = {
+    "nanogpt": ("https://nano-gpt.com/api/v1", "NANOGPT_API_KEY", True),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", True),
+    "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY", True),
+    "anthropic": ("https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", True),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "GEMINI_API_KEY", True),
+    "deepseek": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", True),
+    "mistral": ("https://api.mistral.ai/v1", "MISTRAL_API_KEY", True),
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", True),
+    "xai": ("https://api.x.ai/v1", "XAI_API_KEY", True),
+    "together": ("https://api.together.xyz/v1", "TOGETHER_API_KEY", True),
+    "ollama": ("http://localhost:11434/v1", "OLLAMA_API_KEY", False),
+    "lmstudio": ("http://localhost:1234/v1", "LMSTUDIO_API_KEY", False),
+    "custom": ("", "LLM_API_KEY", False),
+}
+
+
+def _provider(name: str, base_url: str) -> str:
+    """The provider named, else the one whose host base_url is on (custom for any other), else nanogpt."""
+    name = (name or "").strip().lower()
+    if name:
+        if name not in PROVIDERS:
+            raise ValueError(f"[llm] provider = {name}: not one of {', '.join(PROVIDERS)}")
+        return name
+    if not base_url:
+        return "nanogpt"
+    host = base_url.split("//", 1)[-1].split("/", 1)[0]
+    for key, (url, _, _) in PROVIDERS.items():
+        if url and url.split("//", 1)[-1].split("/", 1)[0] == host:
+            return key
+    return "custom"
+
+
 @dataclass(frozen=True)
 class LLMSettings:
+    provider: str         # a PROVIDERS key
+    key_required: bool    # False: no Authorization header when the key's variable is unset (local servers)
     base_url: str
     api_key_env: str
     model: str
@@ -141,10 +179,17 @@ def settings() -> Settings:
     cp.read_dict(DEFAULTS)
     cp.read(CONFIG_PATH, encoding="utf-8")   # silently skipped if the file is missing
     s, lt, st, w, ai = cp["llm"], cp["letters"], cp["story"], cp["world"], cp["ai_diplomacy"]
+    base_url = (s.get("base_url") or "").strip().rstrip("/")
+    provider = _provider(s.get("provider"), base_url)
+    preset_url, preset_env, key_required = PROVIDERS[provider]
+    if not (base_url or preset_url):
+        raise ValueError("[llm] provider = custom needs a base_url")
     return Settings(
         llm=LLMSettings(
-            base_url=s.get("base_url").rstrip("/"),
-            api_key_env=s.get("api_key_env"),
+            provider=provider,
+            key_required=key_required,
+            base_url=base_url or preset_url,
+            api_key_env=(s.get("api_key_env") or "").strip() or preset_env,
             model=s.get("model"),
             temperature=s.getfloat("temperature"),
             max_tokens=s.getint("max_tokens"),

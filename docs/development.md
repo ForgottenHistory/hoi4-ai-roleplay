@@ -76,6 +76,6 @@ LLM output is plain text: `KEY: value` lines or `[[commands]]`, parsed leniently
     hoi4_rp/mod_files.py   the generated mod: events, localisation, modifiers
     hoi4_rp/letter_mod.py  the generated GUI: letter windows, reputation box, ledger, faction window, treaty row
     hoi4_rp/game.py        show an event, wait for the pick, run effects
-    hoi4_rp/llm.py         NanoGPT client and call log
+    hoi4_rp/llm.py         LLM client (OpenAI-compatible APIs and Anthropic) and call log
     hoi4_rp/config.py      config.ini loading
     hoi4_rp/bridge.py      loads the bridge client

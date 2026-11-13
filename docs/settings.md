@@ -4,7 +4,8 @@
 
 Your personal copy, created from `config.example.ini` on first run; each key is explained there. Sections:
 
-- `[llm]`: endpoint, model, temperature, token cap, timeout, retries, `parallel` (background calls of one kind at
+- `[llm]`: `provider` (nanogpt, openrouter, openai, anthropic, gemini, deepseek, mistral, groq, xai, together,
+  ollama, lmstudio or custom), model, optional `base_url` / `api_key_env` overrides, temperature, token cap, timeout, retries, `parallel` (background calls of one kind at
   once), `log_prompts`
 - `[letters]`: countries writing on their own, gaps between letters and proposals, `style`, `diplomacy`
 - `[story]`: story events and news events, and their gaps
@@ -13,7 +14,14 @@ Your personal copy, created from `config.example.ini` on first run; each key is 
 - `[world]`: `setting`, `lore_file`, `tension_rules`, `intel` (see [what countries know about you](ai.md#what-countries-know-about-you-intel)),
   `border_divisions` (see [troops on the border](ai.md#troops-on-the-border))
 
-The API key is never in the file: it's read from the environment variable named by `api_key_env` (`NANOGPT_API_KEY`).
+The API key is never in the file: it's read from an environment variable, the provider's own unless `api_key_env`
+names another (`NANOGPT_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`...;
+the full list is in `config.example.ini`). Local servers (Ollama, LM Studio) need none. `python -m hoi4_rp llm`
+sends one test message and prints which provider, model and endpoint answered.
+
+Every provider but Anthropic is spoken to through the OpenAI chat API; Anthropic through its own Messages API. When a
+model refuses a parameter (OpenAI's reasoning models take `max_completion_tokens`, not `max_tokens`; some take no
+temperature) the call is sent again without it, and that is remembered for the session.
 
 ## Lore and other settings
 

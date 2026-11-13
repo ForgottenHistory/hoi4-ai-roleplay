@@ -756,7 +756,12 @@ _WAR_JOIN = ("Joining a war is the gravest commitment short of submission: your 
              f"it asks it of a country able to help. A joiner in a faction brings its whole faction into the war. "
              f"The joiner enters the war {WAR_DELAY_DAYS} days after the deal, "
              "to mobilize, not at once; if the war is over by then, nothing comes of it. A letter that proposes "
-             f"joining a war tells the other side when ('enter the war within {WAR_DELAY_DAYS} days', not 'enter it now').")
+             f"joining a war tells the other side when ('enter the war within {WAR_DELAY_DAYS} days', not 'enter it now'). "
+             "Volunteers are NOT joining a war: hired men, mercenaries or volunteer divisions sent to fight under "
+             "another country's command leave the sender at peace and out of the war. There is no command that sends "
+             "them (the sender does it itself, in the game): ask for them in the letter's words, and pay for them with "
+             "[[offer ...]] goods if you want to, but never with [[ask war]] or [[offer war]], which bring the "
+             "other country into the war as a belligerent.")
 PLEDGE_NOTE = ("A war pledge is a promise for later: whenever one side goes to war with "
             "the named country (declaring war itself, being attacked, or called in by an ally or guarantee), the "
             "other joins at once, as Italy pledged itself to Germany in the Pact of Steel. Unlike a guarantee it "
@@ -1042,6 +1047,24 @@ def is_pp_key(key: str) -> bool:
     return len(parts) >= 2 and parts[0] in ("give", "ask") and parts[1] == "pp"
 
 
+# ---------------------------------------------------------------- volunteers as a commitment
+# "ask:volunteers": them asks me to keep volunteers fighting under its command, for as long as its treaty stands
+# (no number: the game sends volunteers as a switch, the player does not pick a count). Only the player's side exists: the game has no script to send volunteers, so the player sends them in
+# the interface and treaties.py checks whether they are there (a standing clause like a commitment; never a war).
+
+VOLUNTEER_NOTE = ("A volunteer commitment asks the other side to keep volunteers fighting under your command in your "
+                  "war, for as long as the treaty stands. It has no number: the game only sends volunteers or not. It is "
+                  "NOT joining your war: they stay at peace, the men stay their own and they may recall them. The game "
+                  "recalls them by itself when they go to war. Ask for it only while you are at war, and weigh it as an "
+                  "ask against what you offer for the men (factories, equipment, political power, in instalments). The "
+                  "men are sent by the other side in the game, not by this command: if they never arrive, the treaty "
+                  "is broken and the world remembers it.")
+
+
+def is_vol_key(key: str) -> bool:
+    return key in ("ask:volunteers", "give:volunteers")
+
+
 # "give:subject:SLO": them hands me its subject; "ask:subject:SLO": them asks me to hand it my subject.
 #     OLD = { end_puppet = SUB } NEW = { puppet = SUB }
 _SUBJECT_NAMES: Dict[str, str] = {}
@@ -1101,6 +1124,7 @@ FACTORY_KEYS = ("give:civ", "give:mil", "ask:civ", "ask:mil",    # amount chosen
                 "give:dismantle", "ask:dismantle")
 EQUIPMENT_KEYS = tuple(f"{v}:{k}" for k in EQUIPMENT for v in ("give", "ask"))
 PP_KEYS = ("give:pp", "ask:pp")
+VOL_KEYS = ("ask:volunteers",)          # a commitment of mine; see "volunteers as a commitment" below
 AMOUNT_KEYS = FACTORY_KEYS + EQUIPMENT_KEYS + PP_KEYS
 AMOUNT_KINDS = ("civ", "mil", "dismantle") + tuple(EQUIPMENT) + ("pp",)
 EQUIPMENT_GIVES = [k for k in EQUIPMENT_KEYS if k.startswith("give:")]
@@ -1310,6 +1334,13 @@ def get_deal(key: str) -> Optional[Deal]:
                         f"{{them_name}} sent us {what}.", f"{{them_name}} sent {{me_name}} {what}.")
         return Deal(key, "equipment", False, True, f"ask {{me_name}} to send you {what}", what, "",
                     f"We sent {{them_name}} {what}.", f"{{me_name}} sent {{them_name}} {what}.", True)
+    if is_vol_key(key):
+        return Deal(key, "volunteers", False, True,
+                    "ask {me_name} to send volunteers to fight under your command in your war, for as long as the "
+                    "treaty stands (not joining the war: they stay at peace)",
+                    "volunteers sent to fight in their war", "",
+                    "We committed to send volunteers to fight for {them_name}.",
+                    "{me_name} committed to send volunteers to fight under {them_name}'s command.", True)
     if is_pp_key(key):
         verb, _, n = (key + ":0").split(":")[:3]
         what = f"{n if n != '0' else 'N'} political power"
@@ -1388,6 +1419,8 @@ def possible(rel: Relation, key: str) -> bool:
             return False                               # a subject's land is its overlord's affair
         state = tradeable(rel.them_border if give else rel.me_border).get(sid)
         return not rel.at_war and bool(state and state.border and not state.dmz and not state.capital)
+    if is_vol_key(key):                                        # only me, and only for a country at war
+        return key.startswith("ask:") and not rel.at_war and bool(rel.them_enemies)
     if is_equipment_key(key):                                  # stockpiled equipment; amount in the command
         parts = key.split(":")
         have = ((rel.them_equipment if parts[0] == "give" else rel.me_equipment) or {}).get(parts[1], 0)
@@ -1720,6 +1753,8 @@ def _new_goods_notes(keys: List[str]) -> List[str]:
         out.append(WAR_NOTE)
     if any(third_kind(k) for k in keys):
         out.append(ALIGN_NOTE)
+    if any(is_vol_key(k) for k in keys):
+        out.append(VOLUNTEER_NOTE)
     if any(k in FACTION_KEYS + ("give:leave", "ask:leave") for k in keys):
         out.append(FACTION_NOTE)
     if any(is_equipment_key(k) for k in keys):
@@ -2067,7 +2102,8 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
         deal = get_deal(key)
         if not deal or (key not in BY_KEY and not is_state(key) and not is_subject_key(key)
                         and not is_factory_key(key) and not is_govt_key(key) and not is_rights(key)
-                        and not is_dmz(key) and not is_war(key) and not is_pledge(key) and not third_kind(key)):
+                        and not is_dmz(key) and not is_war(key) and not is_pledge(key) and not third_kind(key)
+                        and not is_vol_key(key)):
             print(f"  unknown command {key} ignored")
             continue
         if not possible(rel, key):
@@ -2084,9 +2120,10 @@ def apply(them: str, me: str, them_name: str, me_name: str, commands: List[Tuple
                 events.append({"type": key, "tags": [them, me], "text": deal.remembered.format(**fmt)})
                 (rel.them_parties if verb == "give" else rel.me_parties).pop(ideology, None)
             continue
-        if is_pledge(key) or is_align(key):        # a promise for later: treaties.py keeps it
+        if is_pledge(key) or is_align(key) or is_vol_key(key):   # a promise for later: treaties.py keeps it
             shown.append((deal.shown.format(**fmt), False))
-            events.append({"type": key, "tags": [them, me, key.rsplit(":", 1)[1]], "text": deal.remembered.format(**fmt)})
+            events.append({"type": key, "tags": [them, me] + ([] if is_vol_key(key) else [key.rsplit(":", 1)[1]]),
+                           "text": deal.remembered.format(**fmt)})
             continue
         if is_sanction(key):
             verb, _, target = key.split(":")
@@ -2290,6 +2327,9 @@ def package_text(keys: List[str], who: str = "they") -> str:
                          if k.startswith("ask:") else
                          f"{who} {'offer' if plural else 'offers'} to dismantle {n} of {'their' if plural else 'its'} "
                          f"military factories")
+        elif is_vol_key(k):
+            parts.append(f"{who} {'ask' if plural else 'asks'} us to send volunteers to fight under {their} command, "
+                         f"for as long as the treaty stands")
         elif is_factory_key(k):
             what = get_deal(k).label
             parts.append(f"{who} {'ask' if plural else 'asks'} us for {what}" if k.startswith("ask:") else

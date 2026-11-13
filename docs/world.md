@@ -75,6 +75,23 @@ Once a month or so the LLM may open a crisis between two neighbours (a border cl
 or inside one country (a strike wave, a mutiny, a cabinet scandal). Flavour only: nothing in the game changes, but
 agendas, the storyteller, AI letters and news all see it. A crisis lasts 2-6 months. Your country is never in one.
 
+## Volunteers
+
+Volunteer divisions sent abroad (by you in the game's interface, by AI countries on their own) are read live and told
+to every country in its prompts: who fights for whom, in how many divisions (exact to 20, then 24, 29, 39, 49, 74, 99+).
+The chronicle records your volunteers being sent, reinforced, withdrawn or recalled, and a recall that comes with the
+sender going to war is told as that (the game recalls them then). Countries know the rules, and a host may offer goods
+for them in a proposal (factories, equipment, political power, land, in instalments), which the normal deal machinery
+carries out. Volunteers abroad also start a plotline (a mercenary company, a foreign legion), even before you have
+written three letters.
+
+A country at war can ask for a **volunteer treaty** (`[[ask volunteers]]` in a proposal, with goods offered for the men).
+Accepting it commits you to keep volunteers fighting under its command while the treaty stands (it is not joining the
+war, and the game has no count). The game can't send volunteers by script, so you send them in the interface; you get 60
+days. The mod then watches: nothing is owed while the host is at peace or while you yourself are at war (the game
+recalls volunteers then); if the host is at war and none of yours are there for 30 days, the treaty is broken, the
+country writes about it and the reputation judge gets it as a deed.
+
 ## Plotlines
 
 Every so often one LLM call reads your letters, promises, deeds and treaties and writes down the plotlines you're

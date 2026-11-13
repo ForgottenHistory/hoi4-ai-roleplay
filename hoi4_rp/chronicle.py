@@ -18,7 +18,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
 from .campaign import ID_VARIABLE, date_key, date_words, save_key
-from .gamestate import StateError, completed_focuses, query, save_date, timed_activities
+from .gamestate import StateError, _volunteer_lines, completed_focuses, query, save_date, timed_activities
 
 _EFFECT = (
     'log = "I|[?' + ID_VARIABLE + ']" '
@@ -141,7 +141,7 @@ def front(tags: List[str]) -> Dict[str, Dict]:
 # (agreements granted, proposals answered). Only these refresh policies or lift a refusal.
 WORLD_TYPES = {"country_new", "country_gone", "government", "leader", "faction_left", "faction_founded",
                "faction_joined", "independence", "subject", "capitulation", "war", "peace", "territory",
-               "justification", "wargoal", "civil_war", "faction_dissolved", "nuke",
+               "justification", "wargoal", "civil_war", "faction_dissolved", "nuke", "volunteers",
                # treaties.py: a treaty broken, renounced, called on or lapsing changes what the two are to each other
                "treaty:broken", "treaty:renounced", "treaty:clause", "treaty:lapsed",
                # ultimatums.py: a threat of war, and how it ended
@@ -174,9 +174,18 @@ def snapshot(player: str) -> Dict:
     wars: Set[str] = set()
     from . import nukes, world
     effect = _EFFECT.replace("%VOICELESS%", world.voiceless_script())
-    lines = query(f"{player} = {{ {effect} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} }} "
-                  f"{nukes.script()}")
+    lines = query(f"{player} = {{ {effect} {_FRONT} every_enemy_country = {{ {_FRONT} }} {_ties(player)} "
+                  f"{' '.join(_volunteer_lines(player, 'VT|'))} }} {nukes.script()}")
     nukes.read(lines, snap)
+    snap["volunteers"] = {"to": {}, "from": {}}       # the player's volunteer divisions: {host: n}, {sender: n}
+    for line in lines:
+        if line.startswith("VT|"):
+            f = [x.strip() for x in line[3:].split("|")]
+            if len(f) >= 4 and f[0] in ("volunteers_to", "volunteers_from"):
+                try:
+                    snap["volunteers"][f[0][11:]][f[1]] = int(float(f[3]))
+                except ValueError:
+                    pass
     snap["ties"] = _read_ties(lines, player)
     snap["tie_kinds"] = sorted(TIES)                  # what was looked for: a kind added later isn't news at first
     snap["player"] = player
@@ -237,6 +246,38 @@ def recent_focuses(events: List[Dict], tag: str, now: str, n: int = 3) -> List[s
             if e.get("type") == "focus" and tag in e["tags"] and e["date"] <= now][-n:]
 
 
+def _div(n: int) -> str:
+    return f"{n}{'+' if n > 99 else ''} division{'s' if n != 1 else ''}"
+
+
+def _volunteer_events(old: Dict, new: Dict, add, name) -> None:
+    """Volunteers the player sent or received: sent, reinforced, withdrawn, recalled. The game recalls a sender's
+    volunteers when it goes to war, so a recall with a new war of the sender's is told as that."""
+    if "volunteers" not in old or "volunteers" not in new:
+        return                                                # a snapshot from before volunteers were read
+    p = new.get("player") or old.get("player") or ""
+    at_war = {t for pair in set(new["wars"]) - set(old["wars"]) for t in pair.split("|")}
+    for way in ("to", "from"):
+        was, now = old["volunteers"].get(way, {}), new["volunteers"].get(way, {})
+        for o in was.keys() | now.keys():
+            a, b = was.get(o, 0), now.get(o, 0)
+            if a == b or (o not in new["countries"]):         # a vanished country is told as that
+                continue
+            sender, host = (p, o) if way == "to" else (o, p)
+            s, h = name(sender), name(host)
+            if not a:
+                text = f"{s} sent volunteers to {h}: {_div(b)}."
+            elif b > a:
+                text = f"{s} reinforced its volunteers in {h}: now {_div(b)}."
+            elif b:
+                text = f"{s} withdrew part of its volunteers from {h}: {_div(b)} remain."
+            elif sender in at_war:
+                text = f"{s}'s volunteers ({_div(a)}) were recalled from {h} when {s} went to war."
+            else:
+                text = f"{s} recalled its volunteers ({_div(a)}) from {h}."
+            add([p, o], text, "volunteers")
+
+
 def diff(old: Dict, new: Dict) -> List[Dict]:
     """Events that happened between two snapshots, dated at the newer one."""
     oc, nc = old["countries"], new["countries"]
@@ -248,6 +289,8 @@ def diff(old: Dict, new: Dict) -> List[Dict]:
         tags = [x for x in tags if x]
         events.append({"date": new["date"], "when": date_words(new["date"]), "type": kind,
                        "tags": tags, "text": text, "major": world or major(*tags)})
+
+    _volunteer_events(old, new, add, name)
 
     for t in nc.keys() - oc.keys():
         lord = nc[t]["overlord"]

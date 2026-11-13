@@ -34,7 +34,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
-from . import (actions, aipeace, borders, bridge, campaign, cooldowns, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, faction_view, ledger, llm, news, origins, peace, plight, policy, reputation,
+from . import (volunteers, actions, aipeace, borders, bridge, campaign, cooldowns, agendas, chronicle, course, crises, plots, diplomacy, game, gamestate, intel, intent, leaders, faction_view, ledger, llm, news, origins, peace, plight, policy, reputation,
                factions, gates, guarantees, steering, wars, story, storyteller, style, subjects, tension, treaties, ultimatums, war, world)
 from .config import settings
 from .letter_mod import EDITBOX_NAME, PAGE_NAME, reply_size_for
@@ -420,6 +420,7 @@ def _context(them: gamestate.CountryState, me: gamestate.CountryState, camp: cam
         + (f"{deals}\n\n" if (deals := treaties.describe(camp, them.tag, them.name, me.name)) else "")
         + (f"{lines}\n\n" if (lines := treaties.commitments_text(camp, them.tag)) else "")
         + f"{guarantees.describe(camp, them.tag, them.name, me.name)}\n\n"
+        + (f"{vol}\n\n" if (vol := volunteers.text(them, me)) else "")
         + (f"{ults}\n\n" if (ults := ultimatums.describe(camp, them.tag, them.name, me.name)) else "")
         + f"WHAT YOU REMEMBER (events since the chronicle began, oldest first; involving you, "
         f"{me.name}, or the major powers{' in the last year' if world_days else ''}):\n"
@@ -732,6 +733,11 @@ _DEAL_WORDS = re.compile(r"\b(offer|propos|in return|in exchange|pact|guarantee|
                          r"factor|pledge|alliance|faction|docking|rifles|artillery|trucks|equipment|cede|"
                          r"political power|"
                          r"oppos|befriend|sanction|stand behind)", re.I)
+_OPEN_TERMS = ("A letter that only invites the other side to name its price or terms ('name your price', 'what "
+               "do you want', 'make me an offer'), or says what you could pay in, is not a proposal: it asks for "
+               "nothing from them, so never turn it into an [[ask ...]] of your own. Hired men, mercenaries or "
+               "volunteers sent to fight under your command are not joining a war and have no command: never use "
+               "[[ask war]] or [[offer war]] for them, only [[offer ...]] goods as their pay.")
 _REPAIR_KINDS = re.compile(r"\[\[\s*(offer|ask|for)\b", re.I)
 
 
@@ -743,7 +749,8 @@ def _missing_commands(prompt: List[Dict], raw: str, about: str, grants: bool) ->
         return ""
     ask = (f"Your letter above has no commands, so nothing in it takes effect. If its text proposes a deal"
            f"{' or grants something' if grants else ''}, answer with exactly the commands for it, as the instructions "
-           f"describe, one per item. If it proposes nothing concrete, answer NONE. Commands only, no other text.")
+           f"describe, one per item. [[offer ...]] is what YOU give; [[ask ...]] is what you want from THEM. "
+           f"{_OPEN_TERMS} If it proposes nothing concrete, answer NONE. Commands only, no other text.")
     try:
         answer = llm.chat(prompt + [{"role": "assistant", "content": raw}, {"role": "user", "content": ask}],
                           kind="commands", about=about)
@@ -770,9 +777,10 @@ def _unmatched(prompt: List[Dict], raw: str, about: str, covered: List[str], all
     if not missing:
         return ""
     what = ", ".join(missing)
-    ask = (f"Your letter's text speaks of {what}, but its commands don't include that. If the letter offers or asks "
-           f"for it as part of the deal, answer with all the proposal commands the letter should carry: the whole "
-           f"proposal, terms included, as the instructions describe. If the letter declines it or only mentions it in "
+    ask = (f"Your letter's text speaks of {what}, but its commands don't include that. If the letter itself offers or "
+           f"asks for it as a concrete part of the deal, answer with all the proposal commands the letter should "
+           f"carry: the whole proposal, terms included, as the instructions describe. [[offer ...]] is what YOU give; "
+           f"[[ask ...]] is what you want from THEM. {_OPEN_TERMS} If the letter declines it or only mentions it in "
            f"passing, answer SAME. Commands or SAME only, no other text.")
     try:
         answer = llm.chat(prompt + [{"role": "assistant", "content": raw}, {"role": "user", "content": ask}],
@@ -925,7 +933,8 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
                   + actions.dmz_gives(rel) + actions.war_gives(rel) + actions.third_gives(rel))
         asks = (actions.ASKS + actions.state_asks(rel) + actions.subject_asks(rel)
                 + actions.GOODS_ASKS + actions.govt_asks(rel) + actions.rights_asks(rel)
-                + actions.dmz_asks(rel) + actions.war_asks(rel) + actions.third_asks(rel))
+                + actions.dmz_asks(rel) + actions.war_asks(rel) + actions.third_asks(rel)
+                + list(actions.VOL_KEYS))
         standing = treaties.standing(camp, tag)
         ok = lambda k: k != "give:peace" and k not in standing and actions.possible(rel, k)
         return peace_offer + [k for k in offers + actions.rights_after(rel) if ok(k)], [k for k in asks if ok(k)]
@@ -947,7 +956,8 @@ def _proposals(camp: campaign.Campaign, tag: str, rel: "actions.Relation", key: 
     offers = pol["offers"] if pol else (actions.GIVES + actions.state_gives(rel) + actions.rights_gives(rel)
                                         + actions.dmz_gives(rel) + actions.war_gives(rel) + actions.GOODS_GIVES)
     asks = pol["asks"] if pol else (actions.ASKS + actions.state_asks(rel) + actions.rights_asks(rel)
-                                    + actions.dmz_asks(rel) + actions.war_asks(rel) + actions.GOODS_ASKS)
+                                    + actions.dmz_asks(rel) + actions.war_asks(rel) + actions.GOODS_ASKS
+                                    + list(actions.VOL_KEYS))
     refused |= treaties.standing(camp, tag)                # a pledge already given isn't asked for again
     ok = lambda k: k not in refused and k != "give:peace" and actions.possible(rel, k)
     return peace_offer + [k for k in offers + actions.rights_after(rel) if ok(k)], [k for k in asks if ok(k)]

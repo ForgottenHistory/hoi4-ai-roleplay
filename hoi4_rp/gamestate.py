@@ -171,6 +171,8 @@ class CountryState:
     leader_info: Optional["leaders.Leader"] = None   # the leader as a person (leaders.py)
     justifying: List[Dict] = field(default_factory=list)  # war goals it is justifying: {target, wargoal, states}
     justified_by: List[str] = field(default_factory=list)  # countries justifying a war goal against it
+    volunteers_to: List[Tuple[str, int]] = field(default_factory=list)    # (tag, divisions) it has sent abroad
+    volunteers_from: List[Tuple[str, int]] = field(default_factory=list)  # (tag, divisions) fighting for it
     # Set only on a copy another country sees through its intelligence (intel.view): kind -> level 0..1
     intel: Optional[Dict[str, float]] = None
 
@@ -206,6 +208,23 @@ EQUIPMENT_KINDS = {"rifles": "infantry_equipment", "support equipment": "support
 DAMAGE_BUILDINGS = {"industrial_complex": "civilian factories", "arms_factory": "military factories",
                     "dockyard": "dockyards", "infrastructure": "infrastructure"}
 _DAMAGED = " ".join(f"check_variable = {{ damaged_building_level@{b} > 0 }}" for b in DAMAGE_BUILDINGS)
+
+
+_VOL_STEPS = list(range(0, 21)) + [24, 29, 39, 49, 74, 99]     # script can only compare, so count by thresholds
+
+
+def _volunteer_lines(tag: str, p: str) -> List[str]:
+    """Volunteers sent by `tag` (key volunteers_to) and hosted by it (volunteers_from), one line per partner country
+    with the number of divisions, found by comparing has_volunteers_amount_from against a ladder of thresholds
+    (the trigger's scope is the host, its `tag` the sender; PREV is `tag` inside every_other_country)."""
+    def loop(key: str, check: str) -> str:
+        at = lambda n: check.replace("@N@", str(n))
+        count = "".join(f"if = {{ limit = {{ {at(n)} }} set_temp_variable = {{ airp_v = {n + 1} }} }} "
+                        for n in _VOL_STEPS[1:])
+        return (f'every_other_country = {{ limit = {{ {at(0)} }} set_temp_variable = {{ airp_v = 1 }} '
+                f'{count}log = "{p}{key}|[THIS.GetTag]|[THIS.GetName]|[?airp_v]" }}')
+    return [loop("volunteers_to", f"has_volunteers_amount_from = {{ tag = {tag} count > @N@ }}"),
+            loop("volunteers_from", "PREV = { has_volunteers_amount_from = { tag = PREV count > @N@ } }")]
 
 
 def _effect(tag: str) -> str:
@@ -258,6 +277,7 @@ def _effect(tag: str) -> str:
         # PREV inside the loop is the country being described.
         f'every_other_country = {{ limit = {{ has_wargoal_against = PREV }} log = "{p}wargoal_against|{tn}" }}',
         f'every_other_country = {{ limit = {{ is_justifying_wargoal_against = PREV }} log = "{p}justified_by|{tn}" }}',
+        *_volunteer_lines(tag, p),
     ]
     return f"{tag} = {{ {' '.join(lines)} }}"
 
@@ -533,6 +553,10 @@ def country(tag: str) -> CountryState:
             ctag, _, cname = rest.partition("|")
             s.names[ctag] = cname or ctag
             s.justified_by.append(ctag)
+        elif key in ("volunteers_to", "volunteers_from"):
+            ctag, cname, n = (rest.split("|") + ["", ""])[:3]
+            s.names[ctag] = cname or ctag
+            getattr(s, key).append((ctag, int(_float(n) or 1)))
         elif key == "wargoal_against":
             ctag, _, cname = rest.partition("|")
             s.names[ctag] = cname or ctag
@@ -1002,6 +1026,13 @@ def describe(s: CountryState, max_states: Optional[int] = None, details: bool = 
         lines.append("Countries justifying a war goal against it: " + s.names_of(s.justified_by) + ".")
     if s.wargoals_against:
         lines.append("Countries with war goals against it: " + s.names_of([w.other for w in s.wargoals_against]) + ".")
+    div = lambda n: f"{n}{'+' if n >= _VOL_STEPS[-1] + 1 else ''} division{'s' if n != 1 else ''}"
+    if s.volunteers_to:
+        lines.append("Volunteers it has sent abroad (volunteer divisions fighting under another country's command, "
+                     "still its own men): " + "; ".join(f"{div(n)} to {s.name_of(t)}" for t, n in s.volunteers_to) + ".")
+    if s.volunteers_from:
+        lines.append("Foreign volunteers fighting for it: "
+                     + "; ".join(f"{div(n)} from {s.name_of(t)}" for t, n in s.volunteers_from) + ".")
     if s.neighbors:
         lines.append(f"Neighbours: {s.names_of(s.neighbors)}.")
     if s.states:

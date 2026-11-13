@@ -60,8 +60,8 @@ def _letters(camp: campaign.Campaign) -> List[Dict]:
 
 def due(camp: campaign.Campaign) -> bool:
     st, today = _store(camp), (camp.snapshot or {}).get("date", "")
-    if not today or len(_letters(camp)) < MIN_LETTERS:
-        return False
+    if not today or (len(_letters(camp)) < MIN_LETTERS and not _volunteers_abroad(camp)):
+        return False                                   # volunteers abroad are a story before any letters are
     return not st["tick"] or campaign.shift(st["tick"], PLOT_DAYS) <= today
 
 
@@ -72,6 +72,24 @@ def tags(camp: campaign.Campaign) -> List[str]:
         if x["stage"] != "done":
             out += [t for t in x["tags"] if t not in out]
     return out
+
+
+def _volunteer_parts(camp: campaign.Campaign, snap: Dict, name) -> List[str]:
+    """What the player's volunteers abroad are, for the plot writer: a mercenary company is a story of its own."""
+    vol = snap.get("volunteers") or {}
+    events = [e for e in camp.data["events"] if e.get("type") == "volunteers" and e["date"] <= snap.get("date", "")][-8:]
+    if not vol.get("to") and not events:
+        return []
+    now = "; ".join(f"{n} division{'s' if n != 1 else ''} fighting for {name(t)}" for t, n in vol.get("to", {}).items())
+    out = ["THE PLAYER'S VOLUNTEERS (divisions they send to fight under another country's command; the game recalls "
+           "them when the player's own country goes to war; the men stay the player's):\n"
+           + (f"Abroad now: {now}." if now else "None abroad now.")
+           + ("\nHistory:\n" + "\n".join(f"- {e['when']}: {e['text']}" for e in events) if events else "")]
+    return out
+
+
+def _volunteers_abroad(camp: campaign.Campaign) -> bool:
+    return bool(((camp.snapshot or {}).get("volunteers") or {}).get("to"))
 
 
 def messages(camp: campaign.Campaign, snap: Dict) -> List[Dict]:
@@ -104,6 +122,7 @@ def messages(camp: campaign.Campaign, snap: Dict) -> List[Dict]:
     if replies:
         parts.append("HOW THEY ANSWERED (the latest replies; the truth of where each government stands):\n"
                      + "\n".join(replies))
+    parts += _volunteer_parts(camp, snap, name)
     if promises:
         parts.append("PROMISES THEY MADE:\n" + "\n".join(f"- {x['when']}, to {name(x['to'])}: {x['text']}" for x in promises))
     if deeds:
@@ -125,11 +144,14 @@ def messages(camp: campaign.Campaign, snap: Dict) -> List[Dict]:
                          f"- {x['title']} | WITH: {', '.join(x['tags'])} | STAGE: {x['stage']} | GOAL: {x['goal']} | "
                          f"SO FAR: {x['so_far']}" for x in old))
     named = list(dict.fromkeys([x["to"] for x in letters] + [x["to"] for x in promises]
-                                + [t for x in active for t in (x["with"],)]))
+                                + [t for x in active for t in (x["with"],)]
+                                + list((snap.get("volunteers") or {}).get("to", {}))))
     parts.append("COUNTRIES (tag = name; use these tags in WITH): " + ", ".join(f"{t} = {name(t)}" for t in named))
     parts.append(
         f"Write at most {MAX_PLOTS} plotlines, only those the player really plays: a goal they have stated and "
-        f"worked toward more than once, not a passing remark. Put the countries it involves (never {player}) in WITH. "
+        f"worked toward more than once, not a passing remark. Divisions the player keeps abroad for years are such a "
+        f"story too (a mercenary company, a foreign legion, a proxy war): name who they serve and what they are "
+        f"becoming, from the volunteers and their history above. Put the countries it involves (never {player}) in WITH. "
         f"Stages: setup (the goal is stated, little done), rising (deeds and talks are building toward it), ripe "
         f"(the world is ready for the next step), done. Write none if there is no story yet.\n"
         f"Answer with one line per plotline and nothing else:\n"

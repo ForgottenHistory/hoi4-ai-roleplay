@@ -43,6 +43,8 @@ from typing import Dict, List, Optional, Tuple
 from . import actions, bridge, campaign
 
 MAX_PAYMENTS = 5
+VOL_GRACE_DAYS = 60      # days to send the volunteers a treaty asks for
+VOL_SHORT_DAYS = 30      # days a host at war may go without them before the treaty is broken
 EVERY = (3, 24)          # months between instalments
 TERM = (3, 120)          # months a term may run
 
@@ -127,7 +129,7 @@ def for_items(terms: Optional[Dict], items: List[str]) -> Dict:
     terms = terms or {}
     wager = is_wager(terms, items)                     # the stakes change hands once, now: no instalments
     pay = {} if wager else {k: v for k, v in (terms.get("payments") or {}).items() if k in items}
-    lasting = any(_endable(k) or actions.is_pledge(k) or actions.is_align(k) for k in items)
+    lasting = any(_endable(k) or actions.is_pledge(k) or actions.is_align(k) or actions.is_vol_key(k) for k in items)
     return {"months": terms.get("months", 0) if lasting else 0, "payments": pay, **({"wager": True} if wager else {})}
 
 
@@ -244,6 +246,8 @@ def record(camp: campaign.Campaign, tag: str, applied: List[str], terms: Optiona
     clauses = [{"key": k, "fired": "", "asked": ""} for k in applied if actions.is_pledge(k)]
     clauses += [{"key": k, "fired": "", "asked": "", "due": campaign.shift(key, actions.WAR_DELAY_DAYS)}
                 for k in applied if actions.is_war(k)]       # a war joined by letter: entered when due
+    clauses += [{"key": k, "fired": "", "asked": "", "due": campaign.shift(key, VOL_GRACE_DAYS), "since": "", "met": ""}
+                for k in applied if actions.is_vol_key(k)]       # volunteers to send: watched by _keep_volunteers
     held = standing_pair(camp, tag, me)              # a commitment already standing isn't made twice
     countries = (camp.snapshot or {}).get("countries", {})
     clauses += [{"key": k, "fired": "", "asked": "", "base": _against(k, tag, me),
@@ -441,6 +445,42 @@ def _end_script(key: str, them: str, me: str) -> str:
     return f"{sid} = {{ set_demilitarized_zone = no }}"
 
 
+def _keep_volunteers(camp: campaign.Campaign, t: Dict, c: Dict, player: str, today: str) -> Tuple[bool, str]:
+    """Watch the volunteers a treaty asks the player to send: (changed, what broke it, else ''). Nothing is owed while
+    the host is at peace, or while the player itself is at war (the game recalls volunteers then). A host at war
+    without them for VOL_SHORT_DAYS after the grace period finds the player's word broken."""
+    from . import reputation
+    tag = t["with"]
+    if today < c.get("due", ""):
+        return False, ""
+    them_name, me_name = _names(camp, player, tag)
+    if not bridge.trigger(f"{tag} = {{ has_war = yes }}") or bridge.trigger(f"{player} = {{ has_war = yes }}"):
+        moved = bool(c.get("since"))
+        c["since"] = ""
+        return moved, ""                                  # nothing to send them to, or recalled by the game
+    if bridge.trigger(f"{tag} = {{ has_volunteers_amount_from = {{ tag = {player} count > 0 }} }}"):
+        moved = bool(c.get("since")) or not c.get("met")
+        if not c.get("met"):
+            _event(camp, "clause", [tag, player], f"{me_name}'s volunteers fight under {them_name}'s command, as the "
+                                                  f"treaty of {t['when']} asks.")
+        c["since"], c["met"] = "", c.get("met") or today
+        return moved, ""
+    if not c.get("since"):
+        c["since"] = today
+        return True, ""
+    if today < campaign.shift(c["since"], VOL_SHORT_DAYS):
+        return False, ""
+    c["fired"], c["how"] = today, "broken"
+    deed = (f"{me_name} sent no volunteers to fight in {them_name}'s war, though it had committed to in the treaty of "
+            f"{t['when']}, breaking its word.")
+    _close(t, "broken", today, f"broken by {me_name}")
+    if player == camp.data["player"]:
+        reputation._rep(camp)["deeds"].append({"date": today, "when": campaign.date_words(today), "by": player,
+                                               "tags": [player, tag], "facts": deed, "weight": None, "verdict": ""})
+    _event(camp, "broken", [tag, player], deed)
+    return True, deed
+
+
 def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
     """Play out the active treaties at today's date. Returns [(country, what happened)] worth a letter from it."""
     today = camp.data.get("last_date") or ""
@@ -496,6 +536,14 @@ def tick(camp: campaign.Campaign, player: str) -> List[Tuple[str, str]]:
                 _due(camp).append({"treaty": t["id"], "kind": "payment", "key": p["key"], "date": today, "n": n})
                 changed = True
         for c in t["clauses"]:
+            if actions.is_vol_key(c["key"]):
+                if not c["fired"]:
+                    moved, why = _keep_volunteers(camp, t, c, player, today)
+                    changed |= moved
+                    if why:
+                        letters.append((tag, why))
+                        break
+                continue
             if actions.is_align(c["key"]):
                 if not c["fired"]:
                     moved, why = _keep_commitment(camp, t, c, player, today)
@@ -786,6 +834,13 @@ def describe(camp: campaign.Campaign, tag: str, them_name: str, me_name: str) ->
                 enemy = (camp.snapshot or {}).get("countries", {}).get(c["key"].rsplit(":", 1)[1], {}).get(
                     "name", c["key"].rsplit(":", 1)[1])
                 who, whom = (them_name, me_name) if c["key"].startswith("give:") else (me_name, them_name)
+                if actions.is_vol_key(c["key"]):
+                    bits.append(f"Volunteers: {who} committed to keep volunteers fighting under {whom}'s command in "
+                                f"{whom}'s wars (not joining them; the game recalls them if {who} goes to war itself)"
+                                + (f" ({c.get('how', 'ended')} {campaign.date_words(c['fired'])})." if c["fired"]
+                                   else ", " + ("they are there now." if c.get("met") and not c.get("since") else
+                                                f"to be sent by {campaign.date_words(c.get('due', ''))}.")))
+                    continue
                 if actions.is_align(c["key"]):
                     bits.append(f"Commitment: {who} committed {_PROMISE[c['key'].split(':')[1]].format(x=enemy)}"
                                 + (f" ({c.get('how', 'ended')} {campaign.date_words(c['fired'])})." if c["fired"]
@@ -840,6 +895,9 @@ def _panel_lines(camp: campaign.Campaign, t: Dict, them: str) -> List[str]:
             continue
         x = name(c["key"].rsplit(":", 1)[1])
         theirs = c["key"].startswith("give:")
+        if actions.is_vol_key(c["key"]):
+            out.append(f"{them} keeps volunteers fighting for us" if theirs else f"We keep volunteers fighting for {them}")
+            continue
         if actions.is_align(c["key"]):
             promise = _PROMISE[c["key"].split(":")[1]].format(x=x)[3:]      # "work against X"
             out.append(f"{them if theirs else 'We'}: {promise}")

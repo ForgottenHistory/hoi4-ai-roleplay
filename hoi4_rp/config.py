@@ -31,6 +31,7 @@ DEFAULTS = {
         "timeout": "120",
         "retries": "2",
         "parallel": "8",
+        "context": "32768",
     },
     "letters": {
         "incoming": "yes",
@@ -70,7 +71,8 @@ DEFAULTS = {
 
 
 # LLM services: name -> (base_url, environment variable with the API key, key required). Each speaks the OpenAI chat
-# API except anthropic (its own Messages API, llm._anthropic). Local servers need no key.
+# API except anthropic (its own Messages API) and ollama (its own /api/chat, which can set the context size). Local
+# servers need no key.
 PROVIDERS = {
     "nanogpt": ("https://nano-gpt.com/api/v1", "NANOGPT_API_KEY", True),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", True),
@@ -82,7 +84,7 @@ PROVIDERS = {
     "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", True),
     "xai": ("https://api.x.ai/v1", "XAI_API_KEY", True),
     "together": ("https://api.together.xyz/v1", "TOGETHER_API_KEY", True),
-    "ollama": ("http://localhost:11434/v1", "OLLAMA_API_KEY", False),
+    "ollama": ("http://localhost:11434", "OLLAMA_API_KEY", False),
     "lmstudio": ("http://localhost:1234/v1", "LMSTUDIO_API_KEY", False),
     "custom": ("", "LLM_API_KEY", False),
 }
@@ -117,6 +119,7 @@ class LLMSettings:
     retries: int
     log_prompts: bool     # keep every full prompt and reply in data/logs/prompts (for debugging)
     parallel: int         # background calls of one kind running at once (policies, AI exchanges, agendas)
+    context: int = 32768  # Ollama only: context window in tokens (its own default of a few thousand cuts prompts)
 
 
 @dataclass(frozen=True)
@@ -181,6 +184,8 @@ def settings() -> Settings:
     s, lt, st, w, ai = cp["llm"], cp["letters"], cp["story"], cp["world"], cp["ai_diplomacy"]
     base_url = (s.get("base_url") or "").strip().rstrip("/")
     provider = _provider(s.get("provider"), base_url)
+    if provider == "ollama" and base_url.endswith("/v1"):
+        base_url = base_url[:-3]                     # the native API, not the OpenAI-compatible one
     preset_url, preset_env, key_required = PROVIDERS[provider]
     if not (base_url or preset_url):
         raise ValueError("[llm] provider = custom needs a base_url")
@@ -197,6 +202,7 @@ def settings() -> Settings:
             retries=s.getint("retries"),
             log_prompts=s.getboolean("log_prompts"),
             parallel=max(1, s.getint("parallel")),
+            context=s.getint("context"),
         ),
         letters=LetterSettings(
             incoming=lt.getboolean("incoming"),

@@ -1,5 +1,5 @@
 """LLM client, standard library only: any OpenAI-compatible chat API (NanoGPT by default, OpenRouter, OpenAI,
-Gemini, DeepSeek, Mistral, Groq, xAI, Together, Ollama, LM Studio...) and Anthropic's Messages API.
+Gemini, DeepSeek, Mistral, Groq, xAI, Together, LM Studio...), Anthropic's Messages API and Ollama's /api/chat.
 
     from hoi4_rp import llm
     text = llm.chat([{"role": "user", "content": "Write a one-line headline."}])
@@ -243,6 +243,30 @@ def _anthropic_reply(data):
     return content, usage, finish
 
 
+_warned_context: set = set()
+
+
+def _ollama_request(cfg, key: str, model_name: str, messages, temperature: float, max_tokens: int):
+    need = sum(len(m.get("content") or "") for m in messages) // 4 + max_tokens
+    if need > cfg.context and model_name not in _warned_context:
+        _warned_context.add(model_name)
+        print(f"  [LLM] a prompt of ~{need} tokens (with the reply) is over [llm] context = {cfg.context}; Ollama cuts "
+              f"the start of it. Raise context if your memory allows.")
+    body = {"model": model_name, "messages": messages, "stream": False, "keep_alive": "30m",
+            "options": {"num_ctx": cfg.context, "num_predict": max_tokens}}
+    if "no_temperature" not in _quirks[model_name]:
+        body["options"]["temperature"] = temperature
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    return f"{cfg.base_url}/api/chat", body, headers
+
+
+def _ollama_reply(data):
+    usage = {"prompt_tokens": data.get("prompt_eval_count") or 0, "completion_tokens": data.get("eval_count") or 0}
+    return data["message"].get("content") or "", usage, data.get("done_reason") or ""
+
+
 def _wait(attempt: int, e: Optional[urllib.error.HTTPError] = None) -> float:
     """Seconds before the next try: the server's Retry-After when it gives one (rate limits), else 2, 4, 6..."""
     try:
@@ -255,8 +279,8 @@ def _chat(messages: List[Dict[str, str]], model_name: Optional[str], temperature
           max_tokens: Optional[int]):
     cfg = settings().llm
     name = model_name or cfg.model
-    build, read = (_anthropic_request, _anthropic_reply) if cfg.provider == "anthropic" \
-        else (_openai_request, _openai_reply)
+    build, read = {"anthropic": (_anthropic_request, _anthropic_reply),
+                   "ollama": (_ollama_request, _ollama_reply)}.get(cfg.provider, (_openai_request, _openai_reply))
     key = _api_key()
     temp = cfg.temperature if temperature is None else temperature
     attempt, adjusted = 0, 0
